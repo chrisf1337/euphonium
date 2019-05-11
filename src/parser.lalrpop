@@ -74,7 +74,7 @@ TypeDecl: ast::TypeDecl =
     "type" <type_id:"identifier"> "=" <ty:Ty> =>
         ast::TypeDecl { <> };
 
-Let: ast::Let<ast::Expr> = {
+Let: ast::Let = {
    "let" "_" <ty:(":" <Ty>)?> "=" <expr:ExprType> => ast::Let {
         pattern: ast::Pattern::Wildcard,
         mutable: false,
@@ -89,11 +89,11 @@ Let: ast::Let<ast::Expr> = {
     },
 };
 
-Assign: ast::Assign<ast::Expr> = {
+Assign: ast::Assign = {
    <lval:LVal> "=" <expr:ExprType> => ast::Assign { <> },
 };
 
-FnDecl: ast::FnDecl<ast::Expr> = {
+FnDecl: ast::FnDecl = {
     "fn" <id:"identifier"> "(" <type_fields:(<TyField> ",")*> ")"
         <return_type:("->" <Ty>)?> "=" <body:ExprType> ";" => {
         ast::FnDecl {
@@ -116,11 +116,11 @@ FnDecl: ast::FnDecl<ast::Expr> = {
     }
 };
 
-Decl: ast::Decl<ast::Expr> = {
+Decl: ast::Decl = {
     <l:@L> <ty:DeclType> <r:@R> => ast::Decl { ty, span: ast::Span { l, r } }
 };
 
-DeclType: ast::DeclType<ast::Expr> = {
+DeclType: ast::DeclType = {
     <TypeDecl> ";" => ast::DeclType::Type(<>),
     <FnDecl> => ast::DeclType::Fn(<>),
     ! => {
@@ -172,7 +172,7 @@ OpExpr: ast::Expr = {
     Factor,
 };
 
-ExprTypeSeq: ast::ExprType<ast::Expr> = {
+ExprTypeSeq: ast::ExprType = {
     "{" <l:@L> <r:@R> "}" => ast::ExprType::Seq(vec![ast::Expr::new(ast::ExprType::Unit, (l, r))], true),
     "{" <exprs:(<ExprTypeOrLetOrAssign> ";")*> <last:ExprTypeOrLetOrAssign> <last_semi:";"?> "}" => {
         let mut exprs = exprs;
@@ -219,7 +219,7 @@ Term: ast::Expr = {
     <l:@L> "false" <r:@R> => ast::Expr::new(ast::ExprType::BoolLiteral(false), (l, r)),
     <l:@L> "continue" <r:@R> => ast::Expr::new(ast::ExprType::Continue, (l, r)),
     <l:@L> "break" <r:@R> => ast::Expr::new(ast::ExprType::Break, (l, r)),
-    <l:@L> "(" <expr:ExprType> ")" <r:@R> => ast::Expr::new(expr.ty, (l, r)),
+    <l:@L> "(" <expr:ExprType> ")" <r:@R> => ast::Expr::new(expr.t, (l, r)),
     <l:@L> "(" ")" <r:@R> => ast::Expr::new(ast::ExprType::Unit, (l, r)),
     <l:@L> <expr:LVal> <r:@R> => ast::Expr::new(ast::ExprType::LVal(Box::new(expr)), (l, r)),
     <l:@L> <expr:FnCall> <r:@R> => ast::Expr::new(ast::ExprType::FnCall(Box::new(expr)), (l, r)),
@@ -231,13 +231,13 @@ Term: ast::Expr = {
     <l:@L> <expr:ExprTypeSeq> <r:@R> => ast::Expr::new(expr, (l, r)),
 };
 
-LVal: ast::LVal<ast::Expr> = {
+LVal: ast::LVal = {
     "identifier" => ast::LVal::Simple(<>),
     <val:LVal> "." <field:"identifier"> => ast::LVal::Field(Box::new(val), field),
     <val:LVal> "[" <subscript:ExprType> "]" => ast::LVal::Subscript(Box::new(val), subscript),
 };
 
-FnCall: ast::FnCall<ast::Expr> = {
+FnCall: ast::FnCall = {
     <id:"identifier"> "(" <args:(<ExprType> ",")*> ")" => ast::FnCall { <> },
     <id:"identifier"> "(" <args:(<ExprType> ",")*> <last:ExprType> ")" => {
         let mut args = args;
@@ -246,7 +246,7 @@ FnCall: ast::FnCall<ast::Expr> = {
     }
 };
 
-Record: ast::Record<ast::Expr> = {
+Record: ast::Record = {
     <id:"identifier"> "%{" <field_assigns:(<FieldAssign> ",")*> "}" => ast::Record { <> },
     <id:"identifier"> "%{" <field_assigns:(<FieldAssign> ",")*> <last:FieldAssign> "}" => {
         let mut field_assigns = field_assigns;
@@ -258,15 +258,15 @@ Record: ast::Record<ast::Expr> = {
     }
 };
 
-FieldAssign: ast::FieldAssign<ast::Expr> = {
+FieldAssign: ast::FieldAssign = {
     <id:"identifier"> ":" <expr:ExprType> => ast::FieldAssign { <> }
 };
 
-Array: ast::Array<ast::Expr> = {
+Array: ast::Array = {
     "[" <initial_value:ExprType> ";" <len:ExprType> "]" => ast::Array { <> }
 };
 
-If: ast::If<ast::Expr> = {
+If: ast::If = {
     "if" <cond:ExprType> <l:@L> <then_expr:ExprTypeSeq> <r:@R> => ast::If {
         cond,
         then_expr: ast::Expr::new(then_expr, (l, r)),
@@ -284,7 +284,7 @@ If: ast::If<ast::Expr> = {
     },
 };
 
-For: ast::For<ast::Expr> = {
+For: ast::For = {
     "for" <index:"identifier"> "in" <range:Range> <l:@L> <body:ExprTypeSeq> <r:@R> => ast::For {
         index,
         range,
@@ -292,11 +292,11 @@ For: ast::For<ast::Expr> = {
     }
 };
 
-While: ast::While<ast::Expr> = {
+While: ast::While = {
     "while" <cond:ExprType> <l:@L> <body:ExprTypeSeq> <r:@R> => ast::While {
         cond,
         body: ast::Expr::new(body, (l, r)),
     }
 };
 
-pub Program: Vec<ast::Decl<ast::Expr>> = <Decl*>;
+pub Program: Vec<ast::Decl> = <Decl*>;
