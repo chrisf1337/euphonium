@@ -7,6 +7,23 @@ pub enum DeclType {
     Error,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum _DeclType {
+    Type(_TypeDecl),
+    Fn(_FnDecl),
+    Error,
+}
+
+impl From<DeclType> for _DeclType {
+    fn from(decl: DeclType) -> Self {
+        match decl {
+            DeclType::Type(type_decl) => _DeclType::Type(type_decl.into()),
+            DeclType::Fn(fn_decl) => _DeclType::Fn(fn_decl.into()),
+            DeclType::Error => _DeclType::Error,
+        }
+    }
+}
+
 /// type A = ...
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypeDecl {
@@ -17,14 +34,14 @@ pub struct TypeDecl {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct _TypeDecl {
     pub type_id: String,
-    pub ty: Type,
+    pub ty: _Type,
 }
 
 impl From<TypeDecl> for _TypeDecl {
     fn from(decl: TypeDecl) -> Self {
         Self {
             type_id: decl.type_id.t,
-            ty: decl.ty.t,
+            ty: decl.ty.t.into(),
         }
     }
 }
@@ -38,6 +55,26 @@ pub enum Type {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum _Type {
+    Type(String),
+    /// { a: int, b: int }
+    Record(Vec<_TypeField>),
+    Array(Box<_Type>, usize),
+}
+
+impl From<Type> for _Type {
+    fn from(ty: Type) -> Self {
+        match ty {
+            Type::Type(ty) => _Type::Type(ty),
+            Type::Record(type_fields) => {
+                _Type::Record(type_fields.into_iter().map(_TypeField::from).collect())
+            }
+            Type::Array(ty, len) => _Type::Array(Box::new(ty.t.into()), len.t),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypeField {
     pub id: Spanned<String>,
     pub ty: Spanned<Type>,
@@ -46,14 +83,14 @@ pub struct TypeField {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct _TypeField {
     pub id: String,
-    pub ty: Type,
+    pub ty: _Type,
 }
 
 impl From<TypeField> for _TypeField {
     fn from(field: TypeField) -> Self {
         Self {
             id: field.id.t,
-            ty: field.ty.t,
+            ty: field.ty.t.into(),
         }
     }
 }
@@ -114,8 +151,18 @@ impl<T> Spanned<T> {
         }
     }
 
-    pub fn map<F, U>(self, f: F) -> Spanned<U> where F: FnOnce(T) -> U {
+    pub fn map<F, U>(self, f: F) -> Spanned<U>
+    where
+        F: FnOnce(T) -> U,
+    {
         Spanned::new(f(self.t), (self.span.l, self.span.r))
+    }
+
+    pub fn unwrap<U>(self) -> U
+    where
+        U: From<T>,
+    {
+        self.t.into()
     }
 }
 
@@ -164,10 +211,10 @@ pub enum _ExprType {
     LVal(Box<_LVal>),
     Let(Box<_Let>),
     FnCall(Box<_FnCall>),
-    Record(Box<Record>),
-    Assign(Box<Assign>),
+    Record(Box<_Record>),
+    Assign(Box<_Assign>),
     Array(Box<_Array>),
-    If(Box<If>),
+    If(Box<_If>),
     Range(Box<_ExprType>, Box<_ExprType>),
     For(Box<_For>),
     While(Box<_While>),
@@ -177,15 +224,22 @@ pub enum _ExprType {
 impl From<ExprType> for _ExprType {
     fn from(expr: ExprType) -> Self {
         match expr {
-            ExprType::Seq(exprs, returns) => _ExprType::Seq(exprs.into_iter().map(|expr| expr.t.into()).collect(), returns),
+            ExprType::Seq(exprs, returns) => _ExprType::Seq(
+                exprs.into_iter().map(|expr| expr.t.into()).collect(),
+                returns,
+            ),
             ExprType::String(s) => _ExprType::String(s),
             ExprType::Number(n) => _ExprType::Number(n),
             ExprType::Neg(expr) => _ExprType::Neg(Box::new(expr.t.into())),
-            ExprType::Arith(l, op, r) => _ExprType::Arith(Box::new(l.t.into()), op, Box::new(r.t.into())),
+            ExprType::Arith(l, op, r) => {
+                _ExprType::Arith(Box::new(l.t.into()), op, Box::new(r.t.into()))
+            }
             ExprType::Unit => _ExprType::Unit,
             ExprType::BoolLiteral(b) => _ExprType::BoolLiteral(b),
             ExprType::Not(expr) => _ExprType::Not(Box::new(expr.t.into())),
-            ExprType::Bool(l, op, r) => _ExprType::Bool(Box::new(l.t.into()), op, Box::new(r.t.into())),
+            ExprType::Bool(l, op, r) => {
+                _ExprType::Bool(Box::new(l.t.into()), op, Box::new(r.t.into()))
+            }
             ExprType::Continue => _ExprType::Continue,
             ExprType::Break => _ExprType::Break,
             ExprType::LVal(expr) => _ExprType::LVal(Box::new((*expr).into())),
@@ -195,10 +249,14 @@ impl From<ExprType> for _ExprType {
             ExprType::Assign(expr) => _ExprType::Assign(Box::new((*expr).into())),
             ExprType::Array(expr) => _ExprType::Array(Box::new((*expr).into())),
             ExprType::If(expr) => _ExprType::If(Box::new((*expr).into())),
-            ExprType::Range(from, to) => _ExprType::Range(Box::new(from.t.into()), Box::new(to.t.into())),
+            ExprType::Range(from, to) => {
+                _ExprType::Range(Box::new(from.t.into()), Box::new(to.t.into()))
+            }
             ExprType::For(expr) => _ExprType::For(Box::new((*expr).into())),
             ExprType::While(expr) => _ExprType::While(Box::new((*expr).into())),
-            ExprType::Compare(l, op, r) => _ExprType::Compare(Box::new(l.t.into()), op, Box::new(r.t.into())),
+            ExprType::Compare(l, op, r) => {
+                _ExprType::Compare(Box::new(l.t.into()), op, Box::new(r.t.into()))
+            }
         }
     }
 }
@@ -235,7 +293,7 @@ pub struct FnDecl {
 pub struct _FnDecl {
     pub id: String,
     pub type_fields: Vec<_TypeField>,
-    pub return_type: Option<Type>,
+    pub return_type: Option<_Type>,
     pub body: _ExprType,
 }
 
@@ -244,7 +302,7 @@ impl From<FnDecl> for _FnDecl {
         Self {
             id: decl.id.t,
             type_fields: decl.type_fields.into_iter().map(_TypeField::from).collect(),
-            return_type: decl.return_type.map(|t| t.t),
+            return_type: decl.return_type.map(|t| t.t.into()),
             body: decl.body.t.into(),
         }
     }
@@ -311,7 +369,11 @@ impl From<Record> for _Record {
     fn from(record: Record) -> Self {
         Self {
             id: record.id.t,
-            field_assigns: record.field_assigns.into_iter().map(_FieldAssign::from).collect(),
+            field_assigns: record
+                .field_assigns
+                .into_iter()
+                .map(_FieldAssign::from)
+                .collect(),
         }
     }
 }
@@ -344,6 +406,21 @@ pub struct Assign {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct _Assign {
+    pub lval: _LVal,
+    pub expr: _ExprType,
+}
+
+impl From<Assign> for _Assign {
+    fn from(a: Assign) -> Self {
+        Self {
+            lval: a.lval.into(),
+            expr: a.expr.t.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Array {
     pub initial_value: Expr,
     pub len: Expr,
@@ -369,6 +446,23 @@ pub struct If {
     pub cond: Expr,
     pub then_expr: Expr,
     pub else_expr: Option<Expr>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct _If {
+    pub cond: _ExprType,
+    pub then_expr: _ExprType,
+    pub else_expr: Option<_ExprType>,
+}
+
+impl From<If> for _If {
+    fn from(i: If) -> Self {
+        Self {
+            cond: i.cond.t.into(),
+            then_expr: i.then_expr.t.into(),
+            else_expr: i.else_expr.map(|e| e.t.into()),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -11,18 +11,6 @@ mod tests {
     use super::*;
     use crate::ast::*;
 
-    macro_rules! se {
-        ( $ty:expr ) => {
-            StrippedExpr { ty: $ty }
-        };
-    }
-
-    macro_rules! sd {
-        ( $ty:expr ) => {
-            StrippedDecl { ty: $ty }
-        };
-    }
-
     #[test]
     fn test_tydecls() {
         let lexer = lexer::Lexer::new(include_str!("../test/test_tydecls.euph"));
@@ -32,33 +20,33 @@ mod tests {
             .map(|decls| {
                 decls
                     .into_iter()
-                    .map(Decl::strip)
-                    .collect::<Vec<StrippedDecl>>()
+                    .map(Spanned::unwrap)
+                    .collect::<Vec<_DeclType>>()
             });
         assert_eq!(errors, vec![]);
         assert_eq!(
             parse_result,
             Ok(vec![
-                sd!(DeclType::Type(TypeDecl {
+                _DeclType::Type(_TypeDecl {
                     type_id: "a".to_owned(),
-                    ty: Type::Type("int".to_owned())
-                })),
-                sd!(DeclType::Type(TypeDecl {
+                    ty: _Type::Type("int".to_owned())
+                }),
+                _DeclType::Type(_TypeDecl {
                     type_id: "b".to_owned(),
-                    ty: Type::Array(
-                        Box::new(Type::Record(vec![
-                            TypeField {
+                    ty: _Type::Array(
+                        Box::new(_Type::Record(vec![
+                            _TypeField {
                                 id: "a".to_owned(),
-                                ty: Type::Type("int".to_owned())
+                                ty: _Type::Type("int".to_owned())
                             },
-                            TypeField {
+                            _TypeField {
                                 id: "b".to_owned(),
-                                ty: Type::Type("int".to_owned())
+                                ty: _Type::Type("int".to_owned())
                             }
                         ])),
                         3
                     )
-                })),
+                }),
             ])
         );
     }
@@ -72,98 +60,93 @@ mod tests {
             .map(|decls| {
                 decls
                     .into_iter()
-                    .map(Decl::strip)
-                    .collect::<Vec<StrippedDecl>>()
+                    .map(Spanned::unwrap)
+                    .collect::<Vec<_DeclType>>()
             });
         assert_eq!(errors, vec![]);
         assert_eq!(
             parse_result,
-            Ok(vec![sd!(DeclType::Fn(FnDecl {
+            Ok(vec![_DeclType::Fn(_FnDecl {
                 id: "f".to_owned(),
                 type_fields: vec![],
                 return_type: None,
-                body: se!(ExprType::Seq(
+                body: _ExprType::Seq(
                     vec![
-                        se!(ExprType::Arith(
-                            Box::new(se!(ExprType::Number(1))),
+                        _ExprType::Arith(
+                            Box::new(_ExprType::Number(1)),
                             ArithOp::Add,
-                            Box::new(se!(ExprType::Arith(
-                                Box::new(se!(ExprType::Number(2))),
+                            Box::new(_ExprType::Arith(
+                                Box::new(_ExprType::Number(2)),
                                 ArithOp::Mul,
-                                Box::new(se!(ExprType::Number(3)))
-                            )))
-                        )),
-                        se!(ExprType::Bool(
-                            Box::new(se!(ExprType::Not(Box::new(se!(ExprType::BoolLiteral(
-                                true
-                            )))))),
+                                Box::new(_ExprType::Number(3))
+                            ))
+                        ),
+                        _ExprType::Bool(
+                            Box::new(_ExprType::Not(Box::new(_ExprType::BoolLiteral(true)))),
                             BoolOp::Or,
-                            Box::new(se!(ExprType::Bool(
-                                Box::new(se!(ExprType::BoolLiteral(true))),
+                            Box::new(_ExprType::Bool(
+                                Box::new(_ExprType::BoolLiteral(true)),
                                 BoolOp::And,
-                                Box::new(se!(ExprType::BoolLiteral(false)))
-                            )))
-                        )),
-                        se!(ExprType::Assign(Box::new(Assign {
-                            lval: LVal::Field(
-                                Box::new(LVal::Subscript(
-                                    Box::new(LVal::Simple("a".to_owned())),
-                                    se!(ExprType::LVal(Box::new(LVal::Simple("b".to_owned()))))
+                                Box::new(_ExprType::BoolLiteral(false))
+                            ))
+                        ),
+                        _ExprType::Assign(Box::new(_Assign {
+                            lval: _LVal::Field(
+                                Box::new(_LVal::Subscript(
+                                    Box::new(_LVal::Simple("a".to_owned())),
+                                    _ExprType::LVal(Box::new(_LVal::Simple("b".to_owned())))
                                 )),
                                 "c".to_owned()
                             ),
-                            expr: se!(ExprType::Number(1)),
-                        }))),
-                        se!(ExprType::FnCall(Box::new(FnCall {
+                            expr: _ExprType::Number(1),
+                        })),
+                        _ExprType::FnCall(Box::new(_FnCall {
                             id: "g".to_owned(),
-                            args: vec![se!(ExprType::Number(1)), se!(ExprType::Number(2)),]
-                        }))),
-                        se!(ExprType::Record(Box::new(Record {
+                            args: vec![_ExprType::Number(1), _ExprType::Number(2)]
+                        })),
+                        _ExprType::Record(Box::new(_Record {
                             id: "record".to_owned(),
                             field_assigns: vec![
-                                FieldAssign {
+                                _FieldAssign {
                                     id: "a".to_owned(),
-                                    expr: se!(ExprType::Number(1)),
+                                    expr: _ExprType::Number(1),
                                 },
-                                FieldAssign {
+                                _FieldAssign {
                                     id: "b".to_owned(),
-                                    expr: se!(ExprType::Number(2)),
+                                    expr: _ExprType::Number(2),
                                 }
                             ]
-                        }))),
-                        se!(ExprType::If(Box::new(If {
-                            cond: se!(ExprType::Compare(
-                                Box::new(se!(ExprType::Number(1))),
+                        })),
+                        _ExprType::If(Box::new(_If {
+                            cond: _ExprType::Compare(
+                                Box::new(_ExprType::Number(1)),
                                 CompareOp::Equal,
-                                Box::new(se!(ExprType::Seq(vec![se!(ExprType::Number(1))], true)))
-                            )),
-                            then_expr: se!(ExprType::Seq(vec![se!(ExprType::Number(2))], true)),
-                            else_expr: Some(se!(ExprType::If(Box::new(If {
-                                cond: se!(ExprType::Number(3)),
-                                then_expr: se!(ExprType::Seq(vec![se!(ExprType::Number(4))], true)),
-                                else_expr: Some(se!(ExprType::Seq(
-                                    vec![se!(ExprType::Unit)],
-                                    true
-                                ))),
-                            }))))
-                        }))),
-                        se!(ExprType::If(Box::new(If {
-                            cond: se!(ExprType::Seq(vec![se!(ExprType::BoolLiteral(true))], true)),
-                            then_expr: se!(ExprType::Seq(vec![se!(ExprType::Unit)], true)),
+                                Box::new(_ExprType::Seq(vec![_ExprType::Number(1)], true))
+                            ),
+                            then_expr: _ExprType::Seq(vec![_ExprType::Number(2)], true),
+                            else_expr: Some(_ExprType::If(Box::new(_If {
+                                cond: _ExprType::Number(3),
+                                then_expr: _ExprType::Seq(vec![_ExprType::Number(4)], true),
+                                else_expr: Some(_ExprType::Seq(vec![_ExprType::Unit], true)),
+                            })))
+                        })),
+                        _ExprType::If(Box::new(_If {
+                            cond: _ExprType::Seq(vec![_ExprType::BoolLiteral(true)], true),
+                            then_expr: _ExprType::Seq(vec![_ExprType::Unit], true),
                             else_expr: None,
-                        }))),
-                        se!(ExprType::Array(Box::new(Array {
-                            initial_value: se!(ExprType::Number(0)),
-                            len: se!(ExprType::Number(3)),
-                        }))),
-                        se!(ExprType::Range(
-                            Box::new(se!(ExprType::Seq(vec![se!(ExprType::Number(1))], true))),
-                            Box::new(se!(ExprType::Number(2)))
-                        ))
+                        })),
+                        _ExprType::Array(Box::new(_Array {
+                            initial_value: _ExprType::Number(0),
+                            len: _ExprType::Number(3),
+                        })),
+                        _ExprType::Range(
+                            Box::new(_ExprType::Seq(vec![_ExprType::Number(1)], true)),
+                            Box::new(_ExprType::Number(2))
+                        )
                     ],
                     false
-                ))
-            }))])
+                )
+            })])
         )
     }
 
@@ -175,63 +158,57 @@ mod tests {
             dbg!(parser::ProgramParser::new().parse(&mut errors, lexer)).map(|decls| {
                 decls
                     .into_iter()
-                    .map(Decl::strip)
-                    .collect::<Vec<StrippedDecl>>()
+                    .map(Spanned::unwrap)
+                    .collect::<Vec<_DeclType>>()
             });
         assert_eq!(errors, vec![]);
         assert_eq!(
             parse_result,
             Ok(vec![
-                sd!(DeclType::Fn(FnDecl {
+                _DeclType::Fn(_FnDecl {
                     id: "f".to_owned(),
                     type_fields: vec![],
                     return_type: None,
-                    body: se!(ExprType::Seq(
+                    body: _ExprType::Seq(
                         vec![
-                            se!(ExprType::Let(Box::new(Let {
+                            _ExprType::Let(Box::new(_Let {
                                 pattern: Pattern::String("a".to_owned()),
                                 mutable: false,
                                 ty: Some(Type::Type("a".to_owned())),
-                                expr: se!(ExprType::Arith(
-                                    Box::new(se!(ExprType::Number(1))),
+                                expr: _ExprType::Arith(
+                                    Box::new(_ExprType::Number(1)),
                                     ArithOp::Sub,
-                                    Box::new(se!(ExprType::Neg(Box::new(se!(ExprType::Number(
-                                        1
-                                    ))))))
-                                ))
-                            }))),
-                            se!(ExprType::Let(Box::new(Let {
+                                    Box::new(_ExprType::Neg(Box::new(_ExprType::Number(1))))
+                                )
+                            })),
+                            _ExprType::Let(Box::new(_Let {
                                 pattern: Pattern::String("b".to_owned()),
                                 mutable: false,
                                 ty: None,
-                                expr: se!(ExprType::String("".to_owned()))
-                            }))),
-                            se!(ExprType::Arith(
-                                Box::new(se!(ExprType::LVal(Box::new(LVal::Simple(
-                                    "a".to_owned()
-                                ))))),
+                                expr: _ExprType::String("".to_owned())
+                            })),
+                            _ExprType::Arith(
+                                Box::new(_ExprType::LVal(Box::new(_LVal::Simple("a".to_owned())))),
                                 ArithOp::Add,
-                                Box::new(se!(ExprType::LVal(Box::new(LVal::Simple(
-                                    "b".to_owned()
-                                )))))
-                            )),
+                                Box::new(_ExprType::LVal(Box::new(_LVal::Simple("b".to_owned()))))
+                            ),
                         ],
                         true
-                    ))
-                })),
-                sd!(DeclType::Fn(FnDecl {
+                    )
+                }),
+                _DeclType::Fn(_FnDecl {
                     id: "g".to_owned(),
-                    type_fields: vec![TypeField {
+                    type_fields: vec![_TypeField {
                         id: "i".to_owned(),
-                        ty: Type::Type("int".to_owned())
+                        ty: _Type::Type("int".to_owned())
                     }],
-                    return_type: Some(Type::Type("int".to_owned())),
-                    body: se!(ExprType::Arith(
-                        Box::new(se!(ExprType::Number(1))),
+                    return_type: Some(_Type::Type("int".to_owned())),
+                    body: _ExprType::Arith(
+                        Box::new(_ExprType::Number(1)),
                         ArithOp::Div,
-                        Box::new(se!(ExprType::Number(2)))
-                    )),
-                })),
+                        Box::new(_ExprType::Number(2))
+                    ),
+                }),
             ])
         );
     }
