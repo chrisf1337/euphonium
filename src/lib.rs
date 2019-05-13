@@ -1,3 +1,5 @@
+#![allow(clippy::all)]
+
 pub mod ast;
 pub mod lexer;
 
@@ -25,7 +27,14 @@ mod tests {
     fn test_tydecls() {
         let lexer = lexer::Lexer::new(include_str!("../test/test_tydecls.euph"));
         let mut errors = vec![];
-        let parse_result = parser::ProgramParser::new().parse(&mut errors, lexer).map(|decls| decls.into_iter().map(Decl::strip).collect::<Vec<StrippedDecl>>());
+        let parse_result = parser::ProgramParser::new()
+            .parse(&mut errors, lexer)
+            .map(|decls| {
+                decls
+                    .into_iter()
+                    .map(Decl::strip)
+                    .collect::<Vec<StrippedDecl>>()
+            });
         assert_eq!(errors, vec![]);
         assert_eq!(
             parse_result,
@@ -162,9 +171,8 @@ mod tests {
     fn test_parser() {
         let lexer = lexer::Lexer::new(include_str!("../test/test1.euph"));
         let mut errors = vec![];
-        let parse_result = dbg!(parser::ProgramParser::new()
-            .parse(&mut errors, lexer))
-            .map(|decls| {
+        let parse_result =
+            dbg!(parser::ProgramParser::new().parse(&mut errors, lexer)).map(|decls| {
                 decls
                     .into_iter()
                     .map(Decl::strip)

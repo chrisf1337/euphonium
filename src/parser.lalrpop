@@ -53,72 +53,65 @@ extern {
     }
 }
 
+Spanned<T>: ast::Spanned<T> = {
+    <l:@L> <t:T> <r:@R> => ast::Spanned::new(t, (l, r))
+};
+
 Identifier: String = "identifier";
 
-Ty: ast::Type = {
-    "identifier" => ast::Type::Type(<>),
-    "{" <ty_fields:(<TyField> ",")*> "}" => ast::Type::Record(ty_fields),
-    "{" <ty_fields:(<TyField> ",")*> <last:TyField> "}" => {
+Ty: ast::Spanned<ast::Type> = {
+    Spanned<"identifier"> => <>.map(ast::Type::Type),
+    <l:@L> "{" <ty_fields:(<TyField> ",")*> "}" <r:@R> => ast::Spanned::new(ast::Type::Record(ty_fields), (l, r)),
+    <l:@L> "{" <ty_fields:(<TyField> ",")*> <last:TyField> "}" <r:@R> => {
         let mut ty_fields = ty_fields;
         ty_fields.push(last);
-        ast::Type::Record(ty_fields)
+        ast::Spanned::new(ast::Type::Record(ty_fields), (l, r))
     },
-    "[" <ty:Ty> ";" <len:"number"> "]" => ast::Type::Array(Box::new(ty), len),
+    <l:@L> "[" <ty:Ty> ";" <len:Spanned<"number">> "]" <r:@R> =>
+        ast::Spanned::new(ast::Type::Array(Box::new(ty), len), (l, r)),
 };
 
 TyField: ast::TypeField = {
-    <id:"identifier"> ":" <ty:Ty> => ast::TypeField { <> }
+    <id:Spanned<"identifier">> ":" <ty:Ty> => ast::TypeField { id, ty }
 };
 
 TypeDecl: ast::TypeDecl =
-    "type" <type_id:"identifier"> "=" <ty:Ty> =>
-        ast::TypeDecl { <> };
+    "type" <type_id:Spanned<"identifier">> "=" <ty:Ty> =>
+        ast::TypeDecl { type_id, ty };
 
 Let: ast::Let = {
-   "let" "_" <ty:(":" <Ty>)?> "=" <expr:ExprType> => ast::Let {
-        pattern: ast::Pattern::Wildcard,
-        mutable: false,
-        ty: ty,
-        expr: expr,
+   "let" <ml:@L> <mr:@R> <pattern:Spanned<"_">> <ty:(":" <Ty>)?> "=" <expr:Expr> => ast::Let {
+        pattern: pattern.map(|_| ast::Pattern::Wildcard),
+        mutable: ast::Spanned::new(false, (ml, mr)),
+        ty,
+        expr,
     },
-   "let" <mutable:"mut"?> <id:"identifier"> <ty:(":" <Ty>)?> "=" <expr:ExprType> => ast::Let {
-        pattern: ast::Pattern::String(id),
-        mutable: mutable.is_some(),
-        ty: ty,
-        expr: expr,
+   "let" <ml:@L> <mutable:"mut"?> <mr:@R> <id:Spanned<"identifier">> <ty:(":" <Ty>)?> "=" <expr:Expr> => ast::Let {
+        pattern: id.map(ast::Pattern::String),
+        mutable: ast::Spanned::new(mutable.is_some(), (ml, mr)),
+        ty,
+        expr,
     },
 };
 
 Assign: ast::Assign = {
-   <lval:LVal> "=" <expr:ExprType> => ast::Assign { <> },
+   <lval:LVal> "=" <expr:Expr> => ast::Assign { <> },
 };
 
 FnDecl: ast::FnDecl = {
-    "fn" <id:"identifier"> "(" <type_fields:(<TyField> ",")*> ")"
-        <return_type:("->" <Ty>)?> "=" <body:ExprType> ";" => {
-        ast::FnDecl {
-            id,
-            type_fields,
-            return_type,
-            body,
-        }
+    "fn" <id:Spanned<"identifier">> "(" <type_fields:(<TyField> ",")*> ")"
+        <return_type:("->" <Ty>)?> "=" <body:Expr> ";" => {
+        ast::FnDecl { id, type_fields, return_type, body }
     },
-    "fn" <id:"identifier"> "(" <type_fields:(<TyField> ",")*> <last:TyField> ")"
-        <return_type:("->" <Ty>)?> "=" <body:ExprType> ";" => {
+    "fn" <id:Spanned<"identifier">> "(" <type_fields:(<TyField> ",")*> <last:TyField> ")"
+        <return_type:("->" <Ty>)?> "=" <body:Expr> ";" => {
         let mut type_fields = type_fields;
         type_fields.push(last);
-        ast::FnDecl {
-            id,
-            type_fields,
-            return_type,
-            body,
-        }
+        ast::FnDecl { id, type_fields, return_type, body }
     }
 };
 
-Decl: ast::Decl = {
-    <l:@L> <ty:DeclType> <r:@R> => ast::Decl { ty, span: ast::Span { l, r } }
-};
+Decl: ast::Decl = Spanned<DeclType>;
 
 DeclType: ast::DeclType = {
     <TypeDecl> ";" => ast::DeclType::Type(<>),
@@ -136,16 +129,16 @@ ExprTypeOrLetOrAssign: ast::Expr = {
 }
 
 Range: ast::Expr = {
-    <l:ExprType> ".." <r:ExprType> => {
+    <l:Expr> ".." <r:Expr> => {
         let lspan = l.span;
         let rspan = r.span;
         ast::Expr::new(ast::ExprType::Range(Box::new(l), Box::new(r)), (lspan.l, rspan.r))
     },
-    ExprType,
+    Expr,
 };
 
-ExprType: ast::Expr = {
-    <l:ExprType> "==" <r:OpExpr> => {
+Expr: ast::Expr = {
+    <l:Expr> "==" <r:OpExpr> => {
         let lspan = l.span;
         let rspan = r.span;
         ast::Expr::new(ast::ExprType::Compare(Box::new(l), ast::CompareOp::Equal, Box::new(r)), (lspan.l, rspan.r))
@@ -213,33 +206,33 @@ TermOrNeg: ast::Expr = {
 };
 
 Term: ast::Expr = {
-    <l:@L> <n:"number"> <r:@R> => ast::Expr::new(ast::ExprType::Number(n), (l, r)),
-    <l:@L> <s:"string"> <r:@R> => ast::Expr::new(ast::ExprType::String(s), (l, r)),
-    <l:@L> "true" <r:@R> => ast::Expr::new(ast::ExprType::BoolLiteral(true), (l, r)),
-    <l:@L> "false" <r:@R> => ast::Expr::new(ast::ExprType::BoolLiteral(false), (l, r)),
-    <l:@L> "continue" <r:@R> => ast::Expr::new(ast::ExprType::Continue, (l, r)),
-    <l:@L> "break" <r:@R> => ast::Expr::new(ast::ExprType::Break, (l, r)),
-    <l:@L> "(" <expr:ExprType> ")" <r:@R> => ast::Expr::new(expr.t, (l, r)),
-    <l:@L> "(" ")" <r:@R> => ast::Expr::new(ast::ExprType::Unit, (l, r)),
-    <l:@L> <expr:LVal> <r:@R> => ast::Expr::new(ast::ExprType::LVal(Box::new(expr)), (l, r)),
-    <l:@L> <expr:FnCall> <r:@R> => ast::Expr::new(ast::ExprType::FnCall(Box::new(expr)), (l, r)),
-    <l:@L> <expr:Array> <r:@R> => ast::Expr::new(ast::ExprType::Array(Box::new(expr)), (l, r)),
-    <l:@L> <expr:Record> <r:@R> => ast::Expr::new(ast::ExprType::Record(Box::new(expr)), (l, r)),
-    <l:@L> <expr:If> <r:@R> => ast::Expr::new(ast::ExprType::If(Box::new(expr)), (l, r)),
-    <l:@L> <expr:For> <r:@R> => ast::Expr::new(ast::ExprType::For(Box::new(expr)), (l, r)),
-    <l:@L> <expr:While> <r:@R> => ast::Expr::new(ast::ExprType::While(Box::new(expr)), (l, r)),
-    <l:@L> <expr:ExprTypeSeq> <r:@R> => ast::Expr::new(expr, (l, r)),
+    Spanned<"number"> => <>.map(ast::ExprType::Number),
+    Spanned<"string"> => <>.map(ast::ExprType::String),
+    Spanned<"true"> => <>.map(|_| ast::ExprType::BoolLiteral(true)),
+    Spanned<"false"> => <>.map(|_| ast::ExprType::BoolLiteral(false)),
+    Spanned<"continue"> => <>.map(|_| ast::ExprType::Continue),
+    Spanned<"break"> => <>.map(|_| ast::ExprType::Break),
+    Spanned<("(" <Expr> ")")> => <>.map(|s| s.t),
+    Spanned<("(" ")")> => <>.map(|s| ast::ExprType::Unit),
+    Spanned<LVal> => <>.map(|e| ast::ExprType::LVal(Box::new(e))),
+    Spanned<FnCall> => <>.map(|e| ast::ExprType::FnCall(Box::new(e))),
+    Spanned<Array> => <>.map(|e| ast::ExprType::Array(Box::new(e))),
+    Spanned<Record> => <>.map(|e| ast::ExprType::Record(Box::new(e))),
+    Spanned<If> => <>.map(|e| ast::ExprType::If(Box::new(e))),
+    Spanned<For> => <>.map(|e| ast::ExprType::For(Box::new(e))),
+    Spanned<While> => <>.map(|e| ast::ExprType::While(Box::new(e))),
+    Spanned<ExprTypeSeq>,
 };
 
 LVal: ast::LVal = {
     "identifier" => ast::LVal::Simple(<>),
     <val:LVal> "." <field:"identifier"> => ast::LVal::Field(Box::new(val), field),
-    <val:LVal> "[" <subscript:ExprType> "]" => ast::LVal::Subscript(Box::new(val), subscript),
+    <val:LVal> "[" <subscript:Expr> "]" => ast::LVal::Subscript(Box::new(val), subscript),
 };
 
 FnCall: ast::FnCall = {
-    <id:"identifier"> "(" <args:(<ExprType> ",")*> ")" => ast::FnCall { <> },
-    <id:"identifier"> "(" <args:(<ExprType> ",")*> <last:ExprType> ")" => {
+    <id:Spanned<"identifier">> "(" <args:(<Expr> ",")*> ")" => ast::FnCall { id, args },
+    <id:Spanned<"identifier">> "(" <args:(<Expr> ",")*> <last:Expr> ")" => {
         let mut args = args;
         args.push(last);
         ast::FnCall { id, args }
@@ -247,8 +240,8 @@ FnCall: ast::FnCall = {
 };
 
 Record: ast::Record = {
-    <id:"identifier"> "%{" <field_assigns:(<FieldAssign> ",")*> "}" => ast::Record { <> },
-    <id:"identifier"> "%{" <field_assigns:(<FieldAssign> ",")*> <last:FieldAssign> "}" => {
+    <id:Spanned<"identifier">> "%{" <field_assigns:(<FieldAssign> ",")*> "}" => ast::Record { <> },
+    <id:Spanned<"identifier">> "%{" <field_assigns:(<FieldAssign> ",")*> <last:FieldAssign> "}" => {
         let mut field_assigns = field_assigns;
         field_assigns.push(last);
         ast::Record {
@@ -259,44 +252,35 @@ Record: ast::Record = {
 };
 
 FieldAssign: ast::FieldAssign = {
-    <id:"identifier"> ":" <expr:ExprType> => ast::FieldAssign { <> }
+    <id:Spanned<"identifier">> ":" <expr:Expr> => ast::FieldAssign { <> }
 };
 
 Array: ast::Array = {
-    "[" <initial_value:ExprType> ";" <len:ExprType> "]" => ast::Array { <> }
+    "[" <initial_value:Expr> ";" <len:Expr> "]" => ast::Array { <> }
 };
 
 If: ast::If = {
-    "if" <cond:ExprType> <l:@L> <then_expr:ExprTypeSeq> <r:@R> => ast::If {
+    "if" <cond:Expr> <then_expr:Spanned<ExprTypeSeq>> => ast::If {
         cond,
-        then_expr: ast::Expr::new(then_expr, (l, r)),
+        then_expr,
         else_expr: None,
     },
-    "if" <cond:ExprType> <tl:@L> <then_expr:ExprTypeSeq> <tr:@R> "else" <el:@L> <else_expr:ExprTypeSeq> <er:@R> => ast::If {
+    "if" <cond:Expr> <then_expr:Spanned<ExprTypeSeq>> "else" <else_expr:Spanned<ExprTypeSeq>> =>
+        ast::If { cond, then_expr, else_expr: Some(else_expr) },
+    "if" <cond:Expr> <then_expr:Spanned<ExprTypeSeq>> "else" <else_if:Spanned<If>> => ast::If {
         cond,
-        then_expr: ast::Expr::new(then_expr, (tl, tr)),
-        else_expr: Some(ast::Expr::new(else_expr, (el, er))),
-    },
-    "if" <cond:ExprType> <tl:@L> <then_expr:ExprTypeSeq> <tr:@R> "else" <el:@L> <else_if:If> <er:@R> => ast::If {
-        cond,
-        then_expr: ast::Expr::new(then_expr, (tl, tr)),
-        else_expr: Some(ast::Expr::new(ast::ExprType::If(Box::new(else_if)), (el, er))),
+        then_expr,
+        else_expr: Some(else_if.map(|expr| ast::ExprType::If(Box::new(expr)))),
     },
 };
 
 For: ast::For = {
-    "for" <index:"identifier"> "in" <range:Range> <l:@L> <body:ExprTypeSeq> <r:@R> => ast::For {
-        index,
-        range,
-        body: ast::Expr::new(body, (l, r)),
-    }
+    "for" <index:Spanned<"identifier">> "in" <range:Range> <body:Spanned<ExprTypeSeq>> =>
+        ast::For { index, range, body }
 };
 
 While: ast::While = {
-    "while" <cond:ExprType> <l:@L> <body:ExprTypeSeq> <r:@R> => ast::While {
-        cond,
-        body: ast::Expr::new(body, (l, r)),
-    }
+    "while" <cond:Expr> <body:Spanned<ExprTypeSeq>> => ast::While { cond, body }
 };
 
 pub Program: Vec<ast::Decl> = <Decl*>;
