@@ -36,6 +36,7 @@ extern {
         "true" => lexer::Tok::True,
         "false" => lexer::Tok::False,
         "&&" => lexer::Tok::And,
+        "|" => lexer::Tok::Pipe,
         "||" => lexer::Tok::Or,
         "_" => lexer::Tok::Underscore,
         "." => lexer::Tok::Period,
@@ -59,8 +60,46 @@ Spanned<T>: ast::Spanned<T> = {
 
 Identifier: String = "identifier";
 
+EnumParam: ast::Spanned<ast::EnumParam> = {
+    Spanned<"identifier"> => <>.map(ast::EnumParam::Simple),
+    <l:@L> "{" <ty_fields:(<TyField> ",")*> "}" <r:@R> => ast::Spanned::new(ast::EnumParam::Record(ty_fields), (l, r)),
+    <l:@L> "{" <ty_fields:(<TyField> ",")*> <last:TyField> "}" <r:@R> => {
+        let mut ty_fields = ty_fields;
+        ty_fields.push(last);
+        ast::Spanned::new(ast::EnumParam::Record(ty_fields), (l, r))
+    },
+};
+
+EnumParams: Vec<ast::Spanned<ast::EnumParam>> = {
+    "(" <args: (<EnumParam> ",")+> ")" => args,
+    "(" <args: (<EnumParam> ",")*> <last:EnumParam> ")" => {
+        let mut args = args;
+        args.push(last);
+        args
+    },
+};
+
+EnumCase: ast::EnumCase = {
+    <id:Spanned<"identifier">> <params:EnumParams?> => ast::EnumCase {
+        id,
+        params: if let Some(params) = params { params } else { vec![] }
+    }
+};
+
 Ty: ast::Spanned<ast::Type> = {
-    Spanned<"identifier"> => <>.map(ast::Type::Type),
+    <l:@L> <cases: (<Spanned<EnumCase>> "|")*> <last:Spanned<EnumCase>> <r:@R> => {
+        if cases.is_empty() {
+            if last.t.params.is_empty() {
+                ast::Spanned::new(ast::Type::Type(last.t.id.t), (l, r))
+            } else {
+                ast::Spanned::new(ast::Type::Enum(vec![last]), (l, r))
+            }
+        } else {
+            let mut cases = cases;
+            cases.push(last);
+            ast::Spanned::new(ast::Type::Enum(cases), (l, r))
+        }
+    },
     <l:@L> "{" <ty_fields:(<TyField> ",")*> "}" <r:@R> => ast::Spanned::new(ast::Type::Record(ty_fields), (l, r)),
     <l:@L> "{" <ty_fields:(<TyField> ",")*> <last:TyField> "}" <r:@R> => {
         let mut ty_fields = ty_fields;

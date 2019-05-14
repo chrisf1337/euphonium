@@ -49,6 +49,7 @@ impl From<TypeDecl> for _TypeDecl {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Type {
     Type(String),
+    Enum(Vec<Spanned<EnumCase>>),
     /// { a: int, b: int }
     Record(Vec<TypeField>),
     Array(Box<Spanned<Type>>, Spanned<usize>),
@@ -57,6 +58,7 @@ pub enum Type {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum _Type {
     Type(String),
+    Enum(Vec<_EnumCase>),
     /// { a: int, b: int }
     Record(Vec<_TypeField>),
     Array(Box<_Type>, usize),
@@ -66,10 +68,59 @@ impl From<Type> for _Type {
     fn from(ty: Type) -> Self {
         match ty {
             Type::Type(ty) => _Type::Type(ty),
+            Type::Enum(cases) => _Type::Enum(cases.into_iter().map(|c| c.t.into()).collect()),
             Type::Record(type_fields) => {
                 _Type::Record(type_fields.into_iter().map(_TypeField::from).collect())
             }
             Type::Array(ty, len) => _Type::Array(Box::new(ty.t.into()), len.t),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EnumCase {
+    pub id: Spanned<String>,
+    pub params: Vec<Spanned<EnumParam>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct _EnumCase {
+    pub id: String,
+    pub params: Vec<_EnumParam>,
+}
+
+impl From<EnumCase> for _EnumCase {
+    fn from(e: EnumCase) -> _EnumCase {
+        Self {
+            id: e.id.t,
+            params: e
+                .params
+                .into_iter()
+                .map(|p| _EnumParam::from(p.t))
+                .collect(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EnumParam {
+    Simple(String),
+    Record(Vec<TypeField>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum _EnumParam {
+    Simple(String),
+    Record(Vec<_TypeField>),
+}
+
+impl From<EnumParam> for _EnumParam {
+    fn from(ep: EnumParam) -> Self {
+        match ep {
+            EnumParam::Simple(s) => _EnumParam::Simple(s),
+            EnumParam::Record(type_fields) => {
+                _EnumParam::Record(type_fields.into_iter().map(_TypeField::from).collect())
+            }
         }
     }
 }

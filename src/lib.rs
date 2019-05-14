@@ -47,6 +47,19 @@ mod tests {
                         3
                     )
                 }),
+                _DeclType::Type(_TypeDecl {
+                    type_id: "Optionint".to_owned(),
+                    ty: _Type::Enum(vec![
+                        _EnumCase {
+                            id: "Some".to_owned(),
+                            params: vec![_EnumParam::Simple("int".to_owned())]
+                        },
+                        _EnumCase {
+                            id: "None".to_owned(),
+                            params: vec![],
+                        }
+                    ])
+                })
             ])
         );
     }
