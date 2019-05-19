@@ -1,7 +1,12 @@
 #![allow(clippy::all)]
 
+#[cfg(test)]
+#[macro_use]
+mod test_utils;
+
 pub mod ast;
 pub mod lexer;
+pub mod typecheck;
 
 use lalrpop_util::lalrpop_mod;
 lalrpop_mod!(pub parser);

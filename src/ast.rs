@@ -233,16 +233,16 @@ pub enum ExprType {
     Bool(Box<Expr>, BoolOp, Box<Expr>),
     Continue,
     Break,
-    LVal(Box<LVal>),
-    Let(Box<Let>),
-    FnCall(Box<FnCall>),
-    Record(Box<Record>),
-    Assign(Box<Assign>),
-    Array(Box<Array>),
-    If(Box<If>),
+    LVal(Box<Spanned<LVal>>),
+    Let(Box<Spanned<Let>>),
+    FnCall(Box<Spanned<FnCall>>),
+    Record(Box<Spanned<Record>>),
+    Assign(Box<Spanned<Assign>>),
+    Array(Box<Spanned<Array>>),
+    If(Box<Spanned<If>>),
     Range(Box<Expr>, Box<Expr>),
-    For(Box<For>),
-    While(Box<While>),
+    For(Box<Spanned<For>>),
+    While(Box<Spanned<While>>),
     Compare(Box<Expr>, CompareOp, Box<Expr>),
 }
 
@@ -293,18 +293,18 @@ impl From<ExprType> for _ExprType {
             }
             ExprType::Continue => _ExprType::Continue,
             ExprType::Break => _ExprType::Break,
-            ExprType::LVal(expr) => _ExprType::LVal(Box::new((*expr).into())),
-            ExprType::Let(expr) => _ExprType::Let(Box::new((*expr).into())),
-            ExprType::FnCall(expr) => _ExprType::FnCall(Box::new((*expr).into())),
-            ExprType::Record(expr) => _ExprType::Record(Box::new((*expr).into())),
-            ExprType::Assign(expr) => _ExprType::Assign(Box::new((*expr).into())),
-            ExprType::Array(expr) => _ExprType::Array(Box::new((*expr).into())),
-            ExprType::If(expr) => _ExprType::If(Box::new((*expr).into())),
+            ExprType::LVal(expr) => _ExprType::LVal(Box::new(expr.t.into())),
+            ExprType::Let(expr) => _ExprType::Let(Box::new(expr.t.into())),
+            ExprType::FnCall(expr) => _ExprType::FnCall(Box::new(expr.t.into())),
+            ExprType::Record(expr) => _ExprType::Record(Box::new(expr.t.into())),
+            ExprType::Assign(expr) => _ExprType::Assign(Box::new(expr.t.into())),
+            ExprType::Array(expr) => _ExprType::Array(Box::new(expr.t.into())),
+            ExprType::If(expr) => _ExprType::If(Box::new(expr.t.into())),
             ExprType::Range(from, to) => {
                 _ExprType::Range(Box::new(from.t.into()), Box::new(to.t.into()))
             }
-            ExprType::For(expr) => _ExprType::For(Box::new((*expr).into())),
-            ExprType::While(expr) => _ExprType::While(Box::new((*expr).into())),
+            ExprType::For(expr) => _ExprType::For(Box::new(expr.t.into())),
+            ExprType::While(expr) => _ExprType::While(Box::new(expr.t.into())),
             ExprType::Compare(l, op, r) => {
                 _ExprType::Compare(Box::new(l.t.into()), op, Box::new(r.t.into()))
             }
@@ -362,8 +362,18 @@ impl From<FnDecl> for _FnDecl {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LVal {
     Simple(String),
-    Field(Box<LVal>, String),
-    Subscript(Box<LVal>, Expr),
+    Field(Box<Spanned<LVal>>, String),
+    Subscript(Box<Spanned<LVal>>, Expr),
+}
+
+impl From<Spanned<LVal>> for Expr {
+    fn from(lval: Spanned<LVal>) -> Expr {
+        let span = lval.span;
+        Expr {
+            t: ExprType::LVal(Box::new(lval)),
+            span,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -377,8 +387,8 @@ impl From<LVal> for _LVal {
     fn from(expr: LVal) -> Self {
         match expr {
             LVal::Simple(s) => _LVal::Simple(s),
-            LVal::Field(l, s) => _LVal::Field(Box::new((*l).into()), s),
-            LVal::Subscript(l, s) => _LVal::Subscript(Box::new((*l).into()), s.t.into()),
+            LVal::Field(l, s) => _LVal::Field(Box::new(l.t.into()), s),
+            LVal::Subscript(l, s) => _LVal::Subscript(Box::new(l.t.into()), s.t.into()),
         }
     }
 }
@@ -452,7 +462,7 @@ impl From<FieldAssign> for _FieldAssign {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Assign {
-    pub lval: LVal,
+    pub lval: Spanned<LVal>,
     pub expr: Expr,
 }
 
@@ -465,7 +475,7 @@ pub struct _Assign {
 impl From<Assign> for _Assign {
     fn from(a: Assign) -> Self {
         Self {
-            lval: a.lval.into(),
+            lval: a.lval.t.into(),
             expr: a.expr.t.into(),
         }
     }

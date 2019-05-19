@@ -118,7 +118,7 @@ TypeDecl: ast::TypeDecl =
     "type" <type_id:Spanned<"identifier">> "=" <ty:Ty> =>
         ast::TypeDecl { type_id, ty };
 
-Let: ast::Let = {
+_Let: ast::Let = {
    "let" <ml:@L> <mr:@R> <pattern:Spanned<"_">> <ty:(":" <Ty>)?> "=" <expr:Expr> => ast::Let {
         pattern: pattern.map(|_| ast::Pattern::Wildcard),
         mutable: ast::Spanned::new(false, (ml, mr)),
@@ -133,7 +133,9 @@ Let: ast::Let = {
     },
 };
 
-Assign: ast::Assign = {
+Assign = Spanned<_Assign>;
+
+_Assign: ast::Assign = {
    <lval:LVal> "=" <expr:Expr> => ast::Assign { <> },
 };
 
@@ -163,7 +165,11 @@ DeclType: ast::DeclType = {
 
 ExprTypeOrLetOrAssign: ast::Expr = {
     Range,
-    <l:@L> <expr:Let> <r:@R> => ast::Expr::new(ast::ExprType::Let(Box::new(expr)), (l, r)),
+    Spanned<_Let> => {
+        let left = <>.span.l;
+        let right = <>.span.r;
+        <>.map(|l| ast::ExprType::Let(Box::new(ast::Spanned::new(l, (left, right)))))
+    },
     <l:@L> <expr:Assign> <r:@R> => ast::Expr::new(ast::ExprType::Assign(Box::new(expr)), (l, r)),
 }
 
@@ -263,13 +269,17 @@ Term: ast::Expr = {
     Spanned<ExprTypeSeq>,
 };
 
-LVal: ast::LVal = {
-    "identifier" => ast::LVal::Simple(<>),
+LVal = Spanned<_LVal>;
+
+_LVal: ast::LVal = {
+    <"identifier"> => ast::LVal::Simple(<>),
     <val:LVal> "." <field:"identifier"> => ast::LVal::Field(Box::new(val), field),
     <val:LVal> "[" <subscript:Expr> "]" => ast::LVal::Subscript(Box::new(val), subscript),
 };
 
-FnCall: ast::FnCall = {
+FnCall = Spanned<_FnCall>;
+
+_FnCall: ast::FnCall = {
     <id:Spanned<"identifier">> "(" <args:(<Expr> ",")*> ")" => ast::FnCall { id, args },
     <id:Spanned<"identifier">> "(" <args:(<Expr> ",")*> <last:Expr> ")" => {
         let mut args = args;
@@ -278,7 +288,9 @@ FnCall: ast::FnCall = {
     }
 };
 
-Record: ast::Record = {
+Record = Spanned<_Record>;
+
+_Record: ast::Record = {
     <id:Spanned<"identifier">> "%{" <field_assigns:(<FieldAssign> ",")*> "}" => ast::Record { <> },
     <id:Spanned<"identifier">> "%{" <field_assigns:(<FieldAssign> ",")*> <last:FieldAssign> "}" => {
         let mut field_assigns = field_assigns;
@@ -294,11 +306,15 @@ FieldAssign: ast::FieldAssign = {
     <id:Spanned<"identifier">> ":" <expr:Expr> => ast::FieldAssign { <> }
 };
 
-Array: ast::Array = {
+Array = Spanned<_Array>;
+
+_Array: ast::Array = {
     "[" <initial_value:Expr> ";" <len:Expr> "]" => ast::Array { <> }
 };
 
-If: ast::If = {
+If = Spanned<_If>;
+
+_If: ast::If = {
     "if" <cond:Expr> <then_expr:Spanned<ExprTypeSeq>> => ast::If {
         cond,
         then_expr,
@@ -313,12 +329,16 @@ If: ast::If = {
     },
 };
 
-For: ast::For = {
+For = Spanned<_For>;
+
+_For: ast::For = {
     "for" <index:Spanned<"identifier">> "in" <range:Range> <body:Spanned<ExprTypeSeq>> =>
         ast::For { index, range, body }
 };
 
-While: ast::While = {
+While = Spanned<_While>;
+
+_While: ast::While = {
     "while" <cond:Expr> <body:Spanned<ExprTypeSeq>> => ast::While { cond, body }
 };
 
