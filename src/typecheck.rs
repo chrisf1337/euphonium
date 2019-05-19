@@ -117,17 +117,17 @@ impl Env {
             }
             LVal::Field(var, field) => match self.translate_lval(expr, var) {
                 Ok(Type::Record(fields)) => {
-                    if let Some(field_type) = fields.get(field) {
+                    if let Some(field_type) = fields.get(&field.t) {
                         Ok(field_type.clone())
                     } else {
                         Err(TypecheckErr {
-                            t: TypecheckErrType::UndefinedField(field.clone()),
-                            span: expr.span,
+                            t: TypecheckErrType::UndefinedField(field.t.clone()),
+                            span: field.span,
                         })
                     }
                 }
                 Ok(_) => Err(TypecheckErr {
-                    t: TypecheckErrType::UndefinedField(field.clone()),
+                    t: TypecheckErrType::UndefinedField(field.t.clone()),
                     span: expr.span,
                 }),
                 Err(err) => Err(TypecheckErr {
@@ -212,7 +212,7 @@ mod tests {
         env.insert_var("x".to_owned(), Type::Record(record));
         let lval = span!(LVal::Field(
             Box::new(span!(LVal::Simple("x".to_owned()))),
-            "f".to_owned()
+            span!("f".to_owned())
         ));
         let expr = expr!(ExprType::LVal(Box::new(lval.clone())));
         assert_eq!(env.translate_lval(&expr, &lval), Ok(Type::Number));
@@ -224,7 +224,7 @@ mod tests {
         env.insert_var("x".to_owned(), Type::Record(HashMap::new()));
         let lval = span!(LVal::Field(
             Box::new(span!(LVal::Simple("x".to_owned()))),
-            "g".to_owned()
+            span!("g".to_owned())
         ));
         let expr = expr!(ExprType::LVal(Box::new(lval.clone())));
         assert_eq!(
@@ -242,7 +242,7 @@ mod tests {
         env.insert_var("x".to_owned(), Type::Number);
         let lval = span!(LVal::Field(
             Box::new(span!(LVal::Simple("x".to_owned()))),
-            "g".to_owned()
+            span!("g".to_owned())
         ));
         let expr = expr!(ExprType::LVal(Box::new(lval.clone())));
         assert_eq!(

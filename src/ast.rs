@@ -362,7 +362,7 @@ impl From<FnDecl> for _FnDecl {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LVal {
     Simple(String),
-    Field(Box<Spanned<LVal>>, String),
+    Field(Box<Spanned<LVal>>, Spanned<String>),
     Subscript(Box<Spanned<LVal>>, Expr),
 }
 
@@ -387,7 +387,7 @@ impl From<LVal> for _LVal {
     fn from(expr: LVal) -> Self {
         match expr {
             LVal::Simple(s) => _LVal::Simple(s),
-            LVal::Field(l, s) => _LVal::Field(Box::new(l.t.into()), s),
+            LVal::Field(l, s) => _LVal::Field(Box::new(l.t.into()), s.t),
             LVal::Subscript(l, s) => _LVal::Subscript(Box::new(l.t.into()), s.t.into()),
         }
     }

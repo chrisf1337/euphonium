@@ -273,7 +273,7 @@ LVal = Spanned<_LVal>;
 
 _LVal: ast::LVal = {
     <"identifier"> => ast::LVal::Simple(<>),
-    <val:LVal> "." <field:"identifier"> => ast::LVal::Field(Box::new(val), field),
+    <val:LVal> "." <field:Spanned<"identifier">> => ast::LVal::Field(Box::new(val), field),
     <val:LVal> "[" <subscript:Expr> "]" => ast::LVal::Subscript(Box::new(val), subscript),
 };
 
