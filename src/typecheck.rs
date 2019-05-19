@@ -1,35 +1,19 @@
-use crate::ast::{Expr, ExprType, LVal, Record, Spanned};
+use crate::ast::{Expr, ExprType, LVal, Record, Span, Spanned};
 use std::collections::HashMap;
 
-pub type Result<'a, T> = std::result::Result<T, TypecheckErr<'a>>;
+pub type Result<T> = std::result::Result<T, TypecheckErr>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TypecheckErrType<'a> {
+pub enum TypecheckErrType {
     /// expected, actual
     TypeMismatch(Type, Type),
     UndefinedVar(String),
     UndefinedField(String),
     CannotSubscript,
-    Source(Box<TypecheckErr<'a>>),
+    Source(Box<TypecheckErr>),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TypecheckErr<'a> {
-    pub expr: &'a Expr,
-    pub err_type: TypecheckErrType<'a>,
-}
-
-impl<'a> std::fmt::Display for TypecheckErr<'a> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:?}", self)
-    }
-}
-
-impl<'a> TypecheckErr<'a> {
-    pub fn new(expr: &'a Expr, err_type: TypecheckErrType<'a>) -> Self {
-        TypecheckErr { expr, err_type }
-    }
-}
+pub type TypecheckErr = Spanned<TypecheckErrType>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Type {
@@ -71,20 +55,20 @@ macro_rules! assert_ty {
     ( $self:ident , $e:expr , $ty:expr ) => {{
         match $self.translate_expr($e) {
             Ok(ref ty) if ty == &$ty => Ok($ty),
-            Ok(ref ty) => Err(TypecheckErr::new(
-                $e,
-                TypecheckErrType::TypeMismatch($ty, ty.clone()),
-            )),
-            Err(err) => Err(TypecheckErr::new(
-                $e,
-                TypecheckErrType::Source(Box::new(err)),
-            )),
+            Ok(ref ty) => Err(TypecheckErr {
+                t: TypecheckErrType::TypeMismatch($ty, ty.clone()),
+                span: $e.span,
+            }),
+            Err(err) => Err(TypecheckErr {
+                t: TypecheckErrType::Source(Box::new(err)),
+                span: $e.span,
+            }),
         }
     }};
 }
 
 impl Env {
-    pub fn translate_expr<'a>(&self, expr: &'a Expr) -> Result<'a, Type> {
+    pub fn translate_expr(&self, expr: &Expr) -> Result<Type> {
         match &expr.t {
             ExprType::Seq(exprs, returns) => {
                 for expr in &exprs[..exprs.len() - 1] {
@@ -119,16 +103,16 @@ impl Env {
         }
     }
 
-    pub fn translate_lval<'a>(&self, expr: &'a Expr, lval: &'a Spanned<LVal>) -> Result<'a, Type> {
+    pub fn translate_lval(&self, expr: &Expr, lval: &Spanned<LVal>) -> Result<Type> {
         match &lval.t {
             LVal::Simple(var) => {
                 if let Some(ty) = self.vars.get(var) {
                     Ok(ty.clone())
                 } else {
-                    Err(TypecheckErr::new(
-                        expr,
-                        TypecheckErrType::UndefinedVar(var.clone()),
-                    ))
+                    Err(TypecheckErr {
+                        t: TypecheckErrType::UndefinedVar(var.clone()),
+                        span: expr.span,
+                    })
                 }
             }
             LVal::Field(var, field) => match self.translate_lval(expr, var) {
@@ -136,38 +120,41 @@ impl Env {
                     if let Some(field_type) = fields.get(field) {
                         Ok(field_type.clone())
                     } else {
-                        Err(TypecheckErr::new(
-                            expr,
-                            TypecheckErrType::UndefinedField(field.clone()),
-                        ))
+                        Err(TypecheckErr {
+                            t: TypecheckErrType::UndefinedField(field.clone()),
+                            span: expr.span,
+                        })
                     }
                 }
-                Ok(_) => Err(TypecheckErr::new(
-                    expr,
-                    TypecheckErrType::UndefinedField(field.clone()),
-                )),
-                Err(err) => Err(TypecheckErr::new(
-                    expr,
-                    TypecheckErrType::Source(Box::new(err)),
-                )),
+                Ok(_) => Err(TypecheckErr {
+                    t: TypecheckErrType::UndefinedField(field.clone()),
+                    span: expr.span,
+                }),
+                Err(err) => Err(TypecheckErr {
+                    t: TypecheckErrType::Source(Box::new(err)),
+                    span: expr.span,
+                }),
             },
             LVal::Subscript(var, index) => match self.translate_lval(expr, var) {
                 Ok(Type::Array(ty, _)) => match self.translate_expr(index) {
                     Ok(Type::Number) => Ok(*ty.clone()),
-                    Ok(ty) => Err(TypecheckErr::new(
-                        index,
-                        TypecheckErrType::TypeMismatch(Type::Number, ty),
-                    )),
-                    Err(err) => Err(TypecheckErr::new(
-                        index,
-                        TypecheckErrType::Source(Box::new(err)),
-                    )),
+                    Ok(ty) => Err(TypecheckErr {
+                        t: TypecheckErrType::TypeMismatch(Type::Number, ty),
+                        span: index.span,
+                    }),
+                    Err(err) => Err(TypecheckErr {
+                        t: TypecheckErrType::Source(Box::new(err)),
+                        span: index.span,
+                    }),
                 },
-                Ok(_) => Err(TypecheckErr::new(expr, TypecheckErrType::CannotSubscript)),
-                Err(err) => Err(TypecheckErr::new(
-                    index,
-                    TypecheckErrType::Source(Box::new(err)),
-                )),
+                Ok(_) => Err(TypecheckErr {
+                    t: TypecheckErrType::CannotSubscript,
+                    span: index.span,
+                }),
+                Err(err) => Err(TypecheckErr {
+                    t: TypecheckErrType::Source(Box::new(err)),
+                    span: index.span,
+                }),
             },
         }
     }
@@ -205,15 +192,11 @@ mod tests {
         assert_eq!(
             env.translate_expr(&expr),
             Err(TypecheckErr {
-                expr: &expr!(ExprType::Bool(
-                    Box::new(expr!(ExprType::BoolLiteral(true))),
-                    BoolOp::And,
-                    Box::new(expr!(ExprType::Number(1)))
-                )),
-                err_type: TypecheckErrType::Source(Box::new(TypecheckErr {
-                    expr: &expr!(ExprType::Number(1)),
-                    err_type: TypecheckErrType::TypeMismatch(Type::Bool, Type::Number)
-                }))
+                t: TypecheckErrType::Source(Box::new(TypecheckErr {
+                    t: TypecheckErrType::TypeMismatch(Type::Bool, Type::Number),
+                    span: Span { l: 0, r: 0 },
+                })),
+                span: Span { l: 0, r: 0 },
             })
         );
     }
@@ -246,10 +229,10 @@ mod tests {
         let expr = expr!(ExprType::LVal(Box::new(lval.clone())));
         assert_eq!(
             env.translate_lval(&expr, &lval),
-            Err(TypecheckErr::new(
-                &expr,
-                TypecheckErrType::UndefinedField("g".to_owned())
-            ))
+            Err(TypecheckErr {
+                t: TypecheckErrType::UndefinedField("g".to_owned()),
+                span: Span { l: 0, r: 0 },
+            })
         );
     }
 
@@ -264,10 +247,10 @@ mod tests {
         let expr = expr!(ExprType::LVal(Box::new(lval.clone())));
         assert_eq!(
             env.translate_lval(&expr, &lval),
-            Err(TypecheckErr::new(
-                &expr,
-                TypecheckErrType::UndefinedField("g".to_owned())
-            ))
+            Err(TypecheckErr {
+                t: TypecheckErrType::UndefinedField("g".to_owned()),
+                span: Span { l: 0, r: 0 }
+            })
         );
     }
 
