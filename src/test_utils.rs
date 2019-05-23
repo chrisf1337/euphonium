@@ -1,11 +1,11 @@
 macro_rules! expr {
     ( $ty:expr ) => {
-        Expr::new($ty, (0, 0))
+        Expr::new($ty, span!(0, 0, codespan::ByteOffset(0)))
     };
 }
 
-macro_rules! span {
+macro_rules! zspan {
     ( $e:expr ) => {
-        Spanned::new($e, (0, 0))
+        Spanned::new($e, span!(0, 0, codespan::ByteOffset(0)))
     };
 }

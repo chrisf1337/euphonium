@@ -1,27 +1,33 @@
 #![allow(clippy::all)]
 
+#[macro_use]
+mod utils;
+
 #[cfg(test)]
 #[macro_use]
 mod test_utils;
 
 pub mod ast;
 pub mod lexer;
+pub mod sourcemap;
 pub mod typecheck;
 
 use lalrpop_util::lalrpop_mod;
+
 lalrpop_mod!(pub parser);
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::ast::*;
+    use codespan::ByteOffset;
 
     #[test]
     fn test_tydecls() {
         let lexer = lexer::Lexer::new(include_str!("../test/test_tydecls.euph"));
         let mut errors = vec![];
         let parse_result = parser::ProgramParser::new()
-            .parse(&mut errors, lexer)
+            .parse(ByteOffset(0), &mut errors, lexer)
             .map(|decls| {
                 decls
                     .into_iter()
@@ -74,7 +80,7 @@ mod tests {
         let lexer = lexer::Lexer::new(include_str!("../test/test_exprs.euph"));
         let mut errors = vec![];
         let parse_result = parser::ProgramParser::new()
-            .parse(&mut errors, lexer)
+            .parse(ByteOffset(0), &mut errors, lexer)
             .map(|decls| {
                 decls
                     .into_iter()
@@ -173,12 +179,14 @@ mod tests {
         let lexer = lexer::Lexer::new(include_str!("../test/test1.euph"));
         let mut errors = vec![];
         let parse_result =
-            dbg!(parser::ProgramParser::new().parse(&mut errors, lexer)).map(|decls| {
-                decls
-                    .into_iter()
-                    .map(Spanned::unwrap)
-                    .collect::<Vec<_DeclType>>()
-            });
+            dbg!(parser::ProgramParser::new().parse(ByteOffset(0), &mut errors, lexer)).map(
+                |decls| {
+                    decls
+                        .into_iter()
+                        .map(Spanned::unwrap)
+                        .collect::<Vec<_DeclType>>()
+                },
+            );
         assert_eq!(errors, vec![]);
         assert_eq!(
             parse_result,

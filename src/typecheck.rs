@@ -98,12 +98,12 @@ impl Env {
                 assert_ty!(self, r, Type::Bool)?;
                 Ok(Type::Bool)
             }
-            ExprType::LVal(lval) => self.translate_lval(expr, lval),
+            ExprType::LVal(lval) => self.translate_lval(lval),
             _ => unimplemented!(),
         }
     }
 
-    pub fn translate_lval(&self, expr: &Expr, lval: &Spanned<LVal>) -> Result<Type> {
+    pub fn translate_lval(&self, lval: &Spanned<LVal>) -> Result<Type> {
         match &lval.t {
             LVal::Simple(var) => {
                 if let Some(ty) = self.vars.get(var) {
@@ -111,11 +111,11 @@ impl Env {
                 } else {
                     Err(TypecheckErr {
                         t: TypecheckErrType::UndefinedVar(var.clone()),
-                        span: expr.span,
+                        span: lval.span,
                     })
                 }
             }
-            LVal::Field(var, field) => match self.translate_lval(expr, var) {
+            LVal::Field(var, field) => match self.translate_lval(var) {
                 Ok(Type::Record(fields)) => {
                     if let Some(field_type) = fields.get(&field.t) {
                         Ok(field_type.clone())
@@ -128,14 +128,14 @@ impl Env {
                 }
                 Ok(_) => Err(TypecheckErr {
                     t: TypecheckErrType::UndefinedField(field.t.clone()),
-                    span: expr.span,
+                    span: field.span,
                 }),
                 Err(err) => Err(TypecheckErr {
                     t: TypecheckErrType::Source(Box::new(err)),
-                    span: expr.span,
+                    span: field.span,
                 }),
             },
-            LVal::Subscript(var, index) => match self.translate_lval(expr, var) {
+            LVal::Subscript(var, index) => match self.translate_lval(var) {
                 Ok(Type::Array(ty, _)) => match self.translate_expr(index) {
                     Ok(Type::Number) => Ok(*ty.clone()),
                     Ok(ty) => Err(TypecheckErr {
@@ -164,6 +164,7 @@ impl Env {
 mod tests {
     use super::*;
     use crate::ast::BoolOp;
+    use codespan::ByteOffset;
     use pretty_assertions::assert_eq;
 
     #[test]
@@ -194,9 +195,9 @@ mod tests {
             Err(TypecheckErr {
                 t: TypecheckErrType::Source(Box::new(TypecheckErr {
                     t: TypecheckErrType::TypeMismatch(Type::Bool, Type::Number),
-                    span: Span { l: 0, r: 0 },
+                    span: span!(0, 0, ByteOffset(0))
                 })),
-                span: Span { l: 0, r: 0 },
+                span: span!(0, 0, ByteOffset(0))
             })
         );
     }
@@ -210,28 +211,28 @@ mod tests {
             hm
         };
         env.insert_var("x".to_owned(), Type::Record(record));
-        let lval = span!(LVal::Field(
-            Box::new(span!(LVal::Simple("x".to_owned()))),
-            span!("f".to_owned())
+        let lval = zspan!(LVal::Field(
+            Box::new(zspan!(LVal::Simple("x".to_owned()))),
+            zspan!("f".to_owned())
         ));
         let expr = expr!(ExprType::LVal(Box::new(lval.clone())));
-        assert_eq!(env.translate_lval(&expr, &lval), Ok(Type::Number));
+        assert_eq!(env.translate_lval(&lval), Ok(Type::Number));
     }
 
     #[test]
     fn test_typecheck_record_field_err1() {
         let mut env = Env::default();
         env.insert_var("x".to_owned(), Type::Record(HashMap::new()));
-        let lval = span!(LVal::Field(
-            Box::new(span!(LVal::Simple("x".to_owned()))),
-            span!("g".to_owned())
+        let lval = zspan!(LVal::Field(
+            Box::new(zspan!(LVal::Simple("x".to_owned()))),
+            zspan!("g".to_owned())
         ));
         let expr = expr!(ExprType::LVal(Box::new(lval.clone())));
         assert_eq!(
-            env.translate_lval(&expr, &lval),
+            env.translate_lval(&lval),
             Err(TypecheckErr {
                 t: TypecheckErrType::UndefinedField("g".to_owned()),
-                span: Span { l: 0, r: 0 },
+                span: span!(0, 0, ByteOffset(0)),
             })
         );
     }
@@ -240,16 +241,16 @@ mod tests {
     fn test_typecheck_record_field_err2() {
         let mut env = Env::default();
         env.insert_var("x".to_owned(), Type::Number);
-        let lval = span!(LVal::Field(
-            Box::new(span!(LVal::Simple("x".to_owned()))),
-            span!("g".to_owned())
+        let lval = zspan!(LVal::Field(
+            Box::new(zspan!(LVal::Simple("x".to_owned()))),
+            zspan!("g".to_owned())
         ));
         let expr = expr!(ExprType::LVal(Box::new(lval.clone())));
         assert_eq!(
-            env.translate_lval(&expr, &lval),
+            env.translate_lval(&lval),
             Err(TypecheckErr {
                 t: TypecheckErrType::UndefinedField("g".to_owned()),
-                span: Span { l: 0, r: 0 }
+                span: span!(0, 0, ByteOffset(0))
             })
         );
     }
@@ -258,11 +259,11 @@ mod tests {
     fn test_typecheck_array_subscript() {
         let mut env = Env::default();
         env.insert_var("x".to_owned(), Type::Array(Box::new(Type::Number), 3));
-        let lval = span!(LVal::Subscript(
-            Box::new(span!(LVal::Simple("x".to_owned()))),
+        let lval = zspan!(LVal::Subscript(
+            Box::new(zspan!(LVal::Simple("x".to_owned()))),
             expr!(ExprType::Number(0))
         ));
         let expr = expr!(ExprType::LVal(Box::new(lval.clone())));
-        assert_eq!(env.translate_lval(&expr, &lval), Ok(Type::Number));
+        assert_eq!(env.translate_lval(&lval), Ok(Type::Number));
     }
 }

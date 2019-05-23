@@ -1,7 +1,8 @@
 use crate::{lexer, ast};
 use lalrpop_util::ErrorRecovery;
+use codespan::ByteOffset;
 
-grammar<'err>(errors: &'err mut Vec<ErrorRecovery<usize, lexer::Tok, lexer::LexError>>);
+grammar<'err>(offset: ByteOffset, errors: &'err mut Vec<ErrorRecovery<usize, lexer::Tok, lexer::LexError>>);
 
 extern {
     type Location = usize;
@@ -55,18 +56,20 @@ extern {
 }
 
 Spanned<T>: ast::Spanned<T> = {
-    <l:@L> <t:T> <r:@R> => ast::Spanned::new(t, (l, r))
+    <l:@L> <t:T> <r:@R> => ast::Spanned::new(t, span!(l, r, offset))
 };
 
 Identifier: String = "identifier";
 
 EnumParam: ast::Spanned<ast::EnumParam> = {
     Spanned<"identifier"> => <>.map(ast::EnumParam::Simple),
-    <l:@L> "{" <ty_fields:(<TyField> ",")*> "}" <r:@R> => ast::Spanned::new(ast::EnumParam::Record(ty_fields), (l, r)),
+    <l:@L> "{" <ty_fields:(<TyField> ",")*> "}" <r:@R> => ast::Spanned::new(ast::EnumParam::Record(ty_fields),
+        span!(l, r, offset)),
     <l:@L> "{" <ty_fields:(<TyField> ",")*> <last:TyField> "}" <r:@R> => {
         let mut ty_fields = ty_fields;
         ty_fields.push(last);
-        ast::Spanned::new(ast::EnumParam::Record(ty_fields), (l, r))
+        ast::Spanned::new(ast::EnumParam::Record(ty_fields),
+            span!(l, r, offset))
     },
 };
 
@@ -90,24 +93,24 @@ Ty: ast::Spanned<ast::Type> = {
     <l:@L> <cases: (<Spanned<EnumCase>> "|")*> <last:Spanned<EnumCase>> <r:@R> => {
         if cases.is_empty() {
             if last.t.params.is_empty() {
-                ast::Spanned::new(ast::Type::Type(last.t.id.t), (l, r))
+                ast::Spanned::new(ast::Type::Type(last.t.id.t), span!(l, r, offset))
             } else {
-                ast::Spanned::new(ast::Type::Enum(vec![last]), (l, r))
+                ast::Spanned::new(ast::Type::Enum(vec![last]), span!(l, r, offset))
             }
         } else {
             let mut cases = cases;
             cases.push(last);
-            ast::Spanned::new(ast::Type::Enum(cases), (l, r))
+            ast::Spanned::new(ast::Type::Enum(cases), span!(l, r, offset))
         }
     },
-    <l:@L> "{" <ty_fields:(<TyField> ",")*> "}" <r:@R> => ast::Spanned::new(ast::Type::Record(ty_fields), (l, r)),
+    <l:@L> "{" <ty_fields:(<TyField> ",")*> "}" <r:@R> => ast::Spanned::new(ast::Type::Record(ty_fields), span!(l, r, offset)),
     <l:@L> "{" <ty_fields:(<TyField> ",")*> <last:TyField> "}" <r:@R> => {
         let mut ty_fields = ty_fields;
         ty_fields.push(last);
-        ast::Spanned::new(ast::Type::Record(ty_fields), (l, r))
+        ast::Spanned::new(ast::Type::Record(ty_fields), span!(l, r, offset))
     },
     <l:@L> "[" <ty:Ty> ";" <len:Spanned<"number">> "]" <r:@R> =>
-        ast::Spanned::new(ast::Type::Array(Box::new(ty), len), (l, r)),
+        ast::Spanned::new(ast::Type::Array(Box::new(ty), len), span!(l, r, offset)),
 };
 
 TyField: ast::TypeField = {
@@ -121,13 +124,13 @@ TypeDecl: ast::TypeDecl =
 _Let: ast::Let = {
    "let" <ml:@L> <mr:@R> <pattern:Spanned<"_">> <ty:(":" <Ty>)?> "=" <expr:Expr> => ast::Let {
         pattern: pattern.map(|_| ast::Pattern::Wildcard),
-        mutable: ast::Spanned::new(false, (ml, mr)),
+        mutable: ast::Spanned::new(false, span!(ml, mr, offset)),
         ty,
         expr,
     },
    "let" <ml:@L> <mutable:"mut"?> <mr:@R> <id:Spanned<"identifier">> <ty:(":" <Ty>)?> "=" <expr:Expr> => ast::Let {
         pattern: id.map(ast::Pattern::String),
-        mutable: ast::Spanned::new(mutable.is_some(), (ml, mr)),
+        mutable: ast::Spanned::new(mutable.is_some(), span!(ml, mr, offset)),
         ty,
         expr,
     },
@@ -166,18 +169,17 @@ DeclType: ast::DeclType = {
 ExprTypeOrLetOrAssign: ast::Expr = {
     Range,
     Spanned<_Let> => {
-        let left = <>.span.l;
-        let right = <>.span.r;
-        <>.map(|l| ast::ExprType::Let(Box::new(ast::Spanned::new(l, (left, right)))))
+        let span = <>.span;
+        <>.map(|l| ast::ExprType::Let(Box::new(ast::Spanned::new(l, span))))
     },
-    <l:@L> <expr:Assign> <r:@R> => ast::Expr::new(ast::ExprType::Assign(Box::new(expr)), (l, r)),
+    <l:@L> <expr:Assign> <r:@R> => ast::Expr::new(ast::ExprType::Assign(Box::new(expr)), span!(l, r, offset)),
 }
 
 Range: ast::Expr = {
     <l:Expr> ".." <r:Expr> => {
         let lspan = l.span;
         let rspan = r.span;
-        ast::Expr::new(ast::ExprType::Range(Box::new(l), Box::new(r)), (lspan.l, rspan.r))
+        ast::Expr::new(ast::ExprType::Range(Box::new(l), Box::new(r)), lspan.to(rspan))
     },
     Expr,
 };
@@ -186,7 +188,8 @@ Expr: ast::Expr = {
     <l:Expr> "==" <r:OpExpr> => {
         let lspan = l.span;
         let rspan = r.span;
-        ast::Expr::new(ast::ExprType::Compare(Box::new(l), ast::CompareOp::Equal, Box::new(r)), (lspan.l, rspan.r))
+        ast::Expr::new(ast::ExprType::Compare(Box::new(l), ast::CompareOp::Equal, Box::new(r)),
+            lspan.to(rspan))
     },
     OpExpr,
 };
@@ -195,23 +198,26 @@ OpExpr: ast::Expr = {
     <l:OpExpr> "+" <r:Factor> => {
         let lspan = l.span;
         let rspan = r.span;
-        ast::Expr::new(ast::ExprType::Arith(Box::new(l), ast::ArithOp::Add, Box::new(r)), (lspan.l, rspan.r))
+        ast::Expr::new(ast::ExprType::Arith(Box::new(l), ast::ArithOp::Add, Box::new(r)),
+            lspan.to(rspan))
     },
     <l:OpExpr> "-" <r:Factor> => {
         let lspan = l.span;
         let rspan = r.span;
-        ast::Expr::new(ast::ExprType::Arith(Box::new(l), ast::ArithOp::Sub, Box::new(r)), (lspan.l, rspan.r))
+        ast::Expr::new(ast::ExprType::Arith(Box::new(l), ast::ArithOp::Sub, Box::new(r)),
+            lspan.to(rspan))
     },
     <l:OpExpr> "||" <r:Factor> => {
         let lspan = l.span;
         let rspan = r.span;
-        ast::Expr::new(ast::ExprType::Bool(Box::new(l), ast::BoolOp::Or, Box::new(r)), (lspan.l, rspan.r))
+        ast::Expr::new(ast::ExprType::Bool(Box::new(l), ast::BoolOp::Or, Box::new(r)),
+            lspan.to(rspan))
     },
     Factor,
 };
 
 ExprTypeSeq: ast::ExprType = {
-    "{" <l:@L> <r:@R> "}" => ast::ExprType::Seq(vec![ast::Expr::new(ast::ExprType::Unit, (l, r))], true),
+    "{" <l:@L> <r:@R> "}" => ast::ExprType::Seq(vec![ast::Expr::new(ast::ExprType::Unit, span!(l, r, offset))], true),
     "{" <exprs:(<ExprTypeOrLetOrAssign> ";")*> <last:ExprTypeOrLetOrAssign> <last_semi:";"?> "}" => {
         let mut exprs = exprs;
         exprs.push(last);
@@ -223,17 +229,18 @@ Factor: ast::Expr = {
     <l:Factor> "*" <r:TermOrNeg> => {
         let lspan = l.span;
         let rspan = r.span;
-        ast::Expr::new(ast::ExprType::Arith(Box::new(l), ast::ArithOp::Mul, Box::new(r)), (lspan.l, rspan.r))
+        ast::Expr::new(ast::ExprType::Arith(Box::new(l), ast::ArithOp::Mul, Box::new(r)),
+            lspan.to(rspan))
     },
     <l:Factor> "/" <r:TermOrNeg> => {
         let lspan = l.span;
         let rspan = r.span;
-        ast::Expr::new(ast::ExprType::Arith(Box::new(l), ast::ArithOp::Div, Box::new(r)), (lspan.l, rspan.r))
+        ast::Expr::new(ast::ExprType::Arith(Box::new(l), ast::ArithOp::Div, Box::new(r)), lspan.to(rspan))
     },
     <l:Factor> "&&" <r:TermOrNeg> => {
         let lspan = l.span;
         let rspan = r.span;
-        ast::Expr::new(ast::ExprType::Bool(Box::new(l), ast::BoolOp::And, Box::new(r)), (lspan.l, rspan.r))
+        ast::Expr::new(ast::ExprType::Bool(Box::new(l), ast::BoolOp::And, Box::new(r)), lspan.to(rspan))
     },
     TermOrNeg,
 };
@@ -242,11 +249,11 @@ TermOrNeg: ast::Expr = {
     Term,
     <l:@L> "-" <term:Term> => {
         let rspan = term.span;
-        ast::Expr::new(ast::ExprType::Neg(Box::new(term)), (l, rspan.r))
+        ast::Expr::new(ast::ExprType::Neg(Box::new(term)), span!(l, rspan.end().0, offset))
     },
     <l:@L> "!" <term:Term> => {
         let rspan = term.span;
-        ast::Expr::new(ast::ExprType::Not(Box::new(term)), (l, rspan.r))
+        ast::Expr::new(ast::ExprType::Not(Box::new(term)), span!(l, rspan.end().0, offset))
     },
 };
 

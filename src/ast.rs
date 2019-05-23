@@ -1,3 +1,5 @@
+use codespan::{ByteIndex, ByteOffset, ByteSpan};
+
 pub type Decl = Spanned<DeclType>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -188,25 +190,19 @@ pub struct Span {
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct Spanned<T> {
     pub t: T,
-    pub span: Span,
+    pub span: ByteSpan,
 }
 
 impl<T> Spanned<T> {
-    pub fn new(t: T, span: (usize, usize)) -> Spanned<T> {
-        Spanned {
-            t,
-            span: Span {
-                l: span.0,
-                r: span.1,
-            },
-        }
+    pub fn new(t: T, span: ByteSpan) -> Spanned<T> {
+        Spanned { t, span }
     }
 
     pub fn map<F, U>(self, f: F) -> Spanned<U>
     where
         F: FnOnce(T) -> U,
     {
-        Spanned::new(f(self.t), (self.span.l, self.span.r))
+        Spanned::new(f(self.t), self.span)
     }
 
     pub fn unwrap<U>(self) -> U
