@@ -1,4 +1,4 @@
-use codespan::{ByteIndex, ByteOffset, ByteSpan};
+use codespan::ByteSpan;
 
 pub type Decl = Spanned<DeclType>;
 

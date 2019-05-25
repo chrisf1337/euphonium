@@ -1,5 +1,5 @@
-use crate::ast::{Expr, ExprType, LVal, Record, Span, Spanned};
-use std::collections::HashMap;
+use crate::ast::{self, Expr, ExprType, LVal, Let, Pattern, Record, Span, Spanned};
+use std::{collections::HashMap, convert::TryFrom};
 
 pub type Result<T> = std::result::Result<T, TypecheckErr>;
 
@@ -24,8 +24,18 @@ pub enum Type {
     Array(Box<Type>, usize),
     Unit,
     Alias(Box<Type>),
-    Sum(Vec<Type>),
+    Enum(Vec<Type>),
     Fn(Vec<Type>, Box<Type>),
+}
+
+impl TryFrom<ast::Type> for Type {
+    type Error = TypecheckErr;
+
+    fn try_from(ty: ast::Type) -> std::result::Result<Self, Self::Error> {
+        match ty {
+            _ => unimplemented!(),
+        }
+    }
 }
 
 pub struct Env {
@@ -158,6 +168,34 @@ impl Env {
             },
         }
     }
+
+    pub fn translate_let(&mut self, let_expr: &Spanned<Let>) -> Result<Type> {
+        let Let {
+            pattern,
+            mutable,
+            ty,
+            expr,
+        } = &let_expr.t;
+        let expr_type = self.translate_expr(expr)?;
+        if let Some(ty) = ty {
+            match Type::try_from(ty.t.clone()) {
+                Ok(ref resolved_ty) if &expr_type != resolved_ty => {
+                    return Err(TypecheckErr::new(
+                        TypecheckErrType::TypeMismatch(expr_type, resolved_ty.clone()),
+                        expr.span,
+                    ))
+                }
+                Ok(_) => (),
+                Err(err) => {
+                    return Err(TypecheckErr::new(
+                        TypecheckErrType::Source(Box::new(err)),
+                        ty.span,
+                    ))
+                }
+            }
+        }
+        Ok(Type::Unit)
+    }
 }
 
 #[cfg(test)]
@@ -215,7 +253,6 @@ mod tests {
             Box::new(zspan!(LVal::Simple("x".to_owned()))),
             zspan!("f".to_owned())
         ));
-        let expr = expr!(ExprType::LVal(Box::new(lval.clone())));
         assert_eq!(env.translate_lval(&lval), Ok(Type::Number));
     }
 
@@ -227,7 +264,6 @@ mod tests {
             Box::new(zspan!(LVal::Simple("x".to_owned()))),
             zspan!("g".to_owned())
         ));
-        let expr = expr!(ExprType::LVal(Box::new(lval.clone())));
         assert_eq!(
             env.translate_lval(&lval),
             Err(TypecheckErr {
@@ -245,7 +281,6 @@ mod tests {
             Box::new(zspan!(LVal::Simple("x".to_owned()))),
             zspan!("g".to_owned())
         ));
-        let expr = expr!(ExprType::LVal(Box::new(lval.clone())));
         assert_eq!(
             env.translate_lval(&lval),
             Err(TypecheckErr {
@@ -263,7 +298,6 @@ mod tests {
             Box::new(zspan!(LVal::Simple("x".to_owned()))),
             expr!(ExprType::Number(0))
         ));
-        let expr = expr!(ExprType::LVal(Box::new(lval.clone())));
         assert_eq!(env.translate_lval(&lval), Ok(Type::Number));
     }
 }

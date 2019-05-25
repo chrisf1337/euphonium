@@ -11,7 +11,7 @@ use std::{
 
 #[derive(Clone, Default)]
 pub struct Sourcemap {
-    codemap: CodeMap,
+    pub codemap: CodeMap,
     filemaps: HashMap<PathBuf, Arc<FileMap>>,
 }
 
