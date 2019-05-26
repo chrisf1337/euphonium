@@ -4,8 +4,8 @@ pub type Decl = Spanned<DeclType>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DeclType {
-    Type(TypeDecl),
-    Fn(FnDecl),
+    Type(Spanned<TypeDecl>),
+    Fn(Spanned<FnDecl>),
     Error,
 }
 
@@ -19,8 +19,8 @@ pub enum _DeclType {
 impl From<DeclType> for _DeclType {
     fn from(decl: DeclType) -> Self {
         match decl {
-            DeclType::Type(type_decl) => _DeclType::Type(type_decl.into()),
-            DeclType::Fn(fn_decl) => _DeclType::Fn(fn_decl.into()),
+            DeclType::Type(type_decl) => _DeclType::Type(type_decl.t.into()),
+            DeclType::Fn(fn_decl) => _DeclType::Fn(fn_decl.t.into()),
             DeclType::Error => _DeclType::Error,
         }
     }

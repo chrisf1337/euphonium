@@ -130,7 +130,13 @@ impl std::fmt::Display for Tok {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum LexError {
+pub struct LexError {
+    pub index: usize,
+    pub ty: LexErrorType,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LexErrorType {
     InvalidSymbol(String),
     InvalidNumber(String),
     UnterminatedString(String),
@@ -348,7 +354,10 @@ impl Lexer {
             let len = tok.to_string().len();
             Ok((char_info.index, tok, char_info.index + len))
         } else {
-            Err(LexError::InvalidSymbol(char_info.ch.to_string()))
+            Err(LexError {
+                index: self.current_index,
+                ty: LexErrorType::InvalidSymbol(char_info.ch.to_string()),
+            })
         }
     }
 
@@ -381,7 +390,10 @@ impl Lexer {
             .collect();
 
         if tail != end_char_info {
-            return Err(LexError::InvalidNumber(number_str));
+            return Err(LexError {
+                index: self.current_index,
+                ty: LexErrorType::InvalidNumber(number_str),
+            });
         }
 
         let number: usize = number_str.parse().unwrap();
@@ -410,7 +422,10 @@ impl Lexer {
                 .iter()
                 .map(|char_info| char_info.ch)
                 .collect();
-            return Err(LexError::UnterminatedString(s));
+            return Err(LexError {
+                index: self.current_index,
+                ty: LexErrorType::UnterminatedString(s),
+            });
         }
 
         let s = self.chars[start_char_info.index + 1..end_char_info.index]
@@ -503,8 +518,8 @@ mod tests {
 
         let mut lexer = Lexer::new("123a");
         assert_eq!(
-            lexer.lex_number(),
-            Err(LexError::InvalidNumber("123a".to_owned()))
+            lexer.lex_number().unwrap_err().ty,
+            LexErrorType::InvalidNumber("123a".to_owned())
         );
         assert_eq!(lexer.next(), None);
     }
@@ -520,8 +535,8 @@ mod tests {
 
         let mut lexer = Lexer::new("\"asdf");
         assert_eq!(
-            lexer.lex_string(),
-            Err(LexError::UnterminatedString("asdf".to_owned()))
+            lexer.lex_string().unwrap_err().ty,
+            LexErrorType::UnterminatedString("asdf".to_owned())
         );
         assert_eq!(lexer.next(), None);
     }

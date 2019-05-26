@@ -158,8 +158,8 @@ FnDecl: ast::FnDecl = {
 Decl: ast::Decl = Spanned<DeclType>;
 
 DeclType: ast::DeclType = {
-    <TypeDecl> ";" => ast::DeclType::Type(<>),
-    <FnDecl> => ast::DeclType::Fn(<>),
+    <Spanned<TypeDecl>> ";" => ast::DeclType::Type(<>),
+    <Spanned<FnDecl>> => ast::DeclType::Fn(<>),
     ! => {
         errors.push(<>);
         ast::DeclType::Error

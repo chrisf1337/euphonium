@@ -8,6 +8,7 @@ mod utils;
 mod test_utils;
 
 pub mod ast;
+pub mod error;
 pub mod lexer;
 pub mod sourcemap;
 pub mod typecheck;
