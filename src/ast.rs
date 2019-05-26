@@ -1,4 +1,5 @@
 use codespan::ByteSpan;
+use std::ops::{Deref, DerefMut};
 
 pub type Decl = Spanned<DeclType>;
 
@@ -53,7 +54,7 @@ pub enum Type {
     Type(String),
     Enum(Vec<Spanned<EnumCase>>),
     /// { a: int, b: int }
-    Record(Vec<TypeField>),
+    Record(Vec<Spanned<TypeField>>),
     Array(Box<Spanned<Type>>, Spanned<usize>),
 }
 
@@ -72,7 +73,7 @@ impl From<Type> for _Type {
             Type::Type(ty) => _Type::Type(ty),
             Type::Enum(cases) => _Type::Enum(cases.into_iter().map(|c| c.t.into()).collect()),
             Type::Record(type_fields) => {
-                _Type::Record(type_fields.into_iter().map(_TypeField::from).collect())
+                _Type::Record(type_fields.into_iter().map(|tf| tf.t.into()).collect())
             }
             Type::Array(ty, len) => _Type::Array(Box::new(ty.t.into()), len.t),
         }
@@ -107,7 +108,7 @@ impl From<EnumCase> for _EnumCase {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EnumParam {
     Simple(String),
-    Record(Vec<TypeField>),
+    Record(Vec<Spanned<TypeField>>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -121,7 +122,7 @@ impl From<EnumParam> for _EnumParam {
         match ep {
             EnumParam::Simple(s) => _EnumParam::Simple(s),
             EnumParam::Record(type_fields) => {
-                _EnumParam::Record(type_fields.into_iter().map(_TypeField::from).collect())
+                _EnumParam::Record(type_fields.into_iter().map(|tf| tf.t.into()).collect())
             }
         }
     }
@@ -213,6 +214,20 @@ impl<T> Spanned<T> {
     }
 }
 
+impl<T> Deref for Spanned<T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        &self.t
+    }
+}
+
+impl<T> DerefMut for Spanned<T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.t
+    }
+}
+
 pub type Expr = Spanned<ExprType>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -222,11 +237,11 @@ pub enum ExprType {
     String(String),
     Number(usize),
     Neg(Box<Expr>),
-    Arith(Box<Expr>, ArithOp, Box<Expr>),
+    Arith(Box<Expr>, Spanned<ArithOp>, Box<Expr>),
     Unit,
     BoolLiteral(bool),
     Not(Box<Expr>),
-    Bool(Box<Expr>, BoolOp, Box<Expr>),
+    Bool(Box<Expr>, Spanned<BoolOp>, Box<Expr>),
     Continue,
     Break,
     LVal(Box<Spanned<LVal>>),
@@ -239,7 +254,7 @@ pub enum ExprType {
     Range(Box<Expr>, Box<Expr>),
     For(Box<Spanned<For>>),
     While(Box<Spanned<While>>),
-    Compare(Box<Expr>, CompareOp, Box<Expr>),
+    Compare(Box<Expr>, Spanned<CompareOp>, Box<Expr>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -279,13 +294,13 @@ impl From<ExprType> for _ExprType {
             ExprType::Number(n) => _ExprType::Number(n),
             ExprType::Neg(expr) => _ExprType::Neg(Box::new(expr.t.into())),
             ExprType::Arith(l, op, r) => {
-                _ExprType::Arith(Box::new(l.t.into()), op, Box::new(r.t.into()))
+                _ExprType::Arith(Box::new(l.t.into()), op.t, Box::new(r.t.into()))
             }
             ExprType::Unit => _ExprType::Unit,
             ExprType::BoolLiteral(b) => _ExprType::BoolLiteral(b),
             ExprType::Not(expr) => _ExprType::Not(Box::new(expr.t.into())),
             ExprType::Bool(l, op, r) => {
-                _ExprType::Bool(Box::new(l.t.into()), op, Box::new(r.t.into()))
+                _ExprType::Bool(Box::new(l.t.into()), op.t, Box::new(r.t.into()))
             }
             ExprType::Continue => _ExprType::Continue,
             ExprType::Break => _ExprType::Break,
@@ -302,7 +317,7 @@ impl From<ExprType> for _ExprType {
             ExprType::For(expr) => _ExprType::For(Box::new(expr.t.into())),
             ExprType::While(expr) => _ExprType::While(Box::new(expr.t.into())),
             ExprType::Compare(l, op, r) => {
-                _ExprType::Compare(Box::new(l.t.into()), op, Box::new(r.t.into()))
+                _ExprType::Compare(Box::new(l.t.into()), op.t, Box::new(r.t.into()))
             }
         }
     }

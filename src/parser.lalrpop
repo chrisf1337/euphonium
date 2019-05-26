@@ -63,9 +63,9 @@ Identifier: String = "identifier";
 
 EnumParam: ast::Spanned<ast::EnumParam> = {
     Spanned<"identifier"> => <>.map(ast::EnumParam::Simple),
-    <l:@L> "{" <ty_fields:(<TyField> ",")*> "}" <r:@R> => ast::Spanned::new(ast::EnumParam::Record(ty_fields),
+    <l:@L> "{" <ty_fields:(<Spanned<TyField>> ",")*> "}" <r:@R> => ast::Spanned::new(ast::EnumParam::Record(ty_fields),
         span!(l, r, offset)),
-    <l:@L> "{" <ty_fields:(<TyField> ",")*> <last:TyField> "}" <r:@R> => {
+    <l:@L> "{" <ty_fields:(<Spanned<TyField>> ",")*> <last:Spanned<TyField>> "}" <r:@R> => {
         let mut ty_fields = ty_fields;
         ty_fields.push(last);
         ast::Spanned::new(ast::EnumParam::Record(ty_fields),
@@ -103,8 +103,9 @@ Ty: ast::Spanned<ast::Type> = {
             ast::Spanned::new(ast::Type::Enum(cases), span!(l, r, offset))
         }
     },
-    <l:@L> "{" <ty_fields:(<TyField> ",")*> "}" <r:@R> => ast::Spanned::new(ast::Type::Record(ty_fields), span!(l, r, offset)),
-    <l:@L> "{" <ty_fields:(<TyField> ",")*> <last:TyField> "}" <r:@R> => {
+    <l:@L> "{" <ty_fields:(<Spanned<TyField>> ",")*> "}" <r:@R> =>
+        ast::Spanned::new(ast::Type::Record(ty_fields), span!(l, r, offset)),
+    <l:@L> "{" <ty_fields:(<Spanned<TyField>> ",")*> <last:Spanned<TyField>> "}" <r:@R> => {
         let mut ty_fields = ty_fields;
         ty_fields.push(last);
         ast::Spanned::new(ast::Type::Record(ty_fields), span!(l, r, offset))
@@ -185,32 +186,32 @@ Range: ast::Expr = {
 };
 
 Expr: ast::Expr = {
-    <l:Expr> "==" <r:OpExpr> => {
+    <l:Expr> <op: Spanned<"==">> <r:OpExpr> => {
         let lspan = l.span;
         let rspan = r.span;
-        ast::Expr::new(ast::ExprType::Compare(Box::new(l), ast::CompareOp::Equal, Box::new(r)),
+        ast::Expr::new(ast::ExprType::Compare(Box::new(l), op.map(|_| ast::CompareOp::Equal), Box::new(r)),
             lspan.to(rspan))
     },
     OpExpr,
 };
 
 OpExpr: ast::Expr = {
-    <l:OpExpr> "+" <r:Factor> => {
+    <l:OpExpr> <op: Spanned<"+">> <r:Factor> => {
         let lspan = l.span;
         let rspan = r.span;
-        ast::Expr::new(ast::ExprType::Arith(Box::new(l), ast::ArithOp::Add, Box::new(r)),
+        ast::Expr::new(ast::ExprType::Arith(Box::new(l), op.map(|_| ast::ArithOp::Add), Box::new(r)),
             lspan.to(rspan))
     },
-    <l:OpExpr> "-" <r:Factor> => {
+    <l:OpExpr> <op: Spanned<"-">> <r:Factor> => {
         let lspan = l.span;
         let rspan = r.span;
-        ast::Expr::new(ast::ExprType::Arith(Box::new(l), ast::ArithOp::Sub, Box::new(r)),
+        ast::Expr::new(ast::ExprType::Arith(Box::new(l), op.map(|_| ast::ArithOp::Sub), Box::new(r)),
             lspan.to(rspan))
     },
-    <l:OpExpr> "||" <r:Factor> => {
+    <l:OpExpr> <op: Spanned<"||">> <r:Factor> => {
         let lspan = l.span;
         let rspan = r.span;
-        ast::Expr::new(ast::ExprType::Bool(Box::new(l), ast::BoolOp::Or, Box::new(r)),
+        ast::Expr::new(ast::ExprType::Bool(Box::new(l), op.map(|_| ast::BoolOp::Or), Box::new(r)),
             lspan.to(rspan))
     },
     Factor,
@@ -226,21 +227,23 @@ ExprTypeSeq: ast::ExprType = {
 };
 
 Factor: ast::Expr = {
-    <l:Factor> "*" <r:TermOrNeg> => {
+    <l:Factor> <op: Spanned<"*">> <r:TermOrNeg> => {
         let lspan = l.span;
         let rspan = r.span;
-        ast::Expr::new(ast::ExprType::Arith(Box::new(l), ast::ArithOp::Mul, Box::new(r)),
+        ast::Expr::new(ast::ExprType::Arith(Box::new(l), op.map(|_| ast::ArithOp::Mul), Box::new(r)),
             lspan.to(rspan))
     },
-    <l:Factor> "/" <r:TermOrNeg> => {
+    <l:Factor> <op: Spanned<"/">> <r:TermOrNeg> => {
         let lspan = l.span;
         let rspan = r.span;
-        ast::Expr::new(ast::ExprType::Arith(Box::new(l), ast::ArithOp::Div, Box::new(r)), lspan.to(rspan))
+        ast::Expr::new(ast::ExprType::Arith(Box::new(l), op.map(|_| ast::ArithOp::Div), Box::new(r)),
+            lspan.to(rspan))
     },
-    <l:Factor> "&&" <r:TermOrNeg> => {
+    <l:Factor> <op: Spanned<"&&">> <r:TermOrNeg> => {
         let lspan = l.span;
         let rspan = r.span;
-        ast::Expr::new(ast::ExprType::Bool(Box::new(l), ast::BoolOp::And, Box::new(r)), lspan.to(rspan))
+        ast::Expr::new(ast::ExprType::Bool(Box::new(l), op.map(|_| ast::BoolOp::And), Box::new(r)),
+            lspan.to(rspan))
     },
     TermOrNeg,
 };
