@@ -20,7 +20,7 @@ pub enum Type {
     Int,
     String,
     Bool,
-    Record(HashMap<String, Type>),
+    Record(HashMap<String, Spanned<Spanned<Type>>>),
     Array(Box<Type>, usize),
     Unit,
     Alias(String),
@@ -37,7 +37,7 @@ pub struct EnumCase {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EnumParam {
     Simple(Type),
-    Record(Vec<Spanned<TypeField>>),
+    Record(HashMap<String, Spanned<Spanned<Type>>>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -61,8 +61,22 @@ impl From<ast::Type> for Type {
             ast::Type::Enum(cases) => {
                 Type::Enum(cases.into_iter().map(|c| c.map(EnumCase::from)).collect())
             }
+            ast::Type::Record(type_fields) => {
+                let mut type_fields_hm = HashMap::new();
+                for TypeField {
+                    id:
+                        Spanned {
+                            t: id_t,
+                            span: id_span,
+                        },
+                    ty,
+                } in type_fields.into_iter().map(|tf| tf.t.into())
+                {
+                    type_fields_hm.insert(id_t, Spanned::new(ty, id_span));
+                }
+                Type::Record(type_fields_hm)
+            }
             ast::Type::Array(ty, len) => Type::Array(Box::new(ty.t.into()), len.t),
-            _ => unimplemented!(),
         }
     }
 }
@@ -80,12 +94,21 @@ impl From<ast::EnumParam> for EnumParam {
     fn from(param: ast::EnumParam) -> Self {
         match param {
             ast::EnumParam::Simple(s) => EnumParam::Simple(Type::Alias(s)),
-            ast::EnumParam::Record(type_fields) => EnumParam::Record(
-                type_fields
-                    .into_iter()
-                    .map(|tf| tf.map(TypeField::from))
-                    .collect(),
-            ),
+            ast::EnumParam::Record(type_fields) => {
+                let mut type_fields_hm = HashMap::new();
+                for TypeField {
+                    id:
+                        Spanned {
+                            t: id_t,
+                            span: id_span,
+                        },
+                    ty,
+                } in type_fields.into_iter().map(|tf| tf.t.into())
+                {
+                    type_fields_hm.insert(id_t, Spanned::new(ty, id_span));
+                }
+                EnumParam::Record(type_fields_hm)
+            }
         }
     }
 }
@@ -104,15 +127,15 @@ impl From<ast::EnumCase> for EnumCase {
 }
 
 pub struct Env {
-    pub vars: HashMap<String, Type>,
-    pub types: HashMap<String, Type>,
+    pub vars: HashMap<String, Spanned<Type>>,
+    pub types: HashMap<String, Spanned<Type>>,
 }
 
 impl Default for Env {
     fn default() -> Self {
         let mut types = HashMap::new();
-        types.insert("int".to_owned(), Type::Int);
-        types.insert("string".to_owned(), Type::String);
+        types.insert("int".to_owned(), zspan!(Type::Int));
+        types.insert("string".to_owned(), zspan!(Type::String));
         Env {
             vars: HashMap::new(),
             types,
@@ -121,7 +144,7 @@ impl Default for Env {
 }
 
 impl Env {
-    fn insert_var(&mut self, name: String, ty: Type) -> Option<Type> {
+    fn insert_var(&mut self, name: String, ty: Spanned<Type>) -> Option<Spanned<Type>> {
         self.vars.insert(name, ty)
     }
 }
@@ -182,7 +205,7 @@ impl Env {
         match &lval.t {
             LVal::Simple(var) => {
                 if let Some(ty) = self.vars.get(var) {
-                    Ok(ty.clone())
+                    Ok(ty.t.clone())
                 } else {
                     Err(TypecheckErr {
                         t: TypecheckErrType::UndefinedVar(var.clone()),
@@ -193,7 +216,7 @@ impl Env {
             LVal::Field(var, field) => match self.translate_lval(var) {
                 Ok(Type::Record(fields)) => {
                     if let Some(field_type) = fields.get(&field.t) {
-                        Ok(field_type.clone())
+                        Ok(field_type.t.t.clone())
                     } else {
                         Err(TypecheckErr {
                             t: TypecheckErrType::UndefinedField(field.t.clone()),
@@ -294,10 +317,10 @@ mod tests {
         let mut env = Env::default();
         let record = {
             let mut hm = HashMap::new();
-            hm.insert("f".to_owned(), Type::Int);
+            hm.insert("f".to_owned(), zspan!(zspan!(Type::Int)));
             hm
         };
-        env.insert_var("x".to_owned(), Type::Record(record));
+        env.insert_var("x".to_owned(), zspan!(Type::Record(record)));
         let lval = zspan!(LVal::Field(
             Box::new(zspan!(LVal::Simple("x".to_owned()))),
             zspan!("f".to_owned())
@@ -308,7 +331,7 @@ mod tests {
     #[test]
     fn test_typecheck_record_field_err1() {
         let mut env = Env::default();
-        env.insert_var("x".to_owned(), Type::Record(HashMap::new()));
+        env.insert_var("x".to_owned(), zspan!(Type::Record(HashMap::new())));
         let lval = zspan!(LVal::Field(
             Box::new(zspan!(LVal::Simple("x".to_owned()))),
             zspan!("g".to_owned())
@@ -325,7 +348,7 @@ mod tests {
     #[test]
     fn test_typecheck_record_field_err2() {
         let mut env = Env::default();
-        env.insert_var("x".to_owned(), Type::Int);
+        env.insert_var("x".to_owned(), zspan!(Type::Int));
         let lval = zspan!(LVal::Field(
             Box::new(zspan!(LVal::Simple("x".to_owned()))),
             zspan!("g".to_owned())
@@ -342,7 +365,7 @@ mod tests {
     #[test]
     fn test_typecheck_array_subscript() {
         let mut env = Env::default();
-        env.insert_var("x".to_owned(), Type::Array(Box::new(Type::Int), 3));
+        env.insert_var("x".to_owned(), zspan!(Type::Array(Box::new(Type::Int), 3)));
         let lval = zspan!(LVal::Subscript(
             Box::new(zspan!(LVal::Simple("x".to_owned()))),
             expr!(ExprType::Number(0))
