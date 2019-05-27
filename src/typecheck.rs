@@ -1,4 +1,4 @@
-use crate::ast::{self, Expr, ExprType, FnCall, LVal, Let, Pattern, Record, Spanned};
+use crate::ast::{self, Expr, ExprType, FnCall, LVal, Let, Pattern, Record, Spanned, Decl, DeclType};
 use codespan::{ByteIndex, ByteSpan};
 use std::collections::HashMap;
 
@@ -12,7 +12,7 @@ pub enum TypecheckErrType {
     // need to translate the arguments passed to the non-function in order to determine the expected
     // function type.
     ArityMismatch(usize, usize),
-    NotAFn,
+    NotAFn(String),
     UndefinedVar(String),
     UndefinedFn(String),
     UndefinedField(String),
@@ -216,7 +216,7 @@ impl Env {
             }
             ExprType::LVal(lval) => self.translate_lval(lval),
             ExprType::Let(let_expr) => self.translate_let(let_expr),
-            // ExprType::FnCall(fn_call)
+            ExprType::FnCall(fn_call) => self.translate_fn_call(fn_call),
             _ => unimplemented!(),
         }
     }
@@ -302,29 +302,50 @@ impl Env {
     }
 
     pub fn translate_fn_call(
-        &self,
+        &mut self,
         Spanned {
             t: FnCall { id, args },
             span,
         }: &Spanned<FnCall>,
     ) -> Result<Type> {
-        if let Some(fn_type) = self.get_var(&id.t) {
+        let fn_type = self.get_var(&id.t).map(|ty| ty.clone());
+        if let Some(fn_type) = fn_type {
             match fn_type {
                 Type::Fn(param_types, return_type) => {
                     if args.len() != param_types.len() {
                         return Err(vec![TypecheckErr::new(
-                            TypecheckErrType::ArityMismatch(args.len(), param_types.len()),
+                            TypecheckErrType::ArityMismatch(param_types.len(), args.len()),
                             *span,
                         )]);
                     }
 
-                    for (Spanned { t: arg, span }, param_type) in
-                        args.iter().zip(param_types.iter())
-                    {}
+                    let mut errs = vec![];
+                    for (arg, param_type) in args.iter().zip(param_types.iter()) {
+                        match self.translate_expr(arg) {
+                            Ok(ref ty) => {
+                                if ty != param_type {
+                                    errs.push(TypecheckErr::new(
+                                        TypecheckErrType::TypeMismatch(
+                                            param_type.clone(),
+                                            ty.clone(),
+                                        ),
+                                        arg.span,
+                                    ));
+                                }
+                            }
+                            Err(src_errs) => errs.push(TypecheckErr::new(
+                                TypecheckErrType::Source(src_errs),
+                                arg.span,
+                            )),
+                        }
+                    }
 
                     Ok(*return_type.clone())
                 }
-                _ => Err(vec![TypecheckErr::new(TypecheckErrType::NotAFn, id.span)]),
+                _ => Err(vec![TypecheckErr::new(
+                    TypecheckErrType::NotAFn(id.t.clone()),
+                    id.span,
+                )]),
             }
         } else {
             Err(vec![TypecheckErr::new(
@@ -463,7 +484,7 @@ mod tests {
             ty: Some(zspan!(ast::Type::Type(zspan!("int".to_owned())))),
             expr: expr!(ExprType::Number(0))
         });
-        assert!(env.translate_let(&let_expr).is_ok());
+        assert_eq!(env.translate_let(&let_expr), Ok(Type::Unit));
         assert_eq!(env.vars["x"], Type::Int);
         assert!(env.var_def_spans.contains_key("x"));
     }
@@ -477,17 +498,23 @@ mod tests {
             ty: Some(zspan!(ast::Type::Type(zspan!("string".to_owned())))),
             expr: expr!(ExprType::Number(0))
         });
-        assert!(dbg!(env.translate_let(&let_expr)).is_err());
+        assert_eq!(
+            env.translate_let(&let_expr).unwrap_err()[0].t,
+            TypecheckErrType::TypeMismatch(Type::String, Type::Int)
+        );
     }
 
     #[test]
     fn test_typecheck_fn_call_undefined_err() {
-        let env = Env::default();
+        let mut env = Env::default();
         let fn_call_expr = zspan!(FnCall {
             id: zspan!("f".to_owned()),
             args: vec![],
         });
-        assert!(dbg!(env.translate_fn_call(&fn_call_expr)).is_err());
+        assert_eq!(
+            env.translate_fn_call(&fn_call_expr).unwrap_err()[0].t,
+            TypecheckErrType::UndefinedFn("f".to_owned())
+        );
     }
 
     #[test]
@@ -502,6 +529,27 @@ mod tests {
             id: zspan!("f".to_owned()),
             args: vec![],
         });
-        assert!(dbg!(env.translate_fn_call(&fn_call_expr)).is_err());
+        assert_eq!(
+            env.translate_fn_call(&fn_call_expr).unwrap_err()[0].t,
+            TypecheckErrType::NotAFn("f".to_owned())
+        );
+    }
+
+    #[test]
+    fn test_typecheck_fn_call_arity_mismatch() {
+        let mut env = Env::default();
+        env.insert_var(
+            "f".to_owned(),
+            Type::Fn(vec![], Box::new(Type::Int)),
+            zspan!(),
+        );
+        let fn_call_expr = zspan!(FnCall {
+            id: zspan!("f".to_owned()),
+            args: vec![expr!(ExprType::Number(0))],
+        });
+        assert_eq!(
+            env.translate_fn_call(&fn_call_expr).unwrap_err()[0].t,
+            TypecheckErrType::ArityMismatch(0, 1)
+        );
     }
 }
