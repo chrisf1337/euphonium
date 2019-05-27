@@ -51,7 +51,7 @@ impl From<TypeDecl> for _TypeDecl {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Type {
-    Type(String),
+    Type(Spanned<String>),
     Enum(Vec<Spanned<EnumCase>>),
     /// { a: int, b: int }
     Record(Vec<Spanned<TypeField>>),
@@ -70,7 +70,7 @@ pub enum _Type {
 impl From<Type> for _Type {
     fn from(ty: Type) -> Self {
         match ty {
-            Type::Type(ty) => _Type::Type(ty),
+            Type::Type(ty) => _Type::Type(ty.t),
             Type::Enum(cases) => _Type::Enum(cases.into_iter().map(|c| c.t.into()).collect()),
             Type::Record(type_fields) => {
                 _Type::Record(type_fields.into_iter().map(|tf| tf.t.into()).collect())
@@ -107,7 +107,7 @@ impl From<EnumCase> for _EnumCase {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EnumParam {
-    Simple(String),
+    Simple(Spanned<String>),
     Record(Vec<Spanned<TypeField>>),
 }
 
@@ -120,7 +120,7 @@ pub enum _EnumParam {
 impl From<EnumParam> for _EnumParam {
     fn from(ep: EnumParam) -> Self {
         match ep {
-            EnumParam::Simple(s) => _EnumParam::Simple(s),
+            EnumParam::Simple(s) => _EnumParam::Simple(s.t),
             EnumParam::Record(type_fields) => {
                 _EnumParam::Record(type_fields.into_iter().map(|tf| tf.t.into()).collect())
             }
@@ -167,7 +167,7 @@ pub struct Let {
 pub struct _Let {
     pub pattern: Pattern,
     pub mutable: bool,
-    pub ty: Option<Type>,
+    pub ty: Option<_Type>,
     pub expr: _ExprType,
 }
 
@@ -176,7 +176,7 @@ impl From<Let> for _Let {
         Self {
             pattern: expr.pattern.t,
             mutable: expr.mutable.t,
-            ty: expr.ty.map(|ty| ty.t),
+            ty: expr.ty.map(|ty| ty.t.into()),
             expr: expr.expr.t.into(),
         }
     }
@@ -346,7 +346,7 @@ pub enum CompareOp {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FnDecl {
     pub id: Spanned<String>,
-    pub type_fields: Vec<TypeField>,
+    pub type_fields: Vec<Spanned<TypeField>>,
     pub return_type: Option<Spanned<Type>>,
     pub body: Expr,
 }
@@ -363,7 +363,7 @@ impl From<FnDecl> for _FnDecl {
     fn from(decl: FnDecl) -> Self {
         Self {
             id: decl.id.t,
-            type_fields: decl.type_fields.into_iter().map(_TypeField::from).collect(),
+            type_fields: decl.type_fields.into_iter().map(|tf| tf.t.into()).collect(),
             return_type: decl.return_type.map(|t| t.t.into()),
             body: decl.body.t.into(),
         }

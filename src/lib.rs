@@ -201,7 +201,7 @@ mod tests {
                             _ExprType::Let(Box::new(_Let {
                                 pattern: Pattern::String("a".to_owned()),
                                 mutable: false,
-                                ty: Some(Type::Type("a".to_owned())),
+                                ty: Some(_Type::Type("a".to_owned())),
                                 expr: _ExprType::Arith(
                                     Box::new(_ExprType::Number(1)),
                                     ArithOp::Sub,
@@ -244,15 +244,14 @@ mod tests {
     fn test_parser_array_negative_index_err() {
         let lexer = lexer::Lexer::new("type a = [int; -3]");
         let mut errors = vec![];
-        let parse_result =
-            parser::ProgramParser::new().parse(ByteOffset(0), &mut errors, lexer).map(
-                |decls| {
-                    decls
-                        .into_iter()
-                        .map(Spanned::unwrap)
-                        .collect::<Vec<_DeclType>>()
-                },
-            );
+        let parse_result = parser::ProgramParser::new()
+            .parse(ByteOffset(0), &mut errors, lexer)
+            .map(|decls| {
+                decls
+                    .into_iter()
+                    .map(Spanned::unwrap)
+                    .collect::<Vec<_DeclType>>()
+            });
         assert!(parse_result.is_err() || !errors.is_empty());
     }
 }

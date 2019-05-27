@@ -62,7 +62,10 @@ Spanned<T>: ast::Spanned<T> = {
 Identifier: String = "identifier";
 
 EnumParam: ast::Spanned<ast::EnumParam> = {
-    Spanned<"identifier"> => <>.map(ast::EnumParam::Simple),
+    Spanned<"identifier"> => {
+        let span = <>.span;
+        ast::Spanned::new(ast::EnumParam::Simple(<>), span)
+    },
     <l:@L> "{" <ty_fields:(<Spanned<TyField>> ",")*> "}" <r:@R> => ast::Spanned::new(ast::EnumParam::Record(ty_fields),
         span!(l, r, offset)),
     <l:@L> "{" <ty_fields:(<Spanned<TyField>> ",")*> <last:Spanned<TyField>> "}" <r:@R> => {
@@ -93,7 +96,7 @@ Ty: ast::Spanned<ast::Type> = {
     <l:@L> <cases: (<Spanned<EnumCase>> "|")*> <last:Spanned<EnumCase>> <r:@R> => {
         if cases.is_empty() {
             if last.t.params.is_empty() {
-                ast::Spanned::new(ast::Type::Type(last.t.id.t), span!(l, r, offset))
+                ast::Spanned::new(ast::Type::Type(last.t.id), span!(l, r, offset))
             } else {
                 ast::Spanned::new(ast::Type::Enum(vec![last]), span!(l, r, offset))
             }
@@ -144,11 +147,11 @@ _Assign: ast::Assign = {
 };
 
 FnDecl: ast::FnDecl = {
-    "fn" <id:Spanned<"identifier">> "(" <type_fields:(<TyField> ",")*> ")"
+    "fn" <id:Spanned<"identifier">> "(" <type_fields:(<Spanned<TyField>> ",")*> ")"
         <return_type:("->" <Ty>)?> "=" <body:Expr> ";" => {
         ast::FnDecl { id, type_fields, return_type, body }
     },
-    "fn" <id:Spanned<"identifier">> "(" <type_fields:(<TyField> ",")*> <last:TyField> ")"
+    "fn" <id:Spanned<"identifier">> "(" <type_fields:(<Spanned<TyField>> ",")*> <last:Spanned<TyField>> ")"
         <return_type:("->" <Ty>)?> "=" <body:Expr> ";" => {
         let mut type_fields = type_fields;
         type_fields.push(last);
