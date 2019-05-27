@@ -1,17 +1,23 @@
-use crate::ast::{self, Expr, ExprType, LVal, Let, Pattern, Record, Span, Spanned};
+use crate::ast::{self, Expr, ExprType, FnCall, LVal, Let, Pattern, Record, Spanned};
 use codespan::{ByteIndex, ByteSpan};
 use std::collections::HashMap;
 
-pub type Result<T> = std::result::Result<T, TypecheckErr>;
+pub type Result<T> = std::result::Result<T, Vec<TypecheckErr>>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TypecheckErrType {
     /// expected, actual
     TypeMismatch(Type, Type),
+    // The reason we need a separate case for this instead of using TypeMismatch is because we would
+    // need to translate the arguments passed to the non-function in order to determine the expected
+    // function type.
+    ArityMismatch(usize, usize),
+    NotAFn,
     UndefinedVar(String),
+    UndefinedFn(String),
     UndefinedField(String),
     CannotSubscript,
-    Source(Box<TypecheckErr>),
+    Source(Vec<TypecheckErr>),
 }
 
 pub type TypecheckErr = Spanned<TypecheckErrType>;
@@ -106,6 +112,7 @@ impl From<ast::EnumCase> for EnumCase {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct Env {
     pub vars: HashMap<String, Type>,
     pub types: HashMap<String, Type>,
@@ -147,20 +154,37 @@ macro_rules! assert_ty {
     ( $self:ident , $e:expr , $ty:expr ) => {{
         match $self.translate_expr($e) {
             Ok(ref ty) if ty == &$ty => Ok($ty),
-            Ok(ref ty) => Err(TypecheckErr {
+            Ok(ref ty) => Err(vec![TypecheckErr {
                 t: TypecheckErrType::TypeMismatch($ty, ty.clone()),
                 span: $e.span,
-            }),
-            Err(err) => Err(TypecheckErr {
-                t: TypecheckErrType::Source(Box::new(err)),
+            }]),
+            Err(errs) => Err(vec![TypecheckErr {
+                t: TypecheckErrType::Source(errs),
                 span: $e.span,
-            }),
+            }]),
         }
     }};
 }
 
 impl Env {
-    pub fn translate_expr(&self, expr: &Expr) -> Result<Type> {
+    pub fn resolve<'a>(&'a self, ty: &'a Type) -> Option<&'a Type> {
+        match ty {
+            Type::Alias(alias) => self.vars.get(alias).map_or(None, |ty| self.resolve(ty)),
+            _ => Some(ty),
+        }
+    }
+
+    pub fn get_var<'a>(&'a self, var: &'a str) -> Option<&'a Type> {
+        self.vars
+            .get(var)
+            .map_or(None, |var_ty| self.resolve(var_ty))
+    }
+
+    pub fn get_type<'a>(&'a self, ty: &'a str) -> Option<&'a Type> {
+        self.types.get(ty).map_or(None, |ty| self.resolve(ty))
+    }
+
+    pub fn translate_expr(&mut self, expr: &Expr) -> Result<Type> {
         match &expr.t {
             ExprType::Seq(exprs, returns) => {
                 for expr in &exprs[..exprs.len() - 1] {
@@ -191,20 +215,22 @@ impl Env {
                 Ok(Type::Bool)
             }
             ExprType::LVal(lval) => self.translate_lval(lval),
+            ExprType::Let(let_expr) => self.translate_let(let_expr),
+            // ExprType::FnCall(fn_call)
             _ => unimplemented!(),
         }
     }
 
-    pub fn translate_lval(&self, lval: &Spanned<LVal>) -> Result<Type> {
+    pub fn translate_lval(&mut self, lval: &Spanned<LVal>) -> Result<Type> {
         match &lval.t {
             LVal::Simple(var) => {
-                if let Some(ty) = self.vars.get(var) {
+                if let Some(ty) = self.get_var(var) {
                     Ok(ty.clone())
                 } else {
-                    Err(TypecheckErr {
+                    Err(vec![TypecheckErr {
                         t: TypecheckErrType::UndefinedVar(var.clone()),
                         span: lval.span,
-                    })
+                    }])
                 }
             }
             LVal::Field(var, field) => match self.translate_lval(var) {
@@ -212,41 +238,41 @@ impl Env {
                     if let Some(field_type) = fields.get(&field.t) {
                         Ok(field_type.clone())
                     } else {
-                        Err(TypecheckErr {
+                        Err(vec![TypecheckErr {
                             t: TypecheckErrType::UndefinedField(field.t.clone()),
                             span: field.span,
-                        })
+                        }])
                     }
                 }
-                Ok(_) => Err(TypecheckErr {
+                Ok(_) => Err(vec![TypecheckErr {
                     t: TypecheckErrType::UndefinedField(field.t.clone()),
                     span: field.span,
-                }),
-                Err(err) => Err(TypecheckErr {
-                    t: TypecheckErrType::Source(Box::new(err)),
+                }]),
+                Err(errs) => Err(vec![TypecheckErr {
+                    t: TypecheckErrType::Source(errs),
                     span: field.span,
-                }),
+                }]),
             },
             LVal::Subscript(var, index) => match self.translate_lval(var) {
                 Ok(Type::Array(ty, _)) => match self.translate_expr(index) {
                     Ok(Type::Int) => Ok((*ty).clone()),
-                    Ok(ty) => Err(TypecheckErr {
+                    Ok(ty) => Err(vec![TypecheckErr {
                         t: TypecheckErrType::TypeMismatch(Type::Int, ty),
                         span: index.span,
-                    }),
-                    Err(err) => Err(TypecheckErr {
-                        t: TypecheckErrType::Source(Box::new(err)),
+                    }]),
+                    Err(errs) => Err(vec![TypecheckErr {
+                        t: TypecheckErrType::Source(errs),
                         span: index.span,
-                    }),
+                    }]),
                 },
-                Ok(_) => Err(TypecheckErr {
+                Ok(_) => Err(vec![TypecheckErr {
                     t: TypecheckErrType::CannotSubscript,
                     span: index.span,
-                }),
-                Err(err) => Err(TypecheckErr {
-                    t: TypecheckErrType::Source(Box::new(err)),
+                }]),
+                Err(errs) => Err(vec![TypecheckErr {
+                    t: TypecheckErrType::Source(errs),
                     span: index.span,
-                }),
+                }]),
             },
         }
     }
@@ -260,10 +286,10 @@ impl Env {
             // Type annotation
             let ty = Type::from(ty.clone());
             if ty != expr_type {
-                return Err(TypecheckErr::new(
+                return Err(vec![TypecheckErr::new(
                     TypecheckErrType::TypeMismatch(ty, expr_type),
                     let_expr.span,
-                ));
+                )]);
             }
         }
         match &pattern.t {
@@ -273,6 +299,39 @@ impl Env {
             _ => (),
         }
         Ok(Type::Unit)
+    }
+
+    pub fn translate_fn_call(
+        &self,
+        Spanned {
+            t: FnCall { id, args },
+            span,
+        }: &Spanned<FnCall>,
+    ) -> Result<Type> {
+        if let Some(fn_type) = self.get_var(&id.t) {
+            match fn_type {
+                Type::Fn(param_types, return_type) => {
+                    if args.len() != param_types.len() {
+                        return Err(vec![TypecheckErr::new(
+                            TypecheckErrType::ArityMismatch(args.len(), param_types.len()),
+                            *span,
+                        )]);
+                    }
+
+                    for (Spanned { t: arg, span }, param_type) in
+                        args.iter().zip(param_types.iter())
+                    {}
+
+                    Ok(*return_type.clone())
+                }
+                _ => Err(vec![TypecheckErr::new(TypecheckErrType::NotAFn, id.span)]),
+            }
+        } else {
+            Err(vec![TypecheckErr::new(
+                TypecheckErrType::UndefinedFn(id.t.clone()),
+                *span,
+            )])
+        }
     }
 }
 
@@ -290,7 +349,7 @@ mod tests {
             zspan!(BoolOp::And),
             Box::new(expr!(ExprType::BoolLiteral(true))),
         ));
-        let env = Env::default();
+        let mut env = Env::default();
         assert_eq!(env.translate_expr(&expr), Ok(Type::Bool));
     }
 
@@ -305,16 +364,16 @@ mod tests {
             zspan!(BoolOp::And),
             Box::new(expr!(ExprType::BoolLiteral(true))),
         ));
-        let env = Env::default();
+        let mut env = Env::default();
         assert_eq!(
             env.translate_expr(&expr),
-            Err(TypecheckErr {
-                t: TypecheckErrType::Source(Box::new(TypecheckErr {
+            Err(vec![TypecheckErr {
+                t: TypecheckErrType::Source(vec![TypecheckErr {
                     t: TypecheckErrType::TypeMismatch(Type::Bool, Type::Int),
                     span: span!(0, 0, ByteOffset(0))
-                })),
+                }]),
                 span: span!(0, 0, ByteOffset(0))
-            })
+            }])
         );
     }
 
@@ -352,10 +411,10 @@ mod tests {
         ));
         assert_eq!(
             env.translate_lval(&lval),
-            Err(TypecheckErr {
+            Err(vec![TypecheckErr {
                 t: TypecheckErrType::UndefinedField("g".to_owned()),
                 span: span!(0, 0, ByteOffset(0)),
-            })
+            }])
         );
     }
 
@@ -373,10 +432,10 @@ mod tests {
         ));
         assert_eq!(
             env.translate_lval(&lval),
-            Err(TypecheckErr {
+            Err(vec![TypecheckErr {
                 t: TypecheckErrType::UndefinedField("g".to_owned()),
                 span: span!(0, 0, ByteOffset(0))
-            })
+            }])
         );
     }
 
@@ -396,16 +455,53 @@ mod tests {
     }
 
     #[test]
-    fn test_typecheck_let() {
+    fn test_typecheck_let_type_annotation() {
         let mut env = Env::default();
         let let_expr = zspan!(Let {
             pattern: zspan!(Pattern::String("x".to_owned())),
             mutable: zspan!(false),
-            ty: None,
+            ty: Some(zspan!(ast::Type::Type(zspan!("int".to_owned())))),
             expr: expr!(ExprType::Number(0))
         });
         assert!(env.translate_let(&let_expr).is_ok());
         assert_eq!(env.vars["x"], Type::Int);
         assert!(env.var_def_spans.contains_key("x"));
+    }
+
+    #[test]
+    fn test_typecheck_let_type_annotation_err() {
+        let mut env = Env::default();
+        let let_expr = zspan!(Let {
+            pattern: zspan!(Pattern::String("x".to_owned())),
+            mutable: zspan!(false),
+            ty: Some(zspan!(ast::Type::Type(zspan!("string".to_owned())))),
+            expr: expr!(ExprType::Number(0))
+        });
+        assert!(dbg!(env.translate_let(&let_expr)).is_err());
+    }
+
+    #[test]
+    fn test_typecheck_fn_call_undefined_err() {
+        let env = Env::default();
+        let fn_call_expr = zspan!(FnCall {
+            id: zspan!("f".to_owned()),
+            args: vec![],
+        });
+        assert!(dbg!(env.translate_fn_call(&fn_call_expr)).is_err());
+    }
+
+    #[test]
+    fn test_typecheck_fn_call_not_fn_err() {
+        let mut env = Env::default();
+        env.insert_var(
+            "f".to_owned(),
+            Type::Int,
+            ByteSpan::new(ByteIndex::none(), ByteIndex::none()),
+        );
+        let fn_call_expr = zspan!(FnCall {
+            id: zspan!("f".to_owned()),
+            args: vec![],
+        });
+        assert!(dbg!(env.translate_fn_call(&fn_call_expr)).is_err());
     }
 }

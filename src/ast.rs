@@ -183,12 +183,6 @@ impl From<Let> for _Let {
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub struct Span {
-    pub l: usize,
-    pub r: usize,
-}
-
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct Spanned<T> {
     pub t: T,
     pub span: ByteSpan,

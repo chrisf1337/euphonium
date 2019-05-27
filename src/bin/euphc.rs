@@ -1,3 +1,5 @@
+#![allow(clippy::all)]
+
 use clap::{App, Arg};
 use codespan_reporting::{
     termcolor::{ColorChoice, StandardStream},
