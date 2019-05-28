@@ -30,7 +30,7 @@ impl From<DeclType> for _DeclType {
 /// type A = ...
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypeDecl {
-    pub type_id: Spanned<String>,
+    pub id: Spanned<String>,
     pub ty: Spanned<Type>,
 }
 
@@ -43,7 +43,7 @@ pub struct _TypeDecl {
 impl From<TypeDecl> for _TypeDecl {
     fn from(decl: TypeDecl) -> Self {
         Self {
-            type_id: decl.type_id.t,
+            type_id: decl.id.t,
             ty: decl.ty.t.into(),
         }
     }

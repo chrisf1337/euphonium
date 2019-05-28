@@ -122,8 +122,8 @@ TyField: ast::TypeField = {
 };
 
 TypeDecl: ast::TypeDecl =
-    "type" <type_id:Spanned<"identifier">> "=" <ty:Ty> =>
-        ast::TypeDecl { type_id, ty };
+    "type" <id:Spanned<"identifier">> "=" <ty:Ty> =>
+        ast::TypeDecl { id, ty };
 
 _Let: ast::Let = {
    "let" <ml:@L> <mr:@R> <pattern:Spanned<"_">> <ty:(":" <Ty>)?> "=" <expr:Expr> => ast::Let {
