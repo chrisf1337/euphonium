@@ -220,31 +220,36 @@ impl Env {
     fn translate_fn_decl(&mut self, fn_decl: &Spanned<FnDecl>) -> Result<()> {
         let mut new_env = self.clone();
         let mut all_errs = vec![];
+        let mut param_types = vec![];
         for type_field in &fn_decl.type_fields {
-            match self.resolve_type(&type_field.t.ty) {
+            match self.resolve_type(&type_field.ty) {
                 Ok(ty) => {
-                    new_env.insert_var(type_field.t.id.t.clone(), ty, type_field.span);
-                    let return_type = if let Some(ty) = &fn_decl.return_type {
-                        ty.t.clone().into()
-                    } else {
-                        Type::Unit
-                    };
-                    let body_type = new_env.translate_expr(&fn_decl.body)?;
-                    if self.resolve(&body_type) != self.resolve(&return_type) {
-                        return Err(vec![TypecheckErr::new(
-                            TypecheckErrType::TypeMismatch(return_type, body_type),
-                            fn_decl.span,
-                        )]);
-                    }
+                    new_env.insert_var(type_field.id.t.clone(), ty, type_field.span);
+                    param_types.push(type_field.ty.t.clone().into());
                 }
                 Err(errs) => all_errs.extend(errs),
             }
         }
+        let return_type = if let Some(ty) = &fn_decl.return_type {
+            ty.t.clone().into()
+        } else {
+            Type::Unit
+        };
+        let body_type = new_env.translate_expr(&fn_decl.body)?;
+        if self.resolve(&body_type) != self.resolve(&return_type) {
+            return Err(vec![TypecheckErr::new(
+                TypecheckErrType::TypeMismatch(return_type, body_type),
+                fn_decl.span,
+            )]);
+        }
+
+        self.insert_var(fn_decl.id.t.clone(), Type::Fn(param_types, Box::new(return_type)), fn_decl.span);
+
         Ok(())
     }
 
     fn translate_type_decl(&mut self, decl: &Spanned<TypeDecl>) -> Result<()> {
-        self.insert_type(decl.t.id.t.clone(), decl.t.ty.t.clone().into(), decl.span);
+        self.insert_type(decl.id.t.clone(), decl.ty.t.clone().into(), decl.span);
         Ok(())
     }
 
@@ -620,7 +625,7 @@ mod tests {
             ty: Some(zspan!(ast::Type::Type(zspan!("int".to_owned())))),
             expr: expr!(ExprType::Number(0)),
         });
-        env.translate_type_decl(&type_decl);
+        let _ = env.translate_type_decl(&type_decl);
         assert!(env.translate_let(&let_expr).is_ok());
     }
 }
