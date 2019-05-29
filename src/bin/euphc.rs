@@ -91,8 +91,8 @@ fn main() -> Result<(), EuphcErr> {
             codespan_reporting::emit(
                 &mut writer,
                 &sourcemap.codemap,
-                &Diagnostic::new_error("typecheck error").with_label(Label::new_primary(err.span)
-                    .with_message(format!("{:?}", err)))
+                &Diagnostic::new_error("typecheck error")
+                    .with_label(Label::new_primary(err.span).with_message(format!("{:?}", err))),
             )?;
         }
         return Err(EuphcErr::TypecheckErr);

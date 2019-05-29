@@ -1,5 +1,6 @@
 use crate::ast::{
-    self, Decl, DeclType, Expr, ExprType, FnCall, FnDecl, LVal, Let, Pattern, Record, Spanned, TypeDecl
+    self, Decl, DeclType, Expr, ExprType, FnCall, FnDecl, LVal, Let, Pattern, Record, Spanned,
+    TypeDecl,
 };
 use codespan::{ByteIndex, ByteSpan};
 use std::collections::HashMap;
@@ -180,22 +181,30 @@ impl Env {
 
     fn resolve<'a>(&'a self, ty: &'a Type) -> Option<&'a Type> {
         match ty {
-            Type::Alias(alias) => self.vars.get(alias).map_or(None, |ty| self.resolve(ty)),
+            Type::Alias(alias) => self.get_type(alias),
             _ => Some(ty),
         }
     }
 
-    fn resolve_type<'a>(&'a self, ty: &'a Spanned<ast::Type>) -> Result<Type> {
-        let converted_ty = Type::from(ty.t.clone());
-        match &converted_ty {
-            Type::Alias(alias) => self.get_type(alias).map_or(
-                Err(vec![TypecheckErr::new(
-                    TypecheckErrType::UndefinedType(converted_ty.clone()),
-                    ty.span,
-                )]),
-                |ty| Ok(ty.clone()),
-            ),
-            _ => Ok(converted_ty),
+    fn resolve_ast_type(&self, Spanned { t: ty, span }: &Spanned<ast::Type>) -> Result<Type> {
+        let ty = Type::from(ty.clone());
+        self.resolve_type(&ty, *span).map(|ty| ty.clone())
+    }
+
+    fn resolve_type<'a>(&'a self, ty: &'a Type, def_span: ByteSpan) -> Result<&'a Type> {
+        match ty {
+            Type::Alias(alias) => {
+                if let Some(resolved_type) = self.types.get(alias) {
+                    let span = self.type_def_spans[alias];
+                    self.resolve_type(resolved_type, span)
+                } else {
+                    Err(vec![TypecheckErr::new(
+                        TypecheckErrType::UndefinedType(ty.clone()),
+                        def_span,
+                    )])
+                }
+            }
+            _ => Ok(ty),
         }
     }
 
@@ -222,7 +231,7 @@ impl Env {
         let mut all_errs = vec![];
         let mut param_types = vec![];
         for type_field in &fn_decl.type_fields {
-            match self.resolve_type(&type_field.ty) {
+            match self.resolve_ast_type(&type_field.ty) {
                 Ok(ty) => {
                     new_env.insert_var(type_field.id.t.clone(), ty, type_field.span);
                     param_types.push(type_field.ty.t.clone().into());
@@ -243,7 +252,11 @@ impl Env {
             )]);
         }
 
-        self.insert_var(fn_decl.id.t.clone(), Type::Fn(param_types, Box::new(return_type)), fn_decl.span);
+        self.insert_var(
+            fn_decl.id.t.clone(),
+            Type::Fn(param_types, Box::new(return_type)),
+            fn_decl.span,
+        );
 
         Ok(())
     }
@@ -349,7 +362,7 @@ impl Env {
         let expr_type = self.translate_expr(expr)?;
         if let Some(ty) = ty {
             // Type annotation
-            let ty = self.resolve_type(ty)?;
+            let ty = self.resolve_ast_type(ty)?;
             if &ty != self.resolve(&expr_type).unwrap() {
                 return Err(vec![TypecheckErr::new(
                     TypecheckErrType::TypeMismatch(ty, expr_type),
@@ -421,9 +434,47 @@ impl Env {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::BoolOp;
+    use crate::ast::{self, BoolOp};
     use codespan::ByteOffset;
     use pretty_assertions::assert_eq;
+
+    #[test]
+    fn test_resolve() {
+        let mut env = Env::default();
+        env.insert_type("a".to_owned(), Type::Alias("b".to_owned()), zspan!());
+        env.insert_type("b".to_owned(), Type::Alias("c".to_owned()), zspan!());
+        env.insert_type("c".to_owned(), Type::Int, zspan!());
+        env.insert_type("d".to_owned(), Type::Alias("e".to_owned()), zspan!());
+
+        assert_eq!(env.resolve(&Type::Alias("a".to_owned())), Some(&Type::Int));
+        assert_eq!(env.resolve(&Type::Int), Some(&Type::Int));
+        assert_eq!(env.resolve(&Type::Alias("d".to_owned())), None);
+    }
+
+    #[test]
+    fn test_resolve_type() {
+        let mut env = Env::default();
+        env.insert_type("a".to_owned(), Type::Alias("b".to_owned()), zspan!());
+        env.insert_type("b".to_owned(), Type::Alias("c".to_owned()), zspan!());
+        env.insert_type("c".to_owned(), Type::Int, zspan!());
+        env.insert_type("d".to_owned(), Type::Alias("e".to_owned()), zspan!());
+
+        assert_eq!(
+            env.resolve_ast_type(&zspan!(ast::Type::Type(zspan!("a".to_owned())))),
+            Ok(Type::Int)
+        );
+        assert_eq!(
+            env.resolve_ast_type(&zspan!(ast::Type::Type(zspan!("int".to_owned())))),
+            Ok(Type::Int)
+        );
+        assert_eq!(
+            env.resolve_ast_type(&zspan!(ast::Type::Type(zspan!("d".to_owned())))),
+            Err(vec![TypecheckErr::new(
+                TypecheckErrType::UndefinedType(Type::Alias("e".to_owned())),
+                zspan!()
+            )])
+        );
+    }
 
     #[test]
     fn test_typecheck_bool_expr() {
@@ -609,6 +660,16 @@ mod tests {
         assert_eq!(
             env.translate_fn_call(&fn_call_expr).unwrap_err()[0].t,
             TypecheckErrType::ArityMismatch(0, 1)
+        );
+    }
+
+    #[test]
+    fn test_typecheck_fn_call_arg_type_mismatch() {
+        let mut env = Env::default();
+        env.insert_var(
+            "f".to_owned(),
+            Type::Fn(vec![], Box::new(Type::Int)),
+            zspan!(),
         );
     }
 
