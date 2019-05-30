@@ -245,7 +245,15 @@ impl Env {
             Type::Unit
         };
         let body_type = new_env.translate_expr(&fn_decl.body)?;
-        if self.resolve(&body_type) != self.resolve(&return_type) {
+        if self.resolve_type(&body_type, fn_decl.body.span)?
+            != self.resolve_type(
+                &return_type,
+                fn_decl
+                    .return_type
+                    .as_ref()
+                    .map_or_else(|| fn_decl.span, |ret_ty| ret_ty.span),
+            )?
+        {
             return Err(vec![TypecheckErr::new(
                 TypecheckErrType::TypeMismatch(return_type, body_type),
                 fn_decl.span,
@@ -272,10 +280,11 @@ impl Env {
                 for expr in &exprs[..exprs.len() - 1] {
                     let _ = self.translate_expr(expr)?;
                 }
+                let last_expr = exprs.last().unwrap();
                 if *returns {
-                    Ok(self.translate_expr(expr)?)
+                    Ok(self.translate_expr(last_expr)?)
                 } else {
-                    let _ = self.translate_expr(expr)?;
+                    let _ = self.translate_expr(last_expr)?;
                     Ok(Type::Unit)
                 }
             }
