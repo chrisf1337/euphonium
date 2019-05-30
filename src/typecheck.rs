@@ -78,6 +78,7 @@ impl From<ast::Type> for Type {
                 Type::Record(type_fields_hm)
             }
             ast::Type::Array(ty, len) => Type::Array(Box::new(ty.t.into()), len.t.into()),
+            ast::Type::Unit => Type::Unit,
         }
     }
 }

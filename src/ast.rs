@@ -56,6 +56,7 @@ pub enum Type {
     /// { a: int, b: int }
     Record(Vec<Spanned<TypeField>>),
     Array(Box<Spanned<Type>>, Spanned<usize>),
+    Unit,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -65,6 +66,7 @@ pub enum _Type {
     /// { a: int, b: int }
     Record(Vec<_TypeField>),
     Array(Box<_Type>, usize),
+    Unit,
 }
 
 impl From<Type> for _Type {
@@ -76,6 +78,7 @@ impl From<Type> for _Type {
                 _Type::Record(type_fields.into_iter().map(|tf| tf.t.into()).collect())
             }
             Type::Array(ty, len) => _Type::Array(Box::new(ty.t.into()), len.t),
+            Type::Unit => _Type::Unit,
         }
     }
 }

@@ -115,6 +115,7 @@ Ty: ast::Spanned<ast::Type> = {
     },
     <l:@L> "[" <ty:Ty> ";" <len:Spanned<"number">> "]" <r:@R> =>
         ast::Spanned::new(ast::Type::Array(Box::new(ty), len), span!(l, r, offset)),
+    <l:@L> "(" ")" <r:@R> => ast::Spanned::new(ast::Type::Unit, span!(l, r, offset)),
 };
 
 TyField: ast::TypeField = {
