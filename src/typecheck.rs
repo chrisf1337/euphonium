@@ -151,20 +151,15 @@ impl Default for Env {
 macro_rules! assert_ty {
     ( $self:ident , $e:expr , $ty:expr ) => {{
         let expr_type = $self.translate_expr($e)?;
-        if let Some(expr_type) = $self.resolve(&expr_type) {
-            if $ty != expr_type {
-                Err(vec![TypecheckErr {
-                    t: TypecheckErrType::TypeMismatch($ty.clone(), expr_type.clone()),
-                    span: $e.span,
-                }])
-            } else {
-                Ok(expr_type.clone())
-            }
+        let resolved_ty = $self.resolve($ty).unwrap();
+        let resolved_expr_type = $self.resolve_type(&expr_type, $e.span)?;
+        if resolved_ty != resolved_expr_type {
+            Err(vec![TypecheckErr {
+                t: TypecheckErrType::TypeMismatch($ty.clone(), expr_type.clone()),
+                span: $e.span,
+            }])
         } else {
-            Err(vec![TypecheckErr::new(
-                TypecheckErrType::UndefinedType(expr_type),
-                $e.span,
-            )])
+            Ok(expr_type.clone())
         }
     }};
 }
@@ -372,10 +367,11 @@ impl Env {
         let expr_type = self.translate_expr(expr)?;
         if let Some(ty) = ty {
             // Type annotation
-            let ty = self.resolve_ast_type(ty)?;
-            if &ty != self.resolve(&expr_type).unwrap() {
+            let resolved_ty = self.resolve_ast_type(ty)?;
+            let resolved_expr_ty = self.resolve_type(&expr_type, expr.span)?;
+            if &resolved_ty != resolved_expr_ty {
                 return Err(vec![TypecheckErr::new(
-                    TypecheckErrType::TypeMismatch(ty, expr_type),
+                    TypecheckErrType::TypeMismatch(ty.t.clone().into(), expr_type),
                     let_expr.span,
                 )]);
             }
@@ -693,10 +689,30 @@ mod tests {
         let let_expr = zspan!(Let {
             pattern: zspan!(Pattern::Wildcard),
             mutable: zspan!(false),
-            ty: Some(zspan!(ast::Type::Type(zspan!("int".to_owned())))),
+            ty: Some(zspan!(ast::Type::Type(zspan!("a".to_owned())))),
             expr: expr!(ExprType::Number(0)),
         });
         let _ = env.translate_type_decl(&type_decl);
         assert!(env.translate_let(&let_expr).is_ok());
+    }
+
+    #[test]
+    fn test_typecheck_typedef_err() {
+        let mut env = Env::default();
+        let type_decl = zspan!(TypeDecl {
+            id: zspan!("a".to_owned()),
+            ty: zspan!(ast::Type::Type(zspan!("int".to_owned()))),
+        });
+        let let_expr = zspan!(Let {
+            pattern: zspan!(Pattern::Wildcard),
+            mutable: zspan!(false),
+            ty: Some(zspan!(ast::Type::Type(zspan!("a".to_owned())))),
+            expr: expr!(ExprType::String("".to_owned())),
+        });
+        let _ = env.translate_type_decl(&type_decl);
+        assert_eq!(
+            env.translate_let(&let_expr).unwrap_err()[0].t,
+            TypecheckErrType::TypeMismatch(Type::Alias("a".to_owned()), Type::String)
+        );
     }
 }
