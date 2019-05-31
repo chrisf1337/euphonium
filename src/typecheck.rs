@@ -204,7 +204,7 @@ impl Env {
         }
     }
 
-    fn get_var<'a>(&'a self, var: &'a str) -> Option<&'a Type> {
+    fn get_var_type<'a>(&'a self, var: &'a str) -> Option<&'a Type> {
         self.vars
             .get(var)
             .map_or(None, |var_ty| self.resolve(var_ty))
@@ -311,7 +311,7 @@ impl Env {
     fn translate_lval(&mut self, lval: &Spanned<LVal>) -> Result<Type> {
         match &lval.t {
             LVal::Simple(var) => {
-                if let Some(ty) = self.get_var(var) {
+                if let Some(ty) = self.vars.get(var) {
                     Ok(ty.clone())
                 } else {
                     Err(vec![TypecheckErr {
@@ -378,7 +378,13 @@ impl Env {
         }
         match &pattern.t {
             Pattern::String(var_name) => {
-                self.insert_var(var_name.clone(), expr_type, let_expr.span)
+                // Prefer the annotated type if provided
+                let ty = if let Some(ty) = ty {
+                    ty.t.clone().into()
+                } else {
+                    expr_type
+                };
+                self.insert_var(var_name.clone(), ty, let_expr.span)
             }
             _ => (),
         }
@@ -392,7 +398,7 @@ impl Env {
             span,
         }: &Spanned<FnCall>,
     ) -> Result<Type> {
-        let fn_type = self.get_var(&id.t).map(|ty| ty.clone());
+        let fn_type = self.get_var_type(&id.t).map(|ty| ty.clone());
         if let Some(fn_type) = fn_type {
             match fn_type {
                 Type::Fn(param_types, return_type) => {
@@ -713,6 +719,31 @@ mod tests {
         assert_eq!(
             env.translate_let(&let_expr).unwrap_err()[0].t,
             TypecheckErrType::TypeMismatch(Type::Alias("a".to_owned()), Type::String)
+        );
+    }
+
+    #[test]
+    fn test_typecheck_expr_typedef() {
+        let mut env = Env::default();
+        let type_decl = zspan!(TypeDecl {
+            id: zspan!("i".to_owned()),
+            ty: zspan!(ast::Type::Type(zspan!("int".to_owned())))
+        });
+        let var_def = zspan!(Let {
+            pattern: zspan!(Pattern::String("i".to_owned())),
+            mutable: zspan!(false),
+            ty: Some(zspan!(ast::Type::Type(zspan!("i".to_owned())))),
+            expr: expr!(ExprType::Number(0))
+        });
+        let expr = expr!(ExprType::LVal(Box::new(zspan!(LVal::Simple(
+            "i".to_owned()
+        )))));
+        env.translate_type_decl(&type_decl)
+            .expect("translate type decl");
+        env.translate_let(&var_def).expect("translate var def");
+        assert_eq!(
+            env.translate_expr(&expr).unwrap(),
+            Type::Alias("i".to_owned())
         );
     }
 }
