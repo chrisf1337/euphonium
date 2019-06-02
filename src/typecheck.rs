@@ -3,6 +3,7 @@ use crate::ast::{
     TypeDecl,
 };
 use codespan::{ByteIndex, ByteSpan};
+use codespan_reporting::{Diagnostic, Label};
 use std::collections::HashMap;
 
 pub type Result<T> = std::result::Result<T, Vec<TypecheckErr>>;
@@ -25,7 +26,34 @@ pub enum TypecheckErrType {
     TypeDeclCycle(String, Type),
 }
 
+impl TypecheckErrType {
+    pub fn diagnostic(&self, env: &Env) -> Diagnostic {
+        use TypecheckErrType::*;
+        let msg = match self {
+            TypeMismatch(expected, actual) => format!("type mismatch\nexpected: {:?}\n  actual: {:?}", expected, actual),
+            ArityMismatch(expected, actual) => format!("arity mismatch\nexpected: {:?}\n  actual: {:?}", expected, actual),
+            NotAFn(fun) => {
+                let ty = env.get_var_type(fun).unwrap();
+                format!("not a function: {} (has type {:?})", fun, ty)
+            },
+            UndefinedVar(var) => format!("undefined variable: {}", var),
+            UndefinedFn(fun) => format!("undefined function: {}", fun),
+            UndefinedField(field) => format!("undefined field: {}", field),
+            UndefinedType(ty) => format!("undefined type: {:?}", ty),
+            CannotSubscript => "cannot subscript".to_owned(),
+            TypeDeclCycle(..) => "cycle in type declaration".to_owned(),
+        };
+        Diagnostic::new_error(&msg)
+    }
+}
+
 pub type TypecheckErr = Spanned<TypecheckErrType>;
+
+impl TypecheckErr {
+    pub fn label(&self) -> Label {
+        Label::new_primary(self.span)
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Type {
@@ -248,10 +276,15 @@ impl Env {
         }
     }
 
-    fn first_pass(&mut self, decls: Vec<Decl>) -> Result<()> {
+    pub fn translate_decls(&mut self, decls: &[Decl]) -> Result<()> {
+        self.first_pass(&decls)?;
+        self.second_pass(&decls)
+    }
+
+    fn first_pass(&mut self, decls: &[Decl]) -> Result<()> {
         let mut errors = vec![];
-        let mut did_find_cycle = false;
-        for decl in &decls {
+        let mut found_cycle = false;
+        for decl in decls {
             match self.translate_decl_first_pass(decl) {
                 Ok(()) => (),
                 Err(errs) => {
@@ -261,14 +294,31 @@ impl Env {
                             ..
                         } = err
                         {
-                            did_find_cycle = true;
+                            found_cycle = true;
                         }
                     }
                     errors.extend(errs);
                 }
             }
-            if did_find_cycle {
+            if found_cycle {
                 return Err(errors);
+            }
+        }
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+
+    fn second_pass(&mut self, decls: &[Decl]) -> Result<()> {
+        let mut errors = vec![];
+        for Decl { t: decl, .. } in decls {
+            if let DeclType::Fn(fn_decl) = decl {
+                match self.translate_fn_decl_body(fn_decl) {
+                    Ok(()) => (),
+                    Err(errs) => errors.extend(errs),
+                }
             }
         }
         if errors.is_empty() {
@@ -905,5 +955,35 @@ mod tests {
         env.insert_type("a".to_owned(), Type::Alias("b".to_owned()), zspan!());
         env.insert_type("b".to_owned(), Type::Alias("c".to_owned()), zspan!());
         assert_eq!(env.check_for_type_decl_cycles("a", vec![]), Ok(()));
+    }
+
+    #[test]
+    fn test_translate_first_pass() {
+        let mut env = Env::default();
+        let result = env.first_pass(&vec![
+            Decl::new(
+                DeclType::Type(zspan!(TypeDecl {
+                    id: zspan!("a".to_owned()),
+                    ty: zspan!(ast::Type::Type(zspan!("a".to_owned())))
+                })),
+                zspan!(),
+            ),
+            Decl::new(
+                DeclType::Fn(zspan!(FnDecl {
+                    id: zspan!("f".to_owned()),
+                    type_fields: vec![],
+                    return_type: None,
+                    body: expr!(ExprType::Unit)
+                })),
+                zspan!(),
+            ),
+        ]);
+        assert_eq!(
+            result,
+            Err(vec![TypecheckErr::new(
+                TypecheckErrType::TypeDeclCycle("a".to_owned(), Type::Alias("a".to_owned())),
+                zspan!()
+            )])
+        );
     }
 }

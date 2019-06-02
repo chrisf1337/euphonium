@@ -77,25 +77,19 @@ fn main() -> Result<(), EuphcErr> {
         return Err(EuphcErr::ParseErr);
     }
 
-    let mut typecheck_errors = vec![];
     let mut env = Env::default();
-    for decl in decls {
-        match env.translate_decl_first_pass(&decl) {
-            Ok(()) => (),
-            Err(errs) => typecheck_errors.extend(errs),
+    match env.translate_decls(&decls) {
+        Ok(()) => (),
+        Err(typecheck_errors) => {
+            for err in typecheck_errors {
+                codespan_reporting::emit(
+                    &mut writer,
+                    &sourcemap.codemap,
+                    &err.diagnostic(&env).with_label(err.label()),
+                )?;
+            }
+            return Err(EuphcErr::TypecheckErr);
         }
-    }
-
-    if !typecheck_errors.is_empty() {
-        for err in typecheck_errors {
-            codespan_reporting::emit(
-                &mut writer,
-                &sourcemap.codemap,
-                &Diagnostic::new_error("typecheck error")
-                    .with_label(Label::new_primary(err.span).with_message(format!("{:?}", err))),
-            )?;
-        }
-        return Err(EuphcErr::TypecheckErr);
     }
 
     println!("{:#?}", env);
