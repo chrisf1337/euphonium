@@ -80,7 +80,7 @@ fn main() -> Result<(), EuphcErr> {
     let mut typecheck_errors = vec![];
     let mut env = Env::default();
     for decl in decls {
-        match env.translate_decl(&decl) {
+        match env.translate_decl_first_pass(&decl) {
             Ok(()) => (),
             Err(errs) => typecheck_errors.extend(errs),
         }

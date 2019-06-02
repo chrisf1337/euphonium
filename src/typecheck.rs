@@ -21,6 +21,8 @@ pub enum TypecheckErrType {
     UndefinedField(String),
     UndefinedType(Type),
     CannotSubscript,
+    /// Type triggering the cycle, what it was aliased to
+    TypeDeclCycle(String, Type),
 }
 
 pub type TypecheckErr = Spanned<TypecheckErrType>;
@@ -37,6 +39,16 @@ pub enum Type {
     Alias(String),
     Enum(Vec<EnumCase>),
     Fn(Vec<Type>, Box<Type>),
+}
+
+impl Type {
+    fn alias(&self) -> Option<&str> {
+        if let Type::Alias(alias) = self {
+            Some(alias)
+        } else {
+            None
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -214,15 +226,97 @@ impl Env {
         self.types.get(ty).map_or(None, |ty| self.resolve(ty))
     }
 
-    pub fn translate_decl(&mut self, decl: &Decl) -> Result<()> {
-        match &decl.t {
-            DeclType::Fn(fn_decl) => self.translate_fn_decl(fn_decl),
-            DeclType::Type(type_decl) => self.translate_type_decl(type_decl),
-            _ => unimplemented!(),
+    /// Call after translating type decls.
+    fn check_for_type_decl_cycles(&self, ty: &str, path: Vec<&str>) -> Result<()> {
+        if let Some(alias) = self.types.get(ty) {
+            if let Some(alias_str) = alias.alias() {
+                if path.contains(&alias_str) {
+                    let span = self.type_def_spans[ty];
+                    return Err(vec![TypecheckErr::new(
+                        TypecheckErrType::TypeDeclCycle(ty.to_string(), alias.clone()),
+                        span,
+                    )]);
+                }
+                let mut path = path;
+                path.push(ty);
+                self.check_for_type_decl_cycles(alias_str, path)
+            } else {
+                Ok(())
+            }
+        } else {
+            Ok(())
         }
     }
 
-    fn translate_fn_decl(&mut self, fn_decl: &Spanned<FnDecl>) -> Result<()> {
+    fn first_pass(&mut self, decls: Vec<Decl>) -> Result<()> {
+        let mut errors = vec![];
+        let mut did_find_cycle = false;
+        for decl in &decls {
+            match self.translate_decl_first_pass(decl) {
+                Ok(()) => (),
+                Err(errs) => {
+                    for err in &errs {
+                        if let TypecheckErr {
+                            t: TypecheckErrType::TypeDeclCycle(..),
+                            ..
+                        } = err
+                        {
+                            did_find_cycle = true;
+                        }
+                    }
+                    errors.extend(errs);
+                }
+            }
+            if did_find_cycle {
+                return Err(errors);
+            }
+        }
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+
+    pub fn translate_decl_first_pass(&mut self, decl: &Decl) -> Result<()> {
+        match &decl.t {
+            DeclType::Fn(fn_decl) => self.translate_fn_decl_sig(fn_decl),
+            DeclType::Type(type_decl) => {
+                self.translate_type_decl(type_decl)?;
+                self.check_for_type_decl_cycles(&type_decl.id, vec![])
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    fn translate_fn_decl_sig(&mut self, fn_decl: &Spanned<FnDecl>) -> Result<()> {
+        let mut param_types = vec![];
+        for Spanned {
+            t:
+                ast::TypeField {
+                    ty: Spanned { t: ty, .. },
+                    ..
+                },
+            ..
+        } in &fn_decl.type_fields
+        {
+            param_types.push(ty.clone().into());
+        }
+        let return_type = if let Some(Spanned { t: return_type, .. }) = &fn_decl.return_type {
+            return_type.clone().into()
+        } else {
+            Type::Unit
+        };
+        self.vars.insert(
+            fn_decl.id.t.clone(),
+            Type::Fn(param_types, Box::new(return_type)),
+        );
+        self.var_def_spans
+            .insert(fn_decl.id.t.clone(), fn_decl.span);
+        Ok(())
+    }
+
+    fn translate_fn_decl_body(&mut self, fn_decl: &Spanned<FnDecl>) -> Result<()> {
         let mut new_env = self.clone();
         let mut all_errs = vec![];
         let mut param_types = vec![];
@@ -287,7 +381,6 @@ impl Env {
             ExprType::String(_) => Ok(Type::String),
             ExprType::Number(_) => Ok(Type::Int),
             ExprType::Neg(expr) => assert_ty!(self, expr, &Type::Int),
-
             ExprType::Arith(l, _, r) => {
                 assert_ty!(self, l, &Type::Int)?;
                 assert_ty!(self, r, &Type::Int)?;
@@ -441,12 +534,16 @@ impl Env {
             )])
         }
     }
+
+    fn translate_record(&self, Spanned { t: record, span }: &Spanned<Record>) -> Result<Type> {
+        Ok(Type::Unit)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::{self, BoolOp};
+    use crate::ast::{self, BoolOp, TypeField};
     use codespan::ByteOffset;
     use pretty_assertions::assert_eq;
 
@@ -686,6 +783,25 @@ mod tests {
     }
 
     #[test]
+    fn test_typecheck_fn_call_returns_aliased_type() {
+        let mut env = Env::default();
+        env.insert_type("a".to_owned(), Type::Alias("int".to_owned()), zspan!());
+        env.insert_var(
+            "f".to_owned(),
+            Type::Fn(vec![], Box::new(Type::Alias("a".to_owned()))),
+            zspan!(),
+        );
+        let fn_call = zspan!(FnCall {
+            id: zspan!("f".to_owned()),
+            args: vec![]
+        });
+        assert_eq!(
+            env.translate_fn_call(&fn_call).unwrap(),
+            Type::Alias("a".to_owned())
+        );
+    }
+
+    #[test]
     fn test_typecheck_typedef() {
         let mut env = Env::default();
         let type_decl = zspan!(TypeDecl {
@@ -745,5 +861,49 @@ mod tests {
             env.translate_expr(&expr).unwrap(),
             Type::Alias("i".to_owned())
         );
+    }
+
+    #[test]
+    fn test_recursive_typedef() {
+        let mut env = Env::default();
+        let type_decl = zspan!(DeclType::Type(zspan!(TypeDecl {
+            id: zspan!("i".to_owned()),
+            ty: zspan!(ast::Type::Record(vec![zspan!(TypeField {
+                id: zspan!("i".to_owned()),
+                ty: zspan!(ast::Type::Type(zspan!("i".to_owned())))
+            })]))
+        })));
+        env.translate_decl_first_pass(&type_decl)
+            .expect("translate decl");
+    }
+
+    #[test]
+    fn test_check_for_type_decl_cycles_err1() {
+        let mut env = Env::default();
+        env.insert_type("a".to_owned(), Type::Alias("a".to_owned()), zspan!());
+        assert_eq!(
+            env.check_for_type_decl_cycles("a", vec![]).unwrap_err()[0].t,
+            TypecheckErrType::TypeDeclCycle("a".to_owned(), Type::Alias("a".to_owned()))
+        );
+    }
+
+    #[test]
+    fn test_check_for_type_decl_cycles_err2() {
+        let mut env = Env::default();
+        env.insert_type("a".to_owned(), Type::Alias("b".to_owned()), zspan!());
+        env.insert_type("b".to_owned(), Type::Alias("c".to_owned()), zspan!());
+        env.insert_type("c".to_owned(), Type::Alias("a".to_owned()), zspan!());
+        assert_eq!(
+            env.check_for_type_decl_cycles("a", vec![]).unwrap_err()[0].t,
+            TypecheckErrType::TypeDeclCycle("c".to_owned(), Type::Alias("a".to_owned()))
+        );
+    }
+
+    #[test]
+    fn test_check_for_type_decl_cycles() {
+        let mut env = Env::default();
+        env.insert_type("a".to_owned(), Type::Alias("b".to_owned()), zspan!());
+        env.insert_type("b".to_owned(), Type::Alias("c".to_owned()), zspan!());
+        assert_eq!(env.check_for_type_decl_cycles("a", vec![]), Ok(()));
     }
 }
