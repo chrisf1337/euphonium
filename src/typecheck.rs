@@ -20,7 +20,7 @@ pub enum TypecheckErrType {
     UndefinedVar(String),
     UndefinedFn(String),
     UndefinedField(String),
-    UndefinedType(Type),
+    UndefinedType(String),
     CannotSubscript,
     /// Type triggering the cycle, what it was aliased to
     TypeDeclCycle(String, Type),
@@ -30,12 +30,18 @@ impl TypecheckErrType {
     pub fn diagnostic(&self, env: &Env) -> Diagnostic {
         use TypecheckErrType::*;
         let msg = match self {
-            TypeMismatch(expected, actual) => format!("type mismatch\nexpected: {:?}\n  actual: {:?}", expected, actual),
-            ArityMismatch(expected, actual) => format!("arity mismatch\nexpected: {:?}\n  actual: {:?}", expected, actual),
+            TypeMismatch(expected, actual) => format!(
+                "type mismatch\nexpected: {:?}\n  actual: {:?}",
+                expected, actual
+            ),
+            ArityMismatch(expected, actual) => format!(
+                "arity mismatch\nexpected: {:?}\n  actual: {:?}",
+                expected, actual
+            ),
             NotAFn(fun) => {
                 let ty = env.get_var_type(fun).unwrap();
                 format!("not a function: {} (has type {:?})", fun, ty)
-            },
+            }
             UndefinedVar(var) => format!("undefined variable: {}", var),
             UndefinedFn(fun) => format!("undefined function: {}", fun),
             UndefinedField(field) => format!("undefined field: {}", field),
@@ -60,7 +66,6 @@ pub enum Type {
     Int,
     String,
     Bool,
-    /// first span: id, second span: type
     Record(HashMap<String, Type>),
     Array(Box<Type>, usize),
     Unit,
@@ -235,7 +240,7 @@ impl Env {
                     self.resolve_type(resolved_type, span)
                 } else {
                     Err(vec![TypecheckErr::new(
-                        TypecheckErrType::UndefinedType(ty.clone()),
+                        TypecheckErrType::UndefinedType(alias.clone()),
                         def_span,
                     )])
                 }
@@ -254,7 +259,6 @@ impl Env {
         self.types.get(ty).map_or(None, |ty| self.resolve(ty))
     }
 
-    /// Call after translating type decls.
     fn check_for_type_decl_cycles(&self, ty: &str, path: Vec<&str>) -> Result<()> {
         if let Some(alias) = self.types.get(ty) {
             if let Some(alias_str) = alias.alias() {
@@ -271,6 +275,91 @@ impl Env {
             } else {
                 Ok(())
             }
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Call after translating type decls and checking for cycles.
+    fn validate_type(&self, ty: &Type, def_span: ByteSpan) -> Result<()> {
+        match ty {
+            Type::String | Type::Bool | Type::Unit | Type::Int => Ok(()),
+            Type::Alias(_) => self.resolve_type(ty, def_span).map(|_| ()),
+            Type::Record(record) => {
+                let mut errors = vec![];
+                for ty in record.values() {
+                    match self.validate_type(ty, def_span) {
+                        Ok(()) => (),
+                        Err(errs) => errors.extend(errs),
+                    }
+                }
+                if errors.is_empty() {
+                    Ok(())
+                } else {
+                    Err(errors)
+                }
+            }
+            Type::Array(ty, _) => self.validate_type(ty, def_span),
+            Type::Enum(cases) => {
+                let mut errors = vec![];
+                for case in cases {
+                    for param in &case.params {
+                        match param {
+                            EnumParam::Simple(ty) => match self.validate_type(ty, def_span) {
+                                Ok(()) => (),
+                                Err(errs) => errors.extend(errs),
+                            },
+                            EnumParam::Record(fields) => {
+                                for ty in fields.values() {
+                                    match self.validate_type(ty, def_span) {
+                                        Ok(()) => (),
+                                        Err(errs) => errors.extend(errs),
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                if errors.is_empty() {
+                    Ok(())
+                } else {
+                    Err(errors)
+                }
+            }
+            Type::Fn(param_types, return_type) => {
+                let mut errors = vec![];
+
+                for param_type in param_types {
+                    match self.validate_type(param_type, def_span) {
+                        Ok(()) => (),
+                        Err(errs) => errors.extend(errs),
+                    }
+                }
+
+                match self.validate_type(return_type, def_span) {
+                    Ok(()) => (),
+                    Err(errs) => errors.extend(errs),
+                }
+
+                if errors.is_empty() {
+                    Ok(())
+                } else {
+                    Err(errors)
+                }
+            }
+        }
+    }
+
+    fn check_for_invalid_types(&self) -> Result<()> {
+        let mut errors = vec![];
+        for (id, ty) in &self.types {
+            match self.validate_type(ty, self.type_def_spans[id]) {
+                Ok(()) => (),
+                Err(errs) => errors.extend(errs),
+            }
+        }
+        if !errors.is_empty() {
+            Err(errors)
         } else {
             Ok(())
         }
@@ -304,6 +393,12 @@ impl Env {
                 return Err(errors);
             }
         }
+
+        match self.check_for_invalid_types() {
+            Ok(()) => (),
+            Err(errs) => errors.extend(errs),
+        }
+
         if errors.is_empty() {
             Ok(())
         } else {
@@ -585,8 +680,22 @@ impl Env {
         }
     }
 
-    fn translate_record(&self, Spanned { t: record, span }: &Spanned<Record>) -> Result<Type> {
-        Ok(Type::Unit)
+    fn translate_record(
+        &self,
+        Spanned {
+            t: Record { id, field_assigns },
+            span,
+        }: &Spanned<Record>,
+    ) -> Result<Type> {
+        if let Some(record_type) = self.types.get(&id.t) {
+            for field_assign in field_assigns {}
+            Ok(Type::Unit)
+        } else {
+            Err(vec![TypecheckErr::new(
+                TypecheckErrType::UndefinedType(id.t.clone()),
+                id.span,
+            )])
+        }
     }
 }
 
@@ -629,7 +738,7 @@ mod tests {
         assert_eq!(
             env.resolve_ast_type(&zspan!(ast::Type::Type(zspan!("d".to_owned())))),
             Err(vec![TypecheckErr::new(
-                TypecheckErrType::UndefinedType(Type::Alias("e".to_owned())),
+                TypecheckErrType::UndefinedType("e".to_owned()),
                 zspan!()
             )])
         );
@@ -985,5 +1094,19 @@ mod tests {
                 zspan!()
             )])
         );
+    }
+
+    #[test]
+    fn test_validate_type() {
+        let mut env = Env::default();
+        let mut record_fields = HashMap::new();
+        record_fields.insert("f".to_owned(), Type::Alias("a".to_owned()));
+        record_fields.insert("g".to_owned(), Type::Alias("b".to_owned()));
+        env.insert_type("a".to_owned(), Type::Record(record_fields), zspan!());
+
+        let errs = env.check_for_invalid_types().unwrap_err();
+        assert_eq!(errs.len(), 1);
+        // Recursive type def in records is allowed
+        assert_eq!(errs[0].t, TypecheckErrType::UndefinedType("b".to_owned()));
     }
 }
