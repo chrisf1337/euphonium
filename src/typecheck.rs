@@ -1,10 +1,10 @@
 use crate::ast::{
-    self, Decl, DeclType, Expr, ExprType, FnCall, FnDecl, LVal, Let, Pattern, Record, Spanned,
-    TypeDecl,
+    self, Decl, DeclType, Expr, ExprType, FieldAssign, FnCall, FnDecl, LVal, Let, Pattern, Record,
+    Spanned, TypeDecl,
 };
 use codespan::{ByteIndex, ByteSpan};
 use codespan_reporting::{Diagnostic, Label};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 pub type Result<T> = std::result::Result<T, Vec<TypecheckErr>>;
 
@@ -17,6 +17,7 @@ pub enum TypecheckErrType {
     // function type.
     ArityMismatch(usize, usize),
     NotAFn(String),
+    NotARecord(String),
     UndefinedVar(String),
     UndefinedFn(String),
     UndefinedField(String),
@@ -24,6 +25,9 @@ pub enum TypecheckErrType {
     CannotSubscript,
     /// Type triggering the cycle, what it was aliased to
     TypeDeclCycle(String, Type),
+    MissingFields(Vec<String>),
+    InvalidFields(Vec<String>),
+    IllegalLetExpr,
 }
 
 impl TypecheckErrType {
@@ -39,8 +43,12 @@ impl TypecheckErrType {
                 expected, actual
             ),
             NotAFn(fun) => {
-                let ty = env.get_var_type(fun).unwrap();
+                let ty = env.vars.get(fun).unwrap();
                 format!("not a function: {} (has type {:?})", fun, ty)
+            }
+            NotARecord(ty) => {
+                let actual_ty = env.types.get(ty).unwrap();
+                format!("not a record: {} (has type {:?})", ty, actual_ty)
             }
             UndefinedVar(var) => format!("undefined variable: {}", var),
             UndefinedFn(fun) => format!("undefined function: {}", fun),
@@ -48,6 +56,9 @@ impl TypecheckErrType {
             UndefinedType(ty) => format!("undefined type: {:?}", ty),
             CannotSubscript => "cannot subscript".to_owned(),
             TypeDeclCycle(..) => "cycle in type declaration".to_owned(),
+            MissingFields(fields) => format!("missing fields: {}", fields.join(", ")),
+            InvalidFields(fields) => format!("invalid fields: {}", fields.join(", ")),
+            IllegalLetExpr => "a let expression cannot be used here".to_owned(),
         };
         Diagnostic::new_error(&msg)
     }
@@ -406,11 +417,12 @@ impl Env {
         }
     }
 
-    fn second_pass(&mut self, decls: &[Decl]) -> Result<()> {
+    fn second_pass(&self, decls: &[Decl]) -> Result<()> {
         let mut errors = vec![];
         for Decl { t: decl, .. } in decls {
             if let DeclType::Fn(fn_decl) = decl {
-                match self.translate_fn_decl_body(fn_decl) {
+                let mut new_env = self.clone();
+                match new_env.translate_fn_decl_body(fn_decl) {
                     Ok(()) => (),
                     Err(errs) => errors.extend(errs),
                 }
@@ -479,7 +491,7 @@ impl Env {
         } else {
             Type::Unit
         };
-        let body_type = new_env.translate_expr(&fn_decl.body)?;
+        let body_type = new_env.translate_expr_mut(&fn_decl.body)?;
         if self.resolve_type(&body_type, fn_decl.body.span)?
             != self.resolve_type(
                 &return_type,
@@ -509,17 +521,19 @@ impl Env {
         Ok(())
     }
 
-    fn translate_expr(&mut self, expr: &Expr) -> Result<Type> {
+    fn translate_expr(&self, expr: &Expr) -> Result<Type> {
         match &expr.t {
             ExprType::Seq(exprs, returns) => {
+                // New scope
+                let mut new_env = self.clone();
                 for expr in &exprs[..exprs.len() - 1] {
-                    let _ = self.translate_expr(expr)?;
+                    let _ = new_env.translate_expr_mut(expr)?;
                 }
                 let last_expr = exprs.last().unwrap();
                 if *returns {
-                    Ok(self.translate_expr(last_expr)?)
+                    Ok(new_env.translate_expr_mut(last_expr)?)
                 } else {
-                    let _ = self.translate_expr(last_expr)?;
+                    let _ = new_env.translate_expr_mut(last_expr)?;
                     Ok(Type::Unit)
                 }
             }
@@ -540,13 +554,24 @@ impl Env {
                 Ok(Type::Bool)
             }
             ExprType::LVal(lval) => self.translate_lval(lval),
-            ExprType::Let(let_expr) => self.translate_let(let_expr),
+            ExprType::Let(_) => Err(vec![TypecheckErr::new(
+                TypecheckErrType::IllegalLetExpr,
+                expr.span,
+            )]),
             ExprType::FnCall(fn_call) => self.translate_fn_call(fn_call),
+            ExprType::Record(record) => self.translate_record(record),
             _ => unimplemented!(),
         }
     }
 
-    fn translate_lval(&mut self, lval: &Spanned<LVal>) -> Result<Type> {
+    fn translate_expr_mut(&mut self, expr: &Expr) -> Result<Type> {
+        match &expr.t {
+            ExprType::Let(let_expr) => self.translate_let(let_expr),
+            _ => self.translate_expr(expr),
+        }
+    }
+
+    fn translate_lval(&self, lval: &Spanned<LVal>) -> Result<Type> {
         match &lval.t {
             LVal::Simple(var) => {
                 if let Some(ty) = self.vars.get(var) {
@@ -602,7 +627,7 @@ impl Env {
         let Let {
             pattern, ty, expr, ..
         } = &let_expr.t;
-        let expr_type = self.translate_expr(expr)?;
+        let expr_type = self.translate_expr_mut(expr)?;
         if let Some(ty) = ty {
             // Type annotation
             let resolved_ty = self.resolve_ast_type(ty)?;
@@ -630,7 +655,7 @@ impl Env {
     }
 
     fn translate_fn_call(
-        &mut self,
+        &self,
         Spanned {
             t: FnCall { id, args },
             span,
@@ -687,9 +712,76 @@ impl Env {
             span,
         }: &Spanned<Record>,
     ) -> Result<Type> {
-        if let Some(record_type) = self.types.get(&id.t) {
-            for field_assign in field_assigns {}
-            Ok(Type::Unit)
+        if let Some(ty) = self.types.get(&id.t) {
+            if let Type::Record(field_types) = ty {
+                let mut field_assigns_hm = HashMap::new();
+                for field_assign in field_assigns {
+                    field_assigns_hm.insert(field_assign.id.t.clone(), field_assign.expr.clone());
+                }
+                let missing_fields: HashSet<&String> = field_types
+                    .keys()
+                    .collect::<HashSet<&String>>()
+                    .difference(&field_assigns_hm.keys().collect())
+                    .map(|&k| k)
+                    .collect();
+                if !missing_fields.is_empty() {
+                    let mut missing_fields: Vec<String> =
+                        missing_fields.into_iter().cloned().collect();
+                    missing_fields.sort_unstable();
+                    return Err(vec![TypecheckErr::new(
+                        TypecheckErrType::MissingFields(missing_fields),
+                        *span,
+                    )]);
+                }
+                let invalid_fields: HashSet<&String> = field_assigns_hm
+                    .keys()
+                    .collect::<HashSet<&String>>()
+                    .difference(&field_types.keys().collect())
+                    .map(|&k| k)
+                    .collect();
+                if !invalid_fields.is_empty() {
+                    let mut invalid_fields: Vec<String> =
+                        invalid_fields.into_iter().cloned().collect();
+                    invalid_fields.sort_unstable();
+                    return Err(vec![TypecheckErr::new(
+                        TypecheckErrType::InvalidFields(invalid_fields),
+                        *span,
+                    )]);
+                }
+
+                let mut errors = vec![];
+                for Spanned {
+                    t: FieldAssign { id, expr },
+                    span,
+                } in field_assigns
+                {
+                    let type_def_span = self.type_def_spans[&id.t];
+                    // This should never error
+                    let expected_type = self.resolve_type(&field_types[&id.t], type_def_span)?;
+                    let ty = self.translate_expr(expr)?;
+                    let actual_type = self.resolve_type(&ty, expr.span)?;
+                    if expected_type != actual_type {
+                        errors.push(TypecheckErr::new(
+                            TypecheckErrType::TypeMismatch(
+                                expected_type.clone(),
+                                actual_type.clone(),
+                            ),
+                            *span,
+                        ));
+                    }
+                }
+
+                if !errors.is_empty() {
+                    return Err(errors);
+                }
+
+                Ok(ty.clone())
+            } else {
+                Err(vec![TypecheckErr::new(
+                    TypecheckErrType::NotARecord(id.t.clone()),
+                    *span,
+                )])
+            }
         } else {
             Err(vec![TypecheckErr::new(
                 TypecheckErrType::UndefinedType(id.t.clone()),
@@ -704,6 +796,7 @@ mod tests {
     use super::*;
     use crate::ast::{self, BoolOp, TypeField};
     use codespan::ByteOffset;
+    use maplit::hashmap;
     use pretty_assertions::assert_eq;
 
     #[test]
@@ -746,29 +839,29 @@ mod tests {
 
     #[test]
     fn test_typecheck_bool_expr() {
-        let expr = expr!(ExprType::Bool(
-            Box::new(expr!(ExprType::BoolLiteral(true))),
+        let expr = zspan!(ExprType::Bool(
+            Box::new(zspan!(ExprType::BoolLiteral(true))),
             zspan!(BoolOp::And),
-            Box::new(expr!(ExprType::BoolLiteral(true))),
+            Box::new(zspan!(ExprType::BoolLiteral(true))),
         ));
         let mut env = Env::default();
-        assert_eq!(env.translate_expr(&expr), Ok(Type::Bool));
+        assert_eq!(env.translate_expr_mut(&expr), Ok(Type::Bool));
     }
 
     #[test]
     fn test_typecheck_bool_expr_source() {
-        let expr = expr!(ExprType::Bool(
-            Box::new(expr!(ExprType::Bool(
-                Box::new(expr!(ExprType::BoolLiteral(true))),
+        let expr = zspan!(ExprType::Bool(
+            Box::new(zspan!(ExprType::Bool(
+                Box::new(zspan!(ExprType::BoolLiteral(true))),
                 zspan!(BoolOp::And),
-                Box::new(expr!(ExprType::Number(1)))
+                Box::new(zspan!(ExprType::Number(1)))
             ))),
             zspan!(BoolOp::And),
-            Box::new(expr!(ExprType::BoolLiteral(true))),
+            Box::new(zspan!(ExprType::BoolLiteral(true))),
         ));
         let mut env = Env::default();
         assert_eq!(
-            env.translate_expr(&expr),
+            env.translate_expr_mut(&expr),
             Err(vec![TypecheckErr {
                 t: TypecheckErrType::TypeMismatch(Type::Bool, Type::Int),
                 span: span!(0, 0, ByteOffset(0))
@@ -848,7 +941,7 @@ mod tests {
         );
         let lval = zspan!(LVal::Subscript(
             Box::new(zspan!(LVal::Simple("x".to_owned()))),
-            expr!(ExprType::Number(0))
+            zspan!(ExprType::Number(0))
         ));
         assert_eq!(env.translate_lval(&lval), Ok(Type::Int));
     }
@@ -860,7 +953,7 @@ mod tests {
             pattern: zspan!(Pattern::String("x".to_owned())),
             mutable: zspan!(false),
             ty: Some(zspan!(ast::Type::Type(zspan!("int".to_owned())))),
-            expr: expr!(ExprType::Number(0))
+            expr: zspan!(ExprType::Number(0))
         });
         assert_eq!(env.translate_let(&let_expr), Ok(Type::Unit));
         assert_eq!(env.vars["x"], Type::Int);
@@ -874,7 +967,7 @@ mod tests {
             pattern: zspan!(Pattern::String("x".to_owned())),
             mutable: zspan!(false),
             ty: Some(zspan!(ast::Type::Type(zspan!("string".to_owned())))),
-            expr: expr!(ExprType::Number(0))
+            expr: zspan!(ExprType::Number(0))
         });
         assert_eq!(
             env.translate_let(&let_expr).unwrap_err()[0].t,
@@ -923,7 +1016,7 @@ mod tests {
         );
         let fn_call_expr = zspan!(FnCall {
             id: zspan!("f".to_owned()),
-            args: vec![expr!(ExprType::Number(0))],
+            args: vec![zspan!(ExprType::Number(0))],
         });
         assert_eq!(
             env.translate_fn_call(&fn_call_expr).unwrap_err()[0].t,
@@ -971,7 +1064,7 @@ mod tests {
             pattern: zspan!(Pattern::Wildcard),
             mutable: zspan!(false),
             ty: Some(zspan!(ast::Type::Type(zspan!("a".to_owned())))),
-            expr: expr!(ExprType::Number(0)),
+            expr: zspan!(ExprType::Number(0)),
         });
         let _ = env.translate_type_decl(&type_decl);
         assert!(env.translate_let(&let_expr).is_ok());
@@ -988,7 +1081,7 @@ mod tests {
             pattern: zspan!(Pattern::Wildcard),
             mutable: zspan!(false),
             ty: Some(zspan!(ast::Type::Type(zspan!("a".to_owned())))),
-            expr: expr!(ExprType::String("".to_owned())),
+            expr: zspan!(ExprType::String("".to_owned())),
         });
         let _ = env.translate_type_decl(&type_decl);
         assert_eq!(
@@ -1008,16 +1101,16 @@ mod tests {
             pattern: zspan!(Pattern::String("i".to_owned())),
             mutable: zspan!(false),
             ty: Some(zspan!(ast::Type::Type(zspan!("i".to_owned())))),
-            expr: expr!(ExprType::Number(0))
+            expr: zspan!(ExprType::Number(0))
         });
-        let expr = expr!(ExprType::LVal(Box::new(zspan!(LVal::Simple(
+        let expr = zspan!(ExprType::LVal(Box::new(zspan!(LVal::Simple(
             "i".to_owned()
         )))));
         env.translate_type_decl(&type_decl)
             .expect("translate type decl");
         env.translate_let(&var_def).expect("translate var def");
         assert_eq!(
-            env.translate_expr(&expr).unwrap(),
+            env.translate_expr_mut(&expr).unwrap(),
             Type::Alias("i".to_owned())
         );
     }
@@ -1082,7 +1175,7 @@ mod tests {
                     id: zspan!("f".to_owned()),
                     type_fields: vec![],
                     return_type: None,
-                    body: expr!(ExprType::Unit)
+                    body: zspan!(ExprType::Unit)
                 })),
                 zspan!(),
             ),
@@ -1108,5 +1201,40 @@ mod tests {
         assert_eq!(errs.len(), 1);
         // Recursive type def in records is allowed
         assert_eq!(errs[0].t, TypecheckErrType::UndefinedType("b".to_owned()));
+    }
+
+    #[test]
+    fn test_translate_record_missing_fields() {
+        let mut env = Env::default();
+        let record_type = Type::Record(hashmap! {
+            "a".to_owned() => Type::Int,
+        });
+        env.insert_type("r".to_owned(), record_type, zspan!());
+        let record = zspan!(Record {
+            id: zspan!("r".to_owned()),
+            field_assigns: vec![]
+        });
+        assert_eq!(
+            env.translate_record(&record).unwrap_err()[0].t,
+            TypecheckErrType::MissingFields(vec!["a".to_owned()])
+        );
+    }
+
+    #[test]
+    fn test_translate_record_invalid_fields() {
+        let mut env = Env::default();
+        let record_type = Type::Record(HashMap::new());
+        env.insert_type("r".to_owned(), record_type, zspan!());
+        let record = zspan!(Record {
+            id: zspan!("r".to_owned()),
+            field_assigns: vec![zspan!(FieldAssign {
+                id: zspan!("b".to_owned()),
+                expr: zspan!(ExprType::Number(0))
+            })]
+        });
+        assert_eq!(
+            env.translate_record(&record).unwrap_err()[0].t,
+            TypecheckErrType::InvalidFields(vec!["b".to_owned()])
+        );
     }
 }

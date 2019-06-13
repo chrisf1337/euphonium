@@ -6,9 +6,3 @@ macro_rules! zspan {
         Spanned::new($e, zspan!())
     };
 }
-
-macro_rules! expr {
-    ( $ty:expr ) => {
-        Expr::new($ty, zspan!())
-    };
-}

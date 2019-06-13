@@ -425,7 +425,7 @@ impl From<FnCall> for _FnCall {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Record {
     pub id: Spanned<String>,
-    pub field_assigns: Vec<FieldAssign>,
+    pub field_assigns: Vec<Spanned<FieldAssign>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -441,7 +441,7 @@ impl From<Record> for _Record {
             field_assigns: record
                 .field_assigns
                 .into_iter()
-                .map(_FieldAssign::from)
+                .map(|assign| assign.t.into())
                 .collect(),
         }
     }
