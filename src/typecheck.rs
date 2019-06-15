@@ -977,7 +977,7 @@ mod tests {
 
     #[test]
     fn test_typecheck_fn_call_undefined_err() {
-        let mut env = Env::default();
+        let env = Env::default();
         let fn_call_expr = zspan!(FnCall {
             id: zspan!("f".to_owned()),
             args: vec![],
@@ -1235,6 +1235,85 @@ mod tests {
         assert_eq!(
             env.translate_record(&record).unwrap_err()[0].t,
             TypecheckErrType::InvalidFields(vec!["b".to_owned()])
+        );
+    }
+
+    #[test]
+    fn test_translate_fn_independent() {
+        let mut env = Env::default();
+        let fn_expr1 = zspan!(ExprType::Seq(
+            vec![zspan!(ExprType::Let(Box::new(zspan!(Let {
+                pattern: zspan!(Pattern::String("a".to_owned())),
+                mutable: zspan!(false),
+                ty: None,
+                expr: zspan!(ExprType::Number(0))
+            }))))],
+            false
+        ));
+        let fn_expr2 = zspan!(ExprType::LVal(Box::new(zspan!(LVal::Simple(
+            "a".to_owned()
+        )))));
+
+        let fn1 = zspan!(DeclType::Fn(zspan!(FnDecl {
+            id: zspan!("f1".to_owned()),
+            type_fields: vec![],
+            return_type: None,
+            body: fn_expr1,
+        })));
+        let fn2 = zspan!(DeclType::Fn(zspan!(FnDecl {
+            id: zspan!("f2".to_owned()),
+            type_fields: vec![],
+            return_type: None,
+            body: fn_expr2,
+        })));
+
+        assert_eq!(
+            env.translate_decls(&[fn1, fn2]).unwrap_err()[0].t,
+            TypecheckErrType::UndefinedVar("a".to_owned())
+        );
+    }
+
+    #[test]
+    fn test_translate_seq_independent() {
+        let env = Env::default();
+        let seq_expr1 = zspan!(ExprType::Seq(
+            vec![zspan!(ExprType::Let(Box::new(zspan!(Let {
+                pattern: zspan!(Pattern::String("a".to_owned())),
+                mutable: zspan!(false),
+                ty: None,
+                expr: zspan!(ExprType::Number(0))
+            }))))],
+            false
+        ));
+        let seq_expr2 = zspan!(ExprType::LVal(Box::new(zspan!(LVal::Simple(
+            "a".to_owned()
+        )))));
+
+        env.translate_expr(&seq_expr1).expect("translate expr");
+        assert_eq!(
+            env.translate_expr(&seq_expr2).unwrap_err()[0].t,
+            TypecheckErrType::UndefinedVar("a".to_owned())
+        );
+    }
+
+    #[test]
+    fn test_illegal_let_expr() {
+        let env = Env::default();
+        let expr = zspan!(ExprType::Let(Box::new(zspan!(Let {
+            pattern: zspan!(Pattern::Wildcard),
+            mutable: zspan!(false),
+            ty: None,
+            expr: zspan!(ExprType::Let(Box::new(zspan!(Let {
+                pattern: zspan!(Pattern::Wildcard),
+                mutable: zspan!(false),
+                ty: None,
+                expr: zspan!(ExprType::Unit)
+            }))))
+        }))));
+
+        assert_eq!(
+            env.translate_expr(&expr).unwrap_err()[0].t,
+            TypecheckErrType::IllegalLetExpr
         );
     }
 }
