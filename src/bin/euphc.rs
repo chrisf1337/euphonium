@@ -85,7 +85,7 @@ fn main() -> Result<(), EuphcErr> {
                 codespan_reporting::emit(
                     &mut writer,
                     &sourcemap.codemap,
-                    &err.diagnostic(&env).with_label(err.label()),
+                    &err.diagnostic(&env).with_labels(err.labels()),
                 )?;
             }
             return Err(EuphcErr::TypecheckErr);
