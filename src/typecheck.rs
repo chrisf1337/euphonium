@@ -790,6 +790,9 @@ impl Env {
                 for field_assign in field_assigns {
                     field_assigns_hm.insert(field_assign.id.t.clone(), field_assign.expr.clone());
                 }
+
+                let mut errors = vec![];
+
                 let missing_fields: HashSet<&String> = field_types
                     .keys()
                     .collect::<HashSet<&String>>()
@@ -800,11 +803,12 @@ impl Env {
                     let mut missing_fields: Vec<String> =
                         missing_fields.into_iter().cloned().collect();
                     missing_fields.sort_unstable();
-                    return Err(vec![TypecheckErr::new(
+                    errors.push(TypecheckErr::new(
                         TypecheckErrType::MissingFields(missing_fields),
                         *span,
-                    )]);
+                    ));
                 }
+
                 let invalid_fields: HashSet<&String> = field_assigns_hm
                     .keys()
                     .collect::<HashSet<&String>>()
@@ -815,10 +819,29 @@ impl Env {
                     let mut invalid_fields: Vec<String> =
                         invalid_fields.into_iter().cloned().collect();
                     invalid_fields.sort_unstable();
-                    return Err(vec![TypecheckErr::new(
+                    errors.push(TypecheckErr::new(
                         TypecheckErrType::InvalidFields(invalid_fields),
                         *span,
-                    )]);
+                    ));
+                }
+
+                let mut checked_fields: HashMap<&String, ByteSpan> = HashMap::new();
+                for Spanned {
+                    t: FieldAssign { id, .. },
+                    span,
+                } in field_assigns
+                {
+                    if let Some(prev_def_span) = checked_fields.get(&id.t) {
+                        errors.push(TypecheckErr::new(
+                            TypecheckErrType::DuplicateField(id.t.clone(), *prev_def_span),
+                            *span,
+                        ));
+                    }
+                    checked_fields.insert(&id.t, *span);
+                }
+
+                if !errors.is_empty() {
+                    return Err(errors);
                 }
 
                 let mut errors = vec![];
@@ -911,18 +934,18 @@ mod tests {
     }
 
     #[test]
-    fn test_typecheck_bool_expr() {
+    fn test_translate_bool_expr() {
         let expr = zspan!(ExprType::Bool(
             Box::new(zspan!(ExprType::BoolLiteral(true))),
             zspan!(BoolOp::And),
             Box::new(zspan!(ExprType::BoolLiteral(true))),
         ));
-        let mut env = Env::default();
-        assert_eq!(env.translate_expr_mut(&expr), Ok(Type::Bool));
+        let env = Env::default();
+        assert_eq!(env.translate_expr(&expr), Ok(Type::Bool));
     }
 
     #[test]
-    fn test_typecheck_bool_expr_source() {
+    fn test_translate_bool_expr_source() {
         let expr = zspan!(ExprType::Bool(
             Box::new(zspan!(ExprType::Bool(
                 Box::new(zspan!(ExprType::BoolLiteral(true))),
@@ -932,9 +955,9 @@ mod tests {
             zspan!(BoolOp::And),
             Box::new(zspan!(ExprType::BoolLiteral(true))),
         ));
-        let mut env = Env::default();
+        let env = Env::default();
         assert_eq!(
-            env.translate_expr_mut(&expr),
+            env.translate_expr(&expr),
             Err(vec![TypecheckErr {
                 t: TypecheckErrType::TypeMismatch(Type::Bool, Type::Int),
                 span: span!(0, 0, ByteOffset(0))
@@ -943,7 +966,7 @@ mod tests {
     }
 
     #[test]
-    fn test_typecheck_record_field() {
+    fn test_translate_record_field() {
         let mut env = Env::default();
         let record = {
             let mut hm = HashMap::new();
@@ -963,7 +986,7 @@ mod tests {
     }
 
     #[test]
-    fn test_typecheck_record_field_err1() {
+    fn test_translate_record_field_err1() {
         let mut env = Env::default();
         env.insert_var(
             "x".to_owned(),
@@ -984,7 +1007,7 @@ mod tests {
     }
 
     #[test]
-    fn test_typecheck_record_field_err2() {
+    fn test_translate_record_field_err2() {
         let mut env = Env::default();
         env.insert_var(
             "x".to_owned(),
@@ -1005,7 +1028,7 @@ mod tests {
     }
 
     #[test]
-    fn test_typecheck_array_subscript() {
+    fn test_translate_array_subscript() {
         let mut env = Env::default();
         env.insert_var(
             "x".to_owned(),
@@ -1020,7 +1043,7 @@ mod tests {
     }
 
     #[test]
-    fn test_typecheck_let_type_annotation() {
+    fn test_translate_let_type_annotation() {
         let mut env = Env::default();
         let let_expr = zspan!(Let {
             pattern: zspan!(Pattern::String("x".to_owned())),
@@ -1034,7 +1057,7 @@ mod tests {
     }
 
     #[test]
-    fn test_typecheck_let_type_annotation_err() {
+    fn test_translate_let_type_annotation_err() {
         let mut env = Env::default();
         let let_expr = zspan!(Let {
             pattern: zspan!(Pattern::String("x".to_owned())),
@@ -1049,7 +1072,7 @@ mod tests {
     }
 
     #[test]
-    fn test_typecheck_fn_call_undefined_err() {
+    fn test_translate_fn_call_undefined_err() {
         let env = Env::default();
         let fn_call_expr = zspan!(FnCall {
             id: zspan!("f".to_owned()),
@@ -1062,7 +1085,7 @@ mod tests {
     }
 
     #[test]
-    fn test_typecheck_fn_call_not_fn_err() {
+    fn test_translate_fn_call_not_fn_err() {
         let mut env = Env::default();
         env.insert_var(
             "f".to_owned(),
@@ -1080,7 +1103,7 @@ mod tests {
     }
 
     #[test]
-    fn test_typecheck_fn_call_arity_mismatch() {
+    fn test_translate_fn_call_arity_mismatch() {
         let mut env = Env::default();
         env.insert_var(
             "f".to_owned(),
@@ -1098,7 +1121,7 @@ mod tests {
     }
 
     #[test]
-    fn test_typecheck_fn_call_arg_type_mismatch() {
+    fn test_translate_fn_call_arg_type_mismatch() {
         let mut env = Env::default();
         env.insert_var(
             "f".to_owned(),
@@ -1108,7 +1131,7 @@ mod tests {
     }
 
     #[test]
-    fn test_typecheck_fn_call_returns_aliased_type() {
+    fn test_translate_fn_call_returns_aliased_type() {
         let mut env = Env::default();
         env.insert_type("a".to_owned(), Type::Alias("int".to_owned()), zspan!());
         env.insert_var(
@@ -1127,7 +1150,7 @@ mod tests {
     }
 
     #[test]
-    fn test_typecheck_typedef() {
+    fn test_translate_typedef() {
         let mut env = Env::default();
         let type_decl = zspan!(TypeDecl {
             id: zspan!("a".to_owned()),
@@ -1144,7 +1167,7 @@ mod tests {
     }
 
     #[test]
-    fn test_typecheck_typedef_err() {
+    fn test_translate_typedef_err() {
         let mut env = Env::default();
         let type_decl = zspan!(TypeDecl {
             id: zspan!("a".to_owned()),
@@ -1164,7 +1187,7 @@ mod tests {
     }
 
     #[test]
-    fn test_typecheck_expr_typedef() {
+    fn test_translate_expr_typedef() {
         let mut env = Env::default();
         let type_decl = zspan!(TypeDecl {
             id: zspan!("i".to_owned()),
@@ -1343,8 +1366,26 @@ mod tests {
             "r".to_owned(),
             hashmap! {
                 "a".to_owned() => zspan!(),
-                "b".to_owned() => zspan!(),
             },
+        );
+
+        let record = zspan!(Record {
+            id: zspan!("r".to_owned()),
+            field_assigns: vec![
+                zspan!(FieldAssign {
+                    id: zspan!("a".to_owned()),
+                    expr: zspan!(ExprType::Number(0))
+                }),
+                zspan!(FieldAssign {
+                    id: zspan!("a".to_owned()),
+                    expr: zspan!(ExprType::Number(0))
+                })
+            ]
+        });
+
+        assert_eq!(
+            env.translate_record(&record).unwrap_err()[0].t,
+            TypecheckErrType::DuplicateField("a".to_owned(), zspan!())
         );
     }
 
