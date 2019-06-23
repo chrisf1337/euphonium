@@ -204,7 +204,6 @@ pub struct Env {
     pub type_def_spans: HashMap<String, ByteSpan>,
 
     pub record_field_decl_spans: HashMap<String, HashMap<String, ByteSpan>>,
-    pub fn_param_decl_spans: HashMap<String, Vec<ByteSpan>>,
 }
 
 impl Default for Env {
@@ -228,7 +227,6 @@ impl Default for Env {
             type_def_spans,
 
             record_field_decl_spans: HashMap::new(),
-            fn_param_decl_spans: HashMap::new(),
         }
     }
 }
@@ -376,6 +374,20 @@ impl Env {
                 Err(errs) => errors.extend(errs),
             }
         }
+        for (id, var) in &self.vars {
+            if let Type::Fn(param_types, return_type) = &var.ty {
+                for ty in param_types {
+                    match self.validate_type(ty, self.var_def_spans[id]) {
+                        Ok(()) => (),
+                        Err(errs) => errors.extend(errs),
+                    }
+                }
+                match self.validate_type(return_type, self.var_def_spans[id]) {
+                    Ok(()) => (),
+                    Err(errs) => errors.extend(errs),
+                }
+            }
+        }
         if !errors.is_empty() {
             Err(errors)
         } else {
@@ -489,14 +501,6 @@ impl Env {
             );
             self.var_def_spans
                 .insert(fn_decl.id.t.clone(), fn_decl.span);
-            self.fn_param_decl_spans.insert(
-                fn_decl.id.t.clone(),
-                fn_decl
-                    .type_fields
-                    .iter()
-                    .map(|type_field| type_field.span.clone())
-                    .collect(),
-            );
             Ok(())
         }
     }
@@ -1343,6 +1347,23 @@ mod tests {
             .unwrap_err()[0]
                 .t,
             TypecheckErrType::DuplicateType("a".to_owned(), zspan!())
+        );
+    }
+
+    #[test]
+    fn test_check_for_invalid_types_in_fn_sig() {
+        let mut env = Env::default();
+        env.insert_var(
+            "f".to_owned(),
+            VarProperties {
+                ty: Type::Fn(vec![], Box::new(Type::Alias("a".to_owned()))),
+                mutable: false,
+            },
+            zspan!(),
+        );
+        assert_eq!(
+            env.check_for_invalid_types().unwrap_err()[0].t,
+            TypecheckErrType::UndefinedType("a".to_owned())
         );
     }
 
