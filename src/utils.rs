@@ -1,3 +1,12 @@
+macro_rules! zspan {
+    ( ) => {
+        codespan::ByteSpan::new(codespan::ByteIndex::none(), codespan::ByteIndex::none())
+    };
+    ( $e:expr ) => {
+        Spanned::new($e, zspan!())
+    };
+}
+
 macro_rules! span {
     ( $l:expr , $r:expr , $off:expr) => {{
         use codespan::{ByteIndex, ByteSpan};

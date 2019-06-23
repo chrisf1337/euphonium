@@ -3,10 +3,6 @@
 #[macro_use]
 mod utils;
 
-#[cfg(test)]
-#[macro_use]
-mod test_utils;
-
 pub mod ast;
 pub mod error;
 pub mod lexer;
