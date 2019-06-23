@@ -1,6 +1,6 @@
 use crate::ast::{
-    self, Decl, DeclType, Expr, ExprType, FieldAssign, FnCall, FnDecl, LVal, Let, Pattern, Record,
-    Spanned, TypeDecl,
+    self, Assign, Decl, DeclType, Expr, ExprType, FieldAssign, FnCall, FnDecl, LVal, Let, Pattern,
+    Record, Spanned, TypeDecl,
 };
 use codespan::{ByteIndex, ByteSpan};
 use codespan_reporting::{Diagnostic, Label};
@@ -190,9 +190,15 @@ impl From<ast::EnumCase> for EnumCase {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VarProperties {
+    pub ty: Type,
+    pub mutable: bool,
+}
+
 #[derive(Debug, Clone)]
 pub struct Env {
-    pub vars: HashMap<String, Type>,
+    pub vars: HashMap<String, VarProperties>,
     pub types: HashMap<String, Type>,
     pub var_def_spans: HashMap<String, ByteSpan>,
     pub type_def_spans: HashMap<String, ByteSpan>,
@@ -243,8 +249,8 @@ macro_rules! assert_ty {
 }
 
 impl Env {
-    fn insert_var(&mut self, name: String, ty: Type, def_span: ByteSpan) {
-        self.vars.insert(name.clone(), ty);
+    fn insert_var(&mut self, name: String, var_props: VarProperties, def_span: ByteSpan) {
+        self.vars.insert(name.clone(), var_props);
         self.var_def_spans.insert(name, def_span);
     }
 
@@ -285,7 +291,7 @@ impl Env {
     fn get_var_type<'a>(&'a self, var: &'a str) -> Option<&'a Type> {
         self.vars
             .get(var)
-            .map_or(None, |var_ty| self.resolve(var_ty))
+            .map_or(None, |var_props| self.resolve(&var_props.ty))
     }
 
     fn get_type<'a>(&'a self, ty: &'a str) -> Option<&'a Type> {
@@ -497,7 +503,10 @@ impl Env {
         } else {
             self.vars.insert(
                 fn_decl.id.t.clone(),
-                Type::Fn(param_types, Box::new(return_type)),
+                VarProperties {
+                    ty: Type::Fn(param_types, Box::new(return_type)),
+                    mutable: false,
+                },
             );
             self.var_def_spans
                 .insert(fn_decl.id.t.clone(), fn_decl.span);
@@ -512,7 +521,11 @@ impl Env {
         for type_field in &fn_decl.type_fields {
             match self.resolve_ast_type(&type_field.ty) {
                 Ok(ty) => {
-                    new_env.insert_var(type_field.id.t.clone(), ty, type_field.span);
+                    new_env.insert_var(
+                        type_field.id.t.clone(),
+                        VarProperties { ty, mutable: true },
+                        type_field.span,
+                    );
                     param_types.push(type_field.ty.t.clone().into());
                 }
                 Err(errs) => all_errs.extend(errs),
@@ -541,7 +554,10 @@ impl Env {
 
         self.insert_var(
             fn_decl.id.t.clone(),
-            Type::Fn(param_types, Box::new(return_type)),
+            VarProperties {
+                ty: Type::Fn(param_types, Box::new(return_type)),
+                mutable: false,
+            },
             fn_decl.span,
         );
 
@@ -622,13 +638,14 @@ impl Env {
                 assert_ty!(self, r, &Type::Bool)?;
                 Ok(Type::Bool)
             }
-            ExprType::LVal(lval) => self.translate_lval(lval),
+            ExprType::LVal(lval) => Ok(self.translate_lval(lval)?.ty),
             ExprType::Let(_) => Err(vec![TypecheckErr::new(
                 TypecheckErrType::IllegalLetExpr,
                 expr.span,
             )]),
             ExprType::FnCall(fn_call) => self.translate_fn_call(fn_call),
             ExprType::Record(record) => self.translate_record(record),
+            ExprType::Assign(assign) => self.translate_assign(assign),
             _ => unimplemented!(),
         }
     }
@@ -640,11 +657,11 @@ impl Env {
         }
     }
 
-    fn translate_lval(&self, lval: &Spanned<LVal>) -> Result<Type> {
+    fn translate_lval(&self, lval: &Spanned<LVal>) -> Result<VarProperties> {
         match &lval.t {
             LVal::Simple(var) => {
-                if let Some(ty) = self.vars.get(var) {
-                    Ok(ty.clone())
+                if let Some(var_properties) = self.vars.get(var) {
+                    Ok(var_properties.clone())
                 } else {
                     Err(vec![TypecheckErr {
                         t: TypecheckErrType::UndefinedVar(var.clone()),
@@ -653,29 +670,30 @@ impl Env {
                 }
             }
             LVal::Field(var, field) => {
-                let var_type = self.translate_lval(var)?;
-                if let Some(Type::Record(fields)) = self.resolve(&var_type) {
+                let var_properties = self.translate_lval(var)?;
+                if let Type::Record(fields) = self.resolve_type(&var_properties.ty, var.span)? {
                     if let Some(field_type) = fields.get(&field.t) {
-                        Ok(field_type.clone())
-                    } else {
-                        Err(vec![TypecheckErr {
-                            t: TypecheckErrType::UndefinedField(field.t.clone()),
-                            span: field.span,
-                        }])
+                        // A field is mutable only if the record it belongs to is mutable
+                        return Ok(VarProperties {
+                            ty: field_type.clone(),
+                            mutable: var_properties.mutable,
+                        });
                     }
-                } else {
-                    Err(vec![TypecheckErr {
-                        t: TypecheckErrType::UndefinedField(field.t.clone()),
-                        span: field.span,
-                    }])
                 }
+                Err(vec![TypecheckErr {
+                    t: TypecheckErrType::UndefinedField(field.t.clone()),
+                    span: field.span,
+                }])
             }
             LVal::Subscript(var, index) => {
-                let var_type = self.translate_lval(var)?;
+                let var_properties = self.translate_lval(var)?;
                 let index_type = self.translate_expr(index)?;
-                if let Some(Type::Array(ty, _)) = self.resolve(&var_type) {
-                    if let Some(Type::Int) = self.resolve(&index_type) {
-                        Ok(*(ty.clone()))
+                if let Type::Array(ty, _) = self.resolve_type(&var_properties.ty, var.span)? {
+                    if self.resolve_type(&index_type, index.span)? == &Type::Int {
+                        Ok(VarProperties {
+                            ty: *(ty.clone()),
+                            mutable: var_properties.mutable,
+                        })
                     } else {
                         Err(vec![TypecheckErr::new(
                             TypecheckErrType::TypeMismatch(Type::Int, index_type),
@@ -694,7 +712,10 @@ impl Env {
 
     fn translate_let(&mut self, let_expr: &Spanned<Let>) -> Result<Type> {
         let Let {
-            pattern, ty, expr, ..
+            pattern,
+            ty,
+            mutable,
+            expr,
         } = &let_expr.t;
         let expr_type = self.translate_expr_mut(expr)?;
         if let Some(ty) = ty {
@@ -716,7 +737,14 @@ impl Env {
                 } else {
                     expr_type
                 };
-                self.insert_var(var_name.clone(), ty, let_expr.span)
+                self.insert_var(
+                    var_name.clone(),
+                    VarProperties {
+                        ty,
+                        mutable: mutable.t,
+                    },
+                    let_expr.span,
+                )
             }
             _ => (),
         }
@@ -885,6 +913,31 @@ impl Env {
             )])
         }
     }
+
+    fn translate_assign(&self, Spanned { t: assign, span }: &Spanned<Assign>) -> Result<Type> {
+        match &assign.lval.t {
+            LVal::Simple(var) => {
+                if let Some(var_properties) = self.vars.get(var) {
+                    let resolved_expected_ty = self
+                        .resolve_type(&var_properties.ty, assign.lval.span)?
+                        .clone();
+                    let resolved_actual_ty = self.translate_expr(&assign.expr)?;
+                    if resolved_expected_ty != resolved_actual_ty {
+                        return Err(vec![TypecheckErr::new(
+                            TypecheckErrType::TypeMismatch(
+                                resolved_expected_ty,
+                                resolved_actual_ty,
+                            ),
+                            *span,
+                        )]);
+                    }
+                }
+            }
+            _ => unimplemented!(),
+        }
+
+        Ok(Type::Unit)
+    }
 }
 
 #[cfg(test)]
@@ -975,14 +1028,23 @@ mod tests {
         };
         env.insert_var(
             "x".to_owned(),
-            Type::Record(record),
+            VarProperties {
+                ty: Type::Record(record),
+                mutable: false,
+            },
             ByteSpan::new(ByteIndex::none(), ByteIndex::none()),
         );
         let lval = zspan!(LVal::Field(
             Box::new(zspan!(LVal::Simple("x".to_owned()))),
             zspan!("f".to_owned())
         ));
-        assert_eq!(env.translate_lval(&lval), Ok(Type::Int));
+        assert_eq!(
+            env.translate_lval(&lval),
+            Ok(VarProperties {
+                ty: Type::Int,
+                mutable: false
+            })
+        );
     }
 
     #[test]
@@ -990,7 +1052,10 @@ mod tests {
         let mut env = Env::default();
         env.insert_var(
             "x".to_owned(),
-            Type::Record(HashMap::new()),
+            VarProperties {
+                ty: Type::Record(HashMap::new()),
+                mutable: false,
+            },
             ByteSpan::new(ByteIndex::none(), ByteIndex::none()),
         );
         let lval = zspan!(LVal::Field(
@@ -1011,7 +1076,10 @@ mod tests {
         let mut env = Env::default();
         env.insert_var(
             "x".to_owned(),
-            Type::Int,
+            VarProperties {
+                ty: Type::Int,
+                mutable: false,
+            },
             ByteSpan::new(ByteIndex::none(), ByteIndex::none()),
         );
         let lval = zspan!(LVal::Field(
@@ -1032,14 +1100,23 @@ mod tests {
         let mut env = Env::default();
         env.insert_var(
             "x".to_owned(),
-            Type::Array(Box::new(Type::Int), 3),
+            VarProperties {
+                ty: Type::Array(Box::new(Type::Int), 3),
+                mutable: false,
+            },
             ByteSpan::new(ByteIndex::none(), ByteIndex::none()),
         );
         let lval = zspan!(LVal::Subscript(
             Box::new(zspan!(LVal::Simple("x".to_owned()))),
             zspan!(ExprType::Number(0))
         ));
-        assert_eq!(env.translate_lval(&lval), Ok(Type::Int));
+        assert_eq!(
+            env.translate_lval(&lval),
+            Ok(VarProperties {
+                ty: Type::Int,
+                mutable: false
+            })
+        );
     }
 
     #[test]
@@ -1052,7 +1129,13 @@ mod tests {
             expr: zspan!(ExprType::Number(0))
         });
         assert_eq!(env.translate_let(&let_expr), Ok(Type::Unit));
-        assert_eq!(env.vars["x"], Type::Int);
+        assert_eq!(
+            env.vars["x"],
+            VarProperties {
+                ty: Type::Int,
+                mutable: false
+            }
+        );
         assert!(env.var_def_spans.contains_key("x"));
     }
 
@@ -1089,7 +1172,10 @@ mod tests {
         let mut env = Env::default();
         env.insert_var(
             "f".to_owned(),
-            Type::Int,
+            VarProperties {
+                ty: Type::Int,
+                mutable: false,
+            },
             ByteSpan::new(ByteIndex::none(), ByteIndex::none()),
         );
         let fn_call_expr = zspan!(FnCall {
@@ -1107,7 +1193,10 @@ mod tests {
         let mut env = Env::default();
         env.insert_var(
             "f".to_owned(),
-            Type::Fn(vec![], Box::new(Type::Int)),
+            VarProperties {
+                ty: Type::Fn(vec![], Box::new(Type::Int)),
+                mutable: false,
+            },
             zspan!(),
         );
         let fn_call_expr = zspan!(FnCall {
@@ -1125,7 +1214,10 @@ mod tests {
         let mut env = Env::default();
         env.insert_var(
             "f".to_owned(),
-            Type::Fn(vec![], Box::new(Type::Int)),
+            VarProperties {
+                ty: Type::Fn(vec![], Box::new(Type::Int)),
+                mutable: false,
+            },
             zspan!(),
         );
     }
@@ -1136,7 +1228,10 @@ mod tests {
         env.insert_type("a".to_owned(), Type::Alias("int".to_owned()), zspan!());
         env.insert_var(
             "f".to_owned(),
-            Type::Fn(vec![], Box::new(Type::Alias("a".to_owned()))),
+            VarProperties {
+                ty: Type::Fn(vec![], Box::new(Type::Alias("a".to_owned()))),
+                mutable: false,
+            },
             zspan!(),
         );
         let fn_call = zspan!(FnCall {
@@ -1498,5 +1593,10 @@ mod tests {
             env.translate_expr(&expr).unwrap_err()[0].t,
             TypecheckErrType::IllegalLetExpr
         );
+    }
+
+    #[test]
+    fn test_assign_simple() {
+        let mut env = Env::default();
     }
 }
