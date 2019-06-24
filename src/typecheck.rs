@@ -31,6 +31,7 @@ pub enum TypecheckErrType {
     DuplicateFn(String),
     DuplicateType(String),
     DuplicateField(String),
+    MutatingImmutable(String),
 }
 
 impl TypecheckErrType {
@@ -65,6 +66,7 @@ impl TypecheckErrType {
             DuplicateFn(fun) => format!("duplicate function declaration for {}", fun),
             DuplicateType(ty) => format!("duplicate type declaration for {}", ty),
             DuplicateField(field) => format!("duplicate record field declaration for {}", field),
+            MutatingImmutable(var) => format!("{} was declared as immutable", var),
         };
         Diagnostic::new_error(&msg)
     }
@@ -943,6 +945,18 @@ impl Env {
         match &assign.lval.t {
             LVal::Simple(var) => {
                 if let Some(var_properties) = self.vars.get(var) {
+                    if !var_properties.mutable {
+                        let def_span = self.var_def_spans[var];
+                        return Err(vec![TypecheckErr::new_err(
+                            TypecheckErrType::MutatingImmutable(var.clone()),
+                            assign.lval.span,
+                        )
+                        .with_source(Spanned::new(
+                            format!("{} was defined here", var.clone()),
+                            def_span,
+                        ))]);
+                    }
+
                     let resolved_expected_ty = self
                         .resolve_type(&var_properties.ty, assign.lval.span)?
                         .clone();
@@ -1629,7 +1643,26 @@ mod tests {
     }
 
     #[test]
-    fn test_assign_simple() {
+    fn test_assign_immut_err() {
         let mut env = Env::default();
+        env.insert_var(
+            "a".to_owned(),
+            VarProperties {
+                ty: Type::Int,
+                mutable: false,
+            },
+            zspan!(),
+        );
+
+        assert_eq!(
+            env.translate_assign(&zspan!(Assign {
+                lval: zspan!(LVal::Simple("a".to_owned())),
+                expr: zspan!(ExprType::Number(0))
+            }))
+            .unwrap_err()[0]
+                .t
+                .ty,
+            TypecheckErrType::MutatingImmutable("a".to_owned())
+        );
     }
 }
