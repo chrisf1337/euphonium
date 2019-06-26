@@ -4,14 +4,17 @@ use crate::ast::{
 };
 use codespan::{ByteIndex, ByteSpan};
 use codespan_reporting::{Diagnostic, Label};
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet},
+    rc::Rc,
+};
 
 pub type Result<T> = std::result::Result<T, Vec<TypecheckErr>>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TypecheckErrType {
     /// expected, actual
-    TypeMismatch(Type, Type),
+    TypeMismatch(Rc<Type>, Rc<Type>),
     // The reason we need a separate case for this instead of using TypeMismatch is because we would
     // need to translate the arguments passed to the non-function in order to determine the expected
     // function type.
@@ -24,7 +27,7 @@ pub enum TypecheckErrType {
     UndefinedType(String),
     CannotSubscript,
     /// Type triggering the cycle, what it was aliased to
-    TypeDeclCycle(String, Type),
+    TypeDeclCycle(String, Rc<Type>),
     MissingFields(Vec<String>),
     InvalidFields(Vec<String>),
     IllegalLetExpr,
@@ -104,12 +107,12 @@ pub enum Type {
     Int,
     String,
     Bool,
-    Record(HashMap<String, Type>),
-    Array(Box<Type>, usize),
+    Record(HashMap<String, Rc<Type>>),
+    Array(Rc<Type>, usize),
     Unit,
     Alias(String),
     Enum(Vec<EnumCase>),
-    Fn(Vec<Type>, Box<Type>),
+    Fn(Vec<Rc<Type>>, Rc<Type>),
 }
 
 impl Type {
@@ -130,14 +133,14 @@ pub struct EnumCase {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EnumParam {
-    Simple(Type),
-    Record(HashMap<String, Type>),
+    Simple(Rc<Type>),
+    Record(HashMap<String, Rc<Type>>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypeField {
     pub id: String,
-    pub ty: Type,
+    pub ty: Rc<Type>,
 }
 
 impl From<ast::Type> for Type {
@@ -160,7 +163,7 @@ impl From<ast::Type> for Type {
                 }
                 Type::Record(type_fields_hm)
             }
-            ast::Type::Array(ty, len) => Type::Array(Box::new(ty.t.into()), len.t.into()),
+            ast::Type::Array(ty, len) => Type::Array(Rc::new(ty.t.into()), len.t.into()),
             ast::Type::Unit => Type::Unit,
         }
     }
@@ -170,7 +173,7 @@ impl From<ast::TypeField> for TypeField {
     fn from(type_field: ast::TypeField) -> Self {
         Self {
             id: type_field.id.t,
-            ty: type_field.ty.t.into(),
+            ty: Rc::new(type_field.ty.t.into()),
         }
     }
 }
@@ -178,7 +181,7 @@ impl From<ast::TypeField> for TypeField {
 impl From<ast::EnumParam> for EnumParam {
     fn from(param: ast::EnumParam) -> Self {
         match param {
-            ast::EnumParam::Simple(s) => EnumParam::Simple(Type::Alias(s.t)),
+            ast::EnumParam::Simple(s) => EnumParam::Simple(Rc::new(Type::Alias(s.t))),
             ast::EnumParam::Record(type_fields) => {
                 let mut type_fields_hm = HashMap::new();
                 for TypeField { id, ty } in type_fields.into_iter().map(|tf| tf.t.into()) {
@@ -201,14 +204,14 @@ impl From<ast::EnumCase> for EnumCase {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VarProperties {
-    pub ty: Type,
+    pub ty: Rc<Type>,
     pub mutable: bool,
 }
 
 #[derive(Debug, Clone)]
 pub struct Env {
     pub vars: HashMap<String, VarProperties>,
-    pub types: HashMap<String, Type>,
+    pub types: HashMap<String, Rc<Type>>,
     pub var_def_spans: HashMap<String, ByteSpan>,
     pub type_def_spans: HashMap<String, ByteSpan>,
 
@@ -218,8 +221,8 @@ pub struct Env {
 impl Default for Env {
     fn default() -> Self {
         let mut types = HashMap::new();
-        types.insert("int".to_owned(), Type::Int);
-        types.insert("string".to_owned(), Type::String);
+        types.insert("int".to_owned(), Rc::new(Type::Int));
+        types.insert("string".to_owned(), Rc::new(Type::String));
         let mut type_def_spans = HashMap::new();
         type_def_spans.insert(
             "int".to_owned(),
@@ -263,12 +266,12 @@ impl Env {
     }
 
     fn insert_type(&mut self, name: String, ty: Type, def_span: ByteSpan) {
-        self.types.insert(name.clone(), ty);
+        self.types.insert(name.clone(), Rc::new(ty));
         self.type_def_spans.insert(name, def_span);
     }
 
-    fn resolve_type<'a>(&'a self, ty: &'a Type, def_span: ByteSpan) -> Result<&'a Type> {
-        match ty {
+    fn resolve_type(&self, ty: &Rc<Type>, def_span: ByteSpan) -> Result<Rc<Type>> {
+        match ty.as_ref() {
             Type::Alias(alias) => {
                 if let Some(resolved_type) = self.types.get(alias) {
                     let span = self.type_def_spans[alias];
@@ -280,7 +283,7 @@ impl Env {
                     )])
                 }
             }
-            _ => Ok(ty),
+            _ => Ok(ty.clone()),
         }
     }
 
@@ -306,8 +309,8 @@ impl Env {
     }
 
     /// Call after translating type decls and checking for cycles.
-    fn validate_type(&self, ty: &Type, def_span: ByteSpan) -> Result<()> {
-        match ty {
+    fn validate_type(&self, ty: &Rc<Type>, def_span: ByteSpan) -> Result<()> {
+        match ty.as_ref() {
             Type::String | Type::Bool | Type::Unit | Type::Int => Ok(()),
             Type::Alias(_) => self.resolve_type(ty, def_span).map(|_| ()),
             Type::Record(record) => {
@@ -384,7 +387,7 @@ impl Env {
             }
         }
         for (id, var) in &self.vars {
-            if let Type::Fn(param_types, return_type) = &var.ty {
+            if let Type::Fn(param_types, return_type) = var.ty.as_ref() {
                 for ty in param_types {
                     match self.validate_type(ty, self.var_def_spans[id]) {
                         Ok(()) => (),
@@ -485,7 +488,7 @@ impl Env {
             ..
         } in &fn_decl.type_fields
         {
-            param_types.push(ty.clone().into());
+            param_types.push(Rc::new(ty.clone().into()));
         }
         let return_type = if let Some(Spanned { t: return_type, .. }) = &fn_decl.return_type {
             return_type.clone().into()
@@ -508,7 +511,7 @@ impl Env {
             self.vars.insert(
                 fn_decl.id.t.clone(),
                 VarProperties {
-                    ty: Type::Fn(param_types, Box::new(return_type)),
+                    ty: Rc::new(Type::Fn(param_types, Rc::new(return_type))),
                     mutable: false,
                 },
             );
@@ -523,7 +526,8 @@ impl Env {
         let mut all_errs = vec![];
         let mut param_types = vec![];
         for type_field in &fn_decl.type_fields {
-            match self.resolve_type(&type_field.ty.t.clone().into(), type_field.ty.span) {
+            let param_type = Rc::new(type_field.ty.t.clone().into());
+            match self.resolve_type(&param_type, type_field.ty.span) {
                 Ok(ty) => {
                     new_env.insert_var(
                         type_field.id.t.clone(),
@@ -533,15 +537,15 @@ impl Env {
                         },
                         type_field.span,
                     );
-                    param_types.push(type_field.ty.t.clone().into());
+                    param_types.push(param_type);
                 }
                 Err(errs) => all_errs.extend(errs),
             }
         }
         let return_type = if let Some(ty) = &fn_decl.return_type {
-            ty.t.clone().into()
+            Rc::new(ty.t.clone().into())
         } else {
-            Type::Unit
+            Rc::new(Type::Unit)
         };
         let body_type = new_env.translate_expr_mut(&fn_decl.body)?;
         if self.resolve_type(&body_type, fn_decl.body.span)?
@@ -554,7 +558,7 @@ impl Env {
             )?
         {
             return Err(vec![TypecheckErr::new_err(
-                TypecheckErrType::TypeMismatch(return_type, body_type),
+                TypecheckErrType::TypeMismatch(return_type.clone(), body_type),
                 fn_decl.span,
             )]);
         }
@@ -562,7 +566,7 @@ impl Env {
         self.insert_var(
             fn_decl.id.t.clone(),
             VarProperties {
-                ty: Type::Fn(param_types, Box::new(return_type)),
+                ty: Rc::new(Type::Fn(param_types, return_type)),
                 mutable: false,
             },
             fn_decl.span,
@@ -623,7 +627,7 @@ impl Env {
         Ok(())
     }
 
-    fn translate_expr(&self, expr: &Expr) -> Result<Type> {
+    fn translate_expr(&self, expr: &Expr) -> Result<Rc<Type>> {
         match &expr.t {
             ExprType::Seq(exprs, returns) => {
                 // New scope
@@ -636,24 +640,24 @@ impl Env {
                     Ok(new_env.translate_expr_mut(last_expr)?)
                 } else {
                     let _ = new_env.translate_expr_mut(last_expr)?;
-                    Ok(Type::Unit)
+                    Ok(Rc::new(Type::Unit))
                 }
             }
-            ExprType::String(_) => Ok(Type::String),
-            ExprType::Number(_) => Ok(Type::Int),
-            ExprType::Neg(expr) => assert_ty!(self, expr, &Type::Int),
+            ExprType::String(_) => Ok(Rc::new(Type::String)),
+            ExprType::Number(_) => Ok(Rc::new(Type::Int)),
+            ExprType::Neg(expr) => assert_ty!(self, expr, Rc::new(Type::Int)),
             ExprType::Arith(l, _, r) => {
-                assert_ty!(self, l, &Type::Int)?;
-                assert_ty!(self, r, &Type::Int)?;
-                Ok(Type::Int)
+                assert_ty!(self, l, Rc::new(Type::Int))?;
+                assert_ty!(self, r, Rc::new(Type::Int))?;
+                Ok(Rc::new(Type::Int))
             }
-            ExprType::Unit | ExprType::Continue | ExprType::Break => Ok(Type::Unit),
-            ExprType::BoolLiteral(_) => Ok(Type::Bool),
-            ExprType::Not(expr) => assert_ty!(self, expr, &Type::Bool),
+            ExprType::Unit | ExprType::Continue | ExprType::Break => Ok(Rc::new(Type::Unit)),
+            ExprType::BoolLiteral(_) => Ok(Rc::new(Type::Bool)),
+            ExprType::Not(expr) => assert_ty!(self, expr, Rc::new(Type::Bool)),
             ExprType::Bool(l, _, r) => {
-                assert_ty!(self, l, &Type::Bool)?;
-                assert_ty!(self, r, &Type::Bool)?;
-                Ok(Type::Bool)
+                assert_ty!(self, l, Rc::new(Type::Bool))?;
+                assert_ty!(self, r, Rc::new(Type::Bool))?;
+                Ok(Rc::new(Type::Bool))
             }
             ExprType::LVal(lval) => Ok(self.translate_lval(lval)?.ty),
             ExprType::Let(_) => Err(vec![TypecheckErr::new_err(
@@ -667,7 +671,7 @@ impl Env {
         }
     }
 
-    fn translate_expr_mut(&mut self, expr: &Expr) -> Result<Type> {
+    fn translate_expr_mut(&mut self, expr: &Expr) -> Result<Rc<Type>> {
         match &expr.t {
             ExprType::Let(let_expr) => self.translate_let(let_expr),
             _ => self.translate_expr(expr),
@@ -688,7 +692,9 @@ impl Env {
             }
             LVal::Field(var, field) => {
                 let var_properties = self.translate_lval(var)?;
-                if let Type::Record(fields) = self.resolve_type(&var_properties.ty, var.span)? {
+                if let Type::Record(fields) =
+                    self.resolve_type(&var_properties.ty, var.span)?.as_ref()
+                {
                     if let Some(field_type) = fields.get(&field.t) {
                         // A field is mutable only if the record it belongs to is mutable
                         return Ok(VarProperties {
@@ -705,15 +711,17 @@ impl Env {
             LVal::Subscript(var, index) => {
                 let var_properties = self.translate_lval(var)?;
                 let index_type = self.translate_expr(index)?;
-                if let Type::Array(ty, _) = self.resolve_type(&var_properties.ty, var.span)? {
-                    if self.resolve_type(&index_type, index.span)? == &Type::Int {
+                if let Type::Array(ty, _) =
+                    self.resolve_type(&var_properties.ty, var.span)?.as_ref()
+                {
+                    if self.resolve_type(&index_type, index.span)? == Rc::new(Type::Int) {
                         Ok(VarProperties {
-                            ty: *(ty.clone()),
+                            ty: ty.clone(),
                             mutable: var_properties.mutable,
                         })
                     } else {
                         Err(vec![TypecheckErr::new_err(
-                            TypecheckErrType::TypeMismatch(Type::Int, index_type),
+                            TypecheckErrType::TypeMismatch(Rc::new(Type::Int), index_type),
                             index.span,
                         )])
                     }
@@ -727,7 +735,7 @@ impl Env {
         }
     }
 
-    fn translate_let(&mut self, let_expr: &Spanned<Let>) -> Result<Type> {
+    fn translate_let(&mut self, let_expr: &Spanned<Let>) -> Result<Rc<Type>> {
         let Let {
             pattern,
             ty: ast_ty,
@@ -737,7 +745,7 @@ impl Env {
         let expr_type = self.translate_expr_mut(expr)?;
         if let Some(ast_ty) = ast_ty {
             // Type annotation
-            let ty = ast_ty.t.clone().into();
+            let ty = Rc::new(ast_ty.t.clone().into());
             let resolved_ty = self.resolve_type(&ty, ast_ty.span)?;
             let resolved_expr_ty = self.resolve_type(&expr_type, expr.span)?;
             if resolved_ty != resolved_expr_ty {
@@ -751,7 +759,7 @@ impl Env {
             Pattern::String(var_name) => {
                 // Prefer the annotated type if provided
                 let ty = if let Some(ty) = ast_ty {
-                    ty.t.clone().into()
+                    Rc::new(ty.t.clone().into())
                 } else {
                     expr_type
                 };
@@ -766,7 +774,7 @@ impl Env {
             }
             _ => (),
         }
-        Ok(Type::Unit)
+        Ok(Rc::new(Type::Unit))
     }
 
     fn translate_fn_call(
@@ -775,9 +783,9 @@ impl Env {
             t: FnCall { id, args },
             span,
         }: &Spanned<FnCall>,
-    ) -> Result<Type> {
-        if let Some(fn_type) = self.vars.get(&id.t).map(|x| &x.ty) {
-            match self.resolve_type(fn_type, id.span)? {
+    ) -> Result<Rc<Type>> {
+        if let Some(fn_type) = self.vars.get(&id.t).map(|x| x.ty.clone()) {
+            match self.resolve_type(&fn_type, id.span)?.as_ref() {
                 Type::Fn(param_types, return_type) => {
                     if args.len() != param_types.len() {
                         return Err(vec![TypecheckErr::new_err(
@@ -789,10 +797,10 @@ impl Env {
                     let mut errs = vec![];
                     for (arg, param_type) in args.iter().zip(param_types.iter()) {
                         match self.translate_expr(arg) {
-                            Ok(ref ty) => {
+                            Ok(ty) => {
                                 // param_type should already be well-defined because we have already
                                 // checked for invalid types
-                                if self.resolve_type(ty, arg.span)?
+                                if self.resolve_type(&ty, arg.span)?
                                     != self.resolve_type(param_type, zspan!()).unwrap()
                                 {
                                     errs.push(TypecheckErr::new_err(
@@ -808,7 +816,7 @@ impl Env {
                         }
                     }
 
-                    Ok(*return_type.clone())
+                    Ok(return_type.clone())
                 }
                 _ => Err(vec![TypecheckErr::new_err(
                     TypecheckErrType::NotAFn(id.t.clone()),
@@ -832,9 +840,9 @@ impl Env {
             },
             span,
         }: &Spanned<Record>,
-    ) -> Result<Type> {
+    ) -> Result<Rc<Type>> {
         if let Some(ty) = self.types.get(&record_id.t) {
-            if let Type::Record(field_types) = ty {
+            if let Type::Record(field_types) = ty.as_ref() {
                 let mut field_assigns_hm = HashMap::new();
                 for field_assign in field_assigns {
                     field_assigns_hm.insert(field_assign.id.t.clone(), field_assign.expr.clone());
@@ -941,7 +949,7 @@ impl Env {
         }
     }
 
-    fn translate_assign(&self, Spanned { t: assign, span }: &Spanned<Assign>) -> Result<Type> {
+    fn translate_assign(&self, Spanned { t: assign, span }: &Spanned<Assign>) -> Result<Rc<Type>> {
         match &assign.lval.t {
             LVal::Simple(var) => {
                 if let Some(var_properties) = self.vars.get(var) {
@@ -975,7 +983,7 @@ impl Env {
             _ => unimplemented!(),
         }
 
-        Ok(Type::Unit)
+        Ok(Rc::new(Type::Unit))
     }
 }
 
@@ -996,11 +1004,11 @@ mod tests {
         env.insert_type("d".to_owned(), Type::Alias("e".to_owned()), zspan!());
 
         assert_eq!(
-            env.resolve_type(&Type::Alias("a".to_owned()), zspan!()),
-            Ok(&Type::Int)
+            env.resolve_type(&Rc::new(Type::Alias("a".to_owned())), zspan!()),
+            Ok(Rc::new(Type::Int))
         );
         assert_eq!(
-            env.resolve_type(&Type::Alias("d".to_owned()), zspan!())
+            env.resolve_type(&Rc::new(Type::Alias("d".to_owned())), zspan!())
                 .unwrap_err()[0]
                 .t
                 .ty,
@@ -1016,7 +1024,7 @@ mod tests {
             Box::new(zspan!(ExprType::BoolLiteral(true))),
         ));
         let env = Env::default();
-        assert_eq!(env.translate_expr(&expr), Ok(Type::Bool));
+        assert_eq!(env.translate_expr(&expr), Ok(Rc::new(Type::Bool)));
     }
 
     #[test]
@@ -1034,7 +1042,7 @@ mod tests {
         assert_eq!(
             env.translate_expr(&expr),
             Err(vec![TypecheckErr::new_err(
-                TypecheckErrType::TypeMismatch(Type::Bool, Type::Int),
+                TypecheckErrType::TypeMismatch(Rc::new(Type::Bool), Rc::new(Type::Int)),
                 span!(0, 0, ByteOffset(0))
             )])
         );
@@ -1043,15 +1051,13 @@ mod tests {
     #[test]
     fn test_translate_record_field() {
         let mut env = Env::default();
-        let record = {
-            let mut hm = HashMap::new();
-            hm.insert("f".to_owned(), Type::Int);
-            hm
+        let record = hashmap! {
+            "f".to_owned() => Rc::new(Type::Int)
         };
         env.insert_var(
             "x".to_owned(),
             VarProperties {
-                ty: Type::Record(record),
+                ty: Rc::new(Type::Record(record)),
                 mutable: false,
             },
             ByteSpan::new(ByteIndex::none(), ByteIndex::none()),
@@ -1063,7 +1069,7 @@ mod tests {
         assert_eq!(
             env.translate_lval(&lval),
             Ok(VarProperties {
-                ty: Type::Int,
+                ty: Rc::new(Type::Int),
                 mutable: false
             })
         );
@@ -1075,7 +1081,7 @@ mod tests {
         env.insert_var(
             "x".to_owned(),
             VarProperties {
-                ty: Type::Record(HashMap::new()),
+                ty: Rc::new(Type::Record(HashMap::new())),
                 mutable: false,
             },
             ByteSpan::new(ByteIndex::none(), ByteIndex::none()),
@@ -1099,7 +1105,7 @@ mod tests {
         env.insert_var(
             "x".to_owned(),
             VarProperties {
-                ty: Type::Int,
+                ty: Rc::new(Type::Int),
                 mutable: false,
             },
             ByteSpan::new(ByteIndex::none(), ByteIndex::none()),
@@ -1123,7 +1129,7 @@ mod tests {
         env.insert_var(
             "x".to_owned(),
             VarProperties {
-                ty: Type::Array(Box::new(Type::Int), 3),
+                ty: Rc::new(Type::Array(Rc::new(Type::Int), 3)),
                 mutable: false,
             },
             ByteSpan::new(ByteIndex::none(), ByteIndex::none()),
@@ -1135,7 +1141,7 @@ mod tests {
         assert_eq!(
             env.translate_lval(&lval),
             Ok(VarProperties {
-                ty: Type::Int,
+                ty: Rc::new(Type::Int),
                 mutable: false
             })
         );
@@ -1150,11 +1156,11 @@ mod tests {
             ty: Some(zspan!(ast::Type::Type(zspan!("int".to_owned())))),
             expr: zspan!(ExprType::Number(0))
         });
-        assert_eq!(env.translate_let(&let_expr), Ok(Type::Unit));
+        assert_eq!(env.translate_let(&let_expr), Ok(Rc::new(Type::Unit)));
         assert_eq!(
             env.vars["x"],
             VarProperties {
-                ty: Type::Int,
+                ty: Rc::new(Type::Int),
                 mutable: false
             }
         );
@@ -1172,7 +1178,7 @@ mod tests {
         });
         assert_eq!(
             env.translate_let(&let_expr).unwrap_err()[0].t.ty,
-            TypecheckErrType::TypeMismatch(Type::String, Type::Int)
+            TypecheckErrType::TypeMismatch(Rc::new(Type::String), Rc::new(Type::Int))
         );
     }
 
@@ -1195,7 +1201,7 @@ mod tests {
         env.insert_var(
             "f".to_owned(),
             VarProperties {
-                ty: Type::Int,
+                ty: Rc::new(Type::Int),
                 mutable: false,
             },
             ByteSpan::new(ByteIndex::none(), ByteIndex::none()),
@@ -1216,7 +1222,7 @@ mod tests {
         env.insert_var(
             "f".to_owned(),
             VarProperties {
-                ty: Type::Fn(vec![], Box::new(Type::Int)),
+                ty: Rc::new(Type::Fn(vec![], Rc::new(Type::Int))),
                 mutable: false,
             },
             zspan!(),
@@ -1237,7 +1243,7 @@ mod tests {
         env.insert_var(
             "f".to_owned(),
             VarProperties {
-                ty: Type::Fn(vec![], Box::new(Type::Int)),
+                ty: Rc::new(Type::Fn(vec![], Rc::new(Type::Int))),
                 mutable: false,
             },
             zspan!(),
@@ -1251,7 +1257,7 @@ mod tests {
         env.insert_var(
             "f".to_owned(),
             VarProperties {
-                ty: Type::Fn(vec![], Box::new(Type::Alias("a".to_owned()))),
+                ty: Rc::new(Type::Fn(vec![], Rc::new(Type::Alias("a".to_owned())))),
                 mutable: false,
             },
             zspan!(),
@@ -1262,7 +1268,7 @@ mod tests {
         });
         assert_eq!(
             env.translate_fn_call(&fn_call).unwrap(),
-            Type::Alias("a".to_owned())
+            Rc::new(Type::Alias("a".to_owned()))
         );
     }
 
@@ -1299,7 +1305,10 @@ mod tests {
         let _ = env.translate_type_decl(&type_decl);
         assert_eq!(
             env.translate_let(&let_expr).unwrap_err()[0].t.ty,
-            TypecheckErrType::TypeMismatch(Type::Alias("a".to_owned()), Type::String)
+            TypecheckErrType::TypeMismatch(
+                Rc::new(Type::Alias("a".to_owned())),
+                Rc::new(Type::String)
+            )
         );
     }
 
@@ -1324,7 +1333,7 @@ mod tests {
         env.translate_let(&var_def).expect("translate var def");
         assert_eq!(
             env.translate_expr_mut(&expr).unwrap(),
-            Type::Alias("i".to_owned())
+            Rc::new(Type::Alias("i".to_owned()))
         );
     }
 
@@ -1350,7 +1359,7 @@ mod tests {
             env.check_for_type_decl_cycles("a", vec![]).unwrap_err()[0]
                 .t
                 .ty,
-            TypecheckErrType::TypeDeclCycle("a".to_owned(), Type::Alias("a".to_owned()))
+            TypecheckErrType::TypeDeclCycle("a".to_owned(), Rc::new(Type::Alias("a".to_owned())))
         );
     }
 
@@ -1364,7 +1373,7 @@ mod tests {
             env.check_for_type_decl_cycles("a", vec![]).unwrap_err()[0]
                 .t
                 .ty,
-            TypecheckErrType::TypeDeclCycle("c".to_owned(), Type::Alias("a".to_owned()))
+            TypecheckErrType::TypeDeclCycle("c".to_owned(), Rc::new(Type::Alias("a".to_owned())))
         );
     }
 
@@ -1403,7 +1412,7 @@ mod tests {
         env.insert_var(
             "f".to_owned(),
             VarProperties {
-                ty: Type::Fn(vec![], Box::new(Type::Alias("a".to_owned()))),
+                ty: Rc::new(Type::Fn(vec![], Rc::new(Type::Alias("a".to_owned())))),
                 mutable: false,
             },
             zspan!(),
@@ -1438,7 +1447,10 @@ mod tests {
         assert_eq!(
             result,
             Err(vec![TypecheckErr::new_err(
-                TypecheckErrType::TypeDeclCycle("a".to_owned(), Type::Alias("a".to_owned())),
+                TypecheckErrType::TypeDeclCycle(
+                    "a".to_owned(),
+                    Rc::new(Type::Alias("a".to_owned()))
+                ),
                 zspan!()
             )])
         );
@@ -1448,8 +1460,8 @@ mod tests {
     fn test_validate_type() {
         let mut env = Env::default();
         let mut record_fields = HashMap::new();
-        record_fields.insert("f".to_owned(), Type::Alias("a".to_owned()));
-        record_fields.insert("g".to_owned(), Type::Alias("b".to_owned()));
+        record_fields.insert("f".to_owned(), Rc::new(Type::Alias("a".to_owned())));
+        record_fields.insert("g".to_owned(), Rc::new(Type::Alias("b".to_owned())));
         env.insert_type("a".to_owned(), Type::Record(record_fields), zspan!());
 
         let errs = env.check_for_invalid_types().unwrap_err();
@@ -1465,7 +1477,7 @@ mod tests {
     fn test_translate_record_missing_fields() {
         let mut env = Env::default();
         let record_type = Type::Record(hashmap! {
-            "a".to_owned() => Type::Int,
+            "a".to_owned() => Rc::new(Type::Int),
         });
         env.insert_type("r".to_owned(), record_type, zspan!());
         let record = zspan!(Record {
@@ -1500,7 +1512,7 @@ mod tests {
     fn test_translate_record_duplicate_field() {
         let mut env = Env::default();
         let record_type = Type::Record(hashmap! {
-            "a".to_owned() => Type::Int,
+            "a".to_owned() => Rc::new(Type::Int),
         });
 
         env.insert_type("r".to_owned(), record_type.clone(), zspan!());
@@ -1535,8 +1547,8 @@ mod tests {
     fn test_translate_record() {
         let mut env = Env::default();
         let record_type = Type::Record(hashmap! {
-            "a".to_owned() => Type::Int,
-            "b".to_owned() => Type::String,
+            "a".to_owned() => Rc::new(Type::Int),
+            "b".to_owned() => Rc::new(Type::String),
         });
         env.insert_type("r".to_owned(), record_type.clone(), zspan!());
         env.record_field_decl_spans.insert(
@@ -1560,7 +1572,7 @@ mod tests {
             ]
         });
 
-        assert_eq!(env.translate_record(&record).unwrap(), record_type);
+        assert_eq!(env.translate_record(&record).unwrap(), Rc::new(record_type));
     }
 
     #[test]
@@ -1648,7 +1660,7 @@ mod tests {
         env.insert_var(
             "a".to_owned(),
             VarProperties {
-                ty: Type::Int,
+                ty: Rc::new(Type::Int),
                 mutable: false,
             },
             zspan!(),
