@@ -523,54 +523,42 @@ impl Env {
 
     fn translate_fn_decl_body(&mut self, fn_decl: &Spanned<FnDecl>) -> Result<()> {
         let mut new_env = self.clone();
-        let mut all_errs = vec![];
-        let mut param_types = vec![];
-        for type_field in &fn_decl.type_fields {
-            let param_type = Rc::new(type_field.ty.t.clone().into());
-            match self.resolve_type(&param_type, type_field.ty.span) {
-                Ok(ty) => {
-                    new_env.insert_var(
-                        type_field.id.t.clone(),
-                        VarProperties {
-                            ty: ty.clone(),
-                            mutable: true,
-                        },
-                        type_field.span,
-                    );
-                    param_types.push(param_type);
-                }
-                Err(errs) => all_errs.extend(errs),
-            }
-        }
-        let return_type = if let Some(ty) = &fn_decl.return_type {
-            Rc::new(ty.t.clone().into())
-        } else {
-            Rc::new(Type::Unit)
-        };
-        let body_type = new_env.translate_expr_mut(&fn_decl.body)?;
-        if self.resolve_type(&body_type, fn_decl.body.span)?
-            != self.resolve_type(
-                &return_type,
-                fn_decl
-                    .return_type
-                    .as_ref()
-                    .map_or_else(|| fn_decl.span, |ret_ty| ret_ty.span),
-            )?
-        {
-            return Err(vec![TypecheckErr::new_err(
-                TypecheckErrType::TypeMismatch(return_type.clone(), body_type),
-                fn_decl.span,
-            )]);
-        }
 
-        self.insert_var(
-            fn_decl.id.t.clone(),
-            VarProperties {
-                ty: Rc::new(Type::Fn(param_types, return_type)),
-                mutable: false,
-            },
-            fn_decl.span,
-        );
+        if let Type::Fn(param_types, return_type) = self.vars[&fn_decl.id.t].ty.as_ref() {
+            for ((param_id, span), param_type) in fn_decl
+                .type_fields
+                .iter()
+                .map(|tf| (&tf.id.t, tf.span))
+                .zip(param_types.iter())
+            {
+                new_env.insert_var(
+                    param_id.clone(),
+                    VarProperties {
+                        ty: param_type.clone(),
+                        mutable: true,
+                    },
+                    span,
+                );
+            }
+
+            let body_type = new_env.translate_expr_mut(&fn_decl.body)?;
+            if self.resolve_type(&body_type, fn_decl.body.span)?
+                != self.resolve_type(
+                    &return_type,
+                    fn_decl
+                        .return_type
+                        .as_ref()
+                        .map_or_else(|| fn_decl.span, |ret_ty| ret_ty.span),
+                )?
+            {
+                return Err(vec![TypecheckErr::new_err(
+                    TypecheckErrType::TypeMismatch(return_type.clone(), body_type),
+                    fn_decl.span,
+                )]);
+            }
+        } else {
+            unreachable!(format!("expected {} to be a function", fn_decl.id.t));
+        }
 
         Ok(())
     }
