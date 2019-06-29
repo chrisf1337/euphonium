@@ -196,7 +196,7 @@ mod tests {
                         vec![
                             _ExprType::Let(Box::new(_Let {
                                 pattern: Pattern::String("a".to_owned()),
-                                mutable: false,
+                                immutable: true,
                                 ty: Some(_Type::Type("a".to_owned())),
                                 expr: _ExprType::Arith(
                                     Box::new(_ExprType::Number(1)),
@@ -206,7 +206,7 @@ mod tests {
                             })),
                             _ExprType::Let(Box::new(_Let {
                                 pattern: Pattern::String("b".to_owned()),
-                                mutable: false,
+                                immutable: true,
                                 ty: None,
                                 expr: _ExprType::String("".to_owned())
                             })),

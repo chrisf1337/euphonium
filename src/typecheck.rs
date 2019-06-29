@@ -208,7 +208,7 @@ impl From<ast::EnumCase> for EnumCase {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VarProperties {
     pub ty: Rc<Type>,
-    pub mutable: bool,
+    pub immutable: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -560,7 +560,7 @@ impl Env {
             fn_decl.id.t.clone(),
             VarProperties {
                 ty: Rc::new(Type::Fn(param_types, Rc::new(return_type))),
-                mutable: false,
+                immutable: true,
             },
         );
         self.var_def_spans
@@ -582,7 +582,7 @@ impl Env {
                     param_id.clone(),
                     VarProperties {
                         ty: param_type.clone(),
-                        mutable: true,
+                        immutable: false,
                     },
                     span,
                 );
@@ -724,7 +724,7 @@ impl Env {
                         // A field is mutable only if the record it belongs to is mutable
                         return Ok(VarProperties {
                             ty: field_type.clone(),
-                            mutable: var_properties.mutable,
+                            immutable: var_properties.immutable,
                         });
                     }
                 }
@@ -742,7 +742,7 @@ impl Env {
                     if self.resolve_type(&index_type, index.span)? == Rc::new(Type::Int) {
                         Ok(VarProperties {
                             ty: ty.clone(),
-                            mutable: var_properties.mutable,
+                            immutable: var_properties.immutable,
                         })
                     } else {
                         Err(vec![TypecheckErr::new_err(
@@ -764,7 +764,7 @@ impl Env {
         let Let {
             pattern,
             ty: ast_ty,
-            mutable,
+            immutable,
             expr,
         } = &let_expr.t;
         let expr_type = self.translate_expr_mut(expr)?;
@@ -792,7 +792,7 @@ impl Env {
                     var_name.clone(),
                     VarProperties {
                         ty,
-                        mutable: mutable.t,
+                        immutable: immutable.t,
                     },
                     let_expr.span,
                 )
@@ -978,7 +978,7 @@ impl Env {
         match &assign.lval.t {
             LVal::Simple(var) => {
                 if let Some(var_properties) = self.vars.get(var) {
-                    if !var_properties.mutable {
+                    if var_properties.immutable {
                         let def_span = self.var_def_spans[var];
                         return Err(vec![TypecheckErr::new_err(
                             TypecheckErrType::MutatingImmutable(var.clone()),
@@ -1004,6 +1004,22 @@ impl Env {
                         )]);
                     }
                 }
+            }
+            LVal::Field(lval_expr, field) => {
+                let lval_properties = self.translate_lval(&lval_expr)?;
+                if lval_properties.immutable {
+                    // return Err(vec![TypecheckErr::new_err(TypecheckErrType::MutatingImmutable())])
+                }
+                if let Type::Record(record_field_types) = self
+                    .resolve_type(&lval_properties.ty, lval_expr.span)?
+                    .as_ref()
+                {
+
+                } else {
+
+                }
+
+                unimplemented!();
             }
             _ => unimplemented!(),
         }
@@ -1083,7 +1099,7 @@ mod tests {
             "x".to_owned(),
             VarProperties {
                 ty: Rc::new(Type::Record(record)),
-                mutable: false,
+                immutable: false,
             },
             ByteSpan::new(ByteIndex::none(), ByteIndex::none()),
         );
@@ -1095,7 +1111,7 @@ mod tests {
             env.translate_lval(&lval),
             Ok(VarProperties {
                 ty: Rc::new(Type::Int),
-                mutable: false
+                immutable: false
             })
         );
     }
@@ -1107,7 +1123,7 @@ mod tests {
             "x".to_owned(),
             VarProperties {
                 ty: Rc::new(Type::Record(HashMap::new())),
-                mutable: false,
+                immutable: true,
             },
             ByteSpan::new(ByteIndex::none(), ByteIndex::none()),
         );
@@ -1131,7 +1147,7 @@ mod tests {
             "x".to_owned(),
             VarProperties {
                 ty: Rc::new(Type::Int),
-                mutable: false,
+                immutable: true,
             },
             ByteSpan::new(ByteIndex::none(), ByteIndex::none()),
         );
@@ -1155,7 +1171,7 @@ mod tests {
             "x".to_owned(),
             VarProperties {
                 ty: Rc::new(Type::Array(Rc::new(Type::Int), 3)),
-                mutable: false,
+                immutable: true,
             },
             ByteSpan::new(ByteIndex::none(), ByteIndex::none()),
         );
@@ -1167,7 +1183,7 @@ mod tests {
             env.translate_lval(&lval),
             Ok(VarProperties {
                 ty: Rc::new(Type::Int),
-                mutable: false
+                immutable: true
             })
         );
     }
@@ -1177,7 +1193,7 @@ mod tests {
         let mut env = Env::default();
         let let_expr = zspan!(Let {
             pattern: zspan!(Pattern::String("x".to_owned())),
-            mutable: zspan!(false),
+            immutable: zspan!(true),
             ty: Some(zspan!(ast::Type::Type(zspan!("int".to_owned())))),
             expr: zspan!(ExprType::Number(0))
         });
@@ -1186,7 +1202,7 @@ mod tests {
             env.vars["x"],
             VarProperties {
                 ty: Rc::new(Type::Int),
-                mutable: false
+                immutable: true
             }
         );
         assert!(env.var_def_spans.contains_key("x"));
@@ -1197,7 +1213,7 @@ mod tests {
         let mut env = Env::default();
         let let_expr = zspan!(Let {
             pattern: zspan!(Pattern::String("x".to_owned())),
-            mutable: zspan!(false),
+            immutable: zspan!(true),
             ty: Some(zspan!(ast::Type::Type(zspan!("string".to_owned())))),
             expr: zspan!(ExprType::Number(0))
         });
@@ -1227,7 +1243,7 @@ mod tests {
             "f".to_owned(),
             VarProperties {
                 ty: Rc::new(Type::Int),
-                mutable: false,
+                immutable: true,
             },
             ByteSpan::new(ByteIndex::none(), ByteIndex::none()),
         );
@@ -1248,7 +1264,7 @@ mod tests {
             "f".to_owned(),
             VarProperties {
                 ty: Rc::new(Type::Fn(vec![], Rc::new(Type::Int))),
-                mutable: false,
+                immutable: true,
             },
             zspan!(),
         );
@@ -1269,7 +1285,7 @@ mod tests {
             "f".to_owned(),
             VarProperties {
                 ty: Rc::new(Type::Fn(vec![], Rc::new(Type::Int))),
-                mutable: false,
+                immutable: true,
             },
             zspan!(),
         );
@@ -1283,7 +1299,7 @@ mod tests {
             "f".to_owned(),
             VarProperties {
                 ty: Rc::new(Type::Fn(vec![], Rc::new(Type::Alias("a".to_owned())))),
-                mutable: false,
+                immutable: true,
             },
             zspan!(),
         );
@@ -1306,7 +1322,7 @@ mod tests {
         });
         let let_expr = zspan!(Let {
             pattern: zspan!(Pattern::Wildcard),
-            mutable: zspan!(false),
+            immutable: zspan!(true),
             ty: Some(zspan!(ast::Type::Type(zspan!("a".to_owned())))),
             expr: zspan!(ExprType::Number(0)),
         });
@@ -1323,7 +1339,7 @@ mod tests {
         });
         let let_expr = zspan!(Let {
             pattern: zspan!(Pattern::Wildcard),
-            mutable: zspan!(false),
+            immutable: zspan!(true),
             ty: Some(zspan!(ast::Type::Type(zspan!("a".to_owned())))),
             expr: zspan!(ExprType::String("".to_owned())),
         });
@@ -1346,7 +1362,7 @@ mod tests {
         });
         let var_def = zspan!(Let {
             pattern: zspan!(Pattern::String("i".to_owned())),
-            mutable: zspan!(false),
+            immutable: zspan!(true),
             ty: Some(zspan!(ast::Type::Type(zspan!("i".to_owned())))),
             expr: zspan!(ExprType::Number(0))
         });
@@ -1438,7 +1454,7 @@ mod tests {
             "f".to_owned(),
             VarProperties {
                 ty: Rc::new(Type::Fn(vec![], Rc::new(Type::Alias("a".to_owned())))),
-                mutable: false,
+                immutable: true,
             },
             zspan!(),
         );
@@ -1678,7 +1694,7 @@ mod tests {
         let fn_expr1 = zspan!(ExprType::Seq(
             vec![zspan!(ExprType::Let(Box::new(zspan!(Let {
                 pattern: zspan!(Pattern::String("a".to_owned())),
-                mutable: zspan!(false),
+                immutable: zspan!(true),
                 ty: None,
                 expr: zspan!(ExprType::Number(0))
             }))))],
@@ -1744,7 +1760,7 @@ mod tests {
         let seq_expr1 = zspan!(ExprType::Seq(
             vec![zspan!(ExprType::Let(Box::new(zspan!(Let {
                 pattern: zspan!(Pattern::String("a".to_owned())),
-                mutable: zspan!(false),
+                immutable: zspan!(true),
                 ty: None,
                 expr: zspan!(ExprType::Number(0))
             }))))],
@@ -1766,11 +1782,11 @@ mod tests {
         let env = Env::default();
         let expr = zspan!(ExprType::Let(Box::new(zspan!(Let {
             pattern: zspan!(Pattern::Wildcard),
-            mutable: zspan!(false),
+            immutable: zspan!(true),
             ty: None,
             expr: zspan!(ExprType::Let(Box::new(zspan!(Let {
                 pattern: zspan!(Pattern::Wildcard),
-                mutable: zspan!(false),
+                immutable: zspan!(true),
                 ty: None,
                 expr: zspan!(ExprType::Unit)
             }))))
@@ -1789,7 +1805,7 @@ mod tests {
             "a".to_owned(),
             VarProperties {
                 ty: Rc::new(Type::Int),
-                mutable: false,
+                immutable: true,
             },
             zspan!(),
         );

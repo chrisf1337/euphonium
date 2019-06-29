@@ -161,7 +161,7 @@ pub enum Pattern {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Let {
     pub pattern: Spanned<Pattern>,
-    pub mutable: Spanned<bool>,
+    pub immutable: Spanned<bool>,
     pub ty: Option<Spanned<Type>>,
     pub expr: Expr,
 }
@@ -169,7 +169,7 @@ pub struct Let {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct _Let {
     pub pattern: Pattern,
-    pub mutable: bool,
+    pub immutable: bool,
     pub ty: Option<_Type>,
     pub expr: _ExprType,
 }
@@ -178,7 +178,7 @@ impl From<Let> for _Let {
     fn from(expr: Let) -> Self {
         Self {
             pattern: expr.pattern.t,
-            mutable: expr.mutable.t,
+            immutable: expr.immutable.t,
             ty: expr.ty.map(|ty| ty.t.into()),
             expr: expr.expr.t.into(),
         }

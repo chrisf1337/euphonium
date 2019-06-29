@@ -129,13 +129,13 @@ TypeDecl: ast::TypeDecl =
 _Let: ast::Let = {
    "let" <ml:@L> <mr:@R> <pattern:Spanned<"_">> <ty:(":" <Ty>)?> "=" <expr:Expr> => ast::Let {
         pattern: pattern.map(|_| ast::Pattern::Wildcard),
-        mutable: ast::Spanned::new(false, span!(ml, mr, offset)),
+        immutable: ast::Spanned::new(true, span!(ml, mr, offset)),
         ty,
         expr,
     },
    "let" <ml:@L> <mutable:"mut"?> <mr:@R> <id:Spanned<"identifier">> <ty:(":" <Ty>)?> "=" <expr:Expr> => ast::Let {
         pattern: id.map(ast::Pattern::String),
-        mutable: ast::Spanned::new(mutable.is_some(), span!(ml, mr, offset)),
+        immutable: ast::Spanned::new(mutable.is_none(), span!(ml, mr, offset)),
         ty,
         expr,
     },
