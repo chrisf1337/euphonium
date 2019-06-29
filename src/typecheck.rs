@@ -6,6 +6,7 @@ use codespan::{ByteIndex, ByteSpan};
 use codespan_reporting::{Diagnostic, Label};
 use std::{
     collections::{HashMap, HashSet},
+    hash::Hash,
     rc::Rc,
 };
 
@@ -34,6 +35,7 @@ pub enum TypecheckErrType {
     DuplicateFn(String),
     DuplicateType(String),
     DuplicateField(String),
+    DuplicateParam(String),
     MutatingImmutable(String),
 }
 
@@ -69,6 +71,7 @@ impl TypecheckErrType {
             DuplicateFn(fun) => format!("duplicate function declaration for {}", fun),
             DuplicateType(ty) => format!("duplicate type declaration for {}", ty),
             DuplicateField(field) => format!("duplicate record field declaration for {}", field),
+            DuplicateParam(param) => format!("duplicate function param declaration for {}", param),
             MutatingImmutable(var) => format!("{} was declared as immutable", var),
         };
         Diagnostic::new_error(&msg)
@@ -216,6 +219,7 @@ pub struct Env {
     pub type_def_spans: HashMap<String, ByteSpan>,
 
     pub record_field_decl_spans: HashMap<String, HashMap<String, ByteSpan>>,
+    pub fn_param_decl_spans: HashMap<String, HashMap<String, ByteSpan>>,
 }
 
 impl Default for Env {
@@ -239,6 +243,7 @@ impl Default for Env {
             type_def_spans,
 
             record_field_decl_spans: HashMap::new(),
+            fn_param_decl_spans: HashMap::new(),
         }
     }
 }
@@ -407,6 +412,35 @@ impl Env {
         }
     }
 
+    fn check_for_duplicates<'a, I, T: 'a, Key: Hash + Eq, KeyFn, ErrGen>(
+        iter: I,
+        key_fn: KeyFn,
+        err_gen: ErrGen,
+    ) -> Result<HashMap<Key, ByteSpan>>
+    where
+        I: IntoIterator<Item = &'a Spanned<T>>,
+        KeyFn: Fn(&'a Spanned<T>) -> Key,
+        ErrGen: Fn(&'a Spanned<T>, ByteSpan) -> TypecheckErr,
+    {
+        // t -> def span
+        let mut checked_elems: HashMap<Key, ByteSpan> = HashMap::new();
+        let mut errors: Vec<TypecheckErr> = vec![];
+        for elem in iter {
+            let key = key_fn(elem);
+            if let Some(prev_def_span) = checked_elems.get(&key) {
+                errors.push(err_gen(elem, *prev_def_span));
+            } else {
+                checked_elems.insert(key, elem.span);
+            }
+        }
+
+        if !errors.is_empty() {
+            return Err(errors);
+        }
+
+        Ok(checked_elems)
+    }
+
     pub fn translate_decls(&mut self, decls: &[Decl]) -> Result<()> {
         self.first_pass(&decls)?;
         self.second_pass(&decls)
@@ -473,52 +507,65 @@ impl Env {
                 self.translate_type_decl(type_decl)?;
                 self.check_for_type_decl_cycles(&type_decl.id, vec![])
             }
-            _ => unreachable!(),
+            _ => unreachable!(), // DeclType::Error
         }
     }
 
     fn translate_fn_decl_sig(&mut self, fn_decl: &Spanned<FnDecl>) -> Result<()> {
-        let mut param_types = vec![];
-        for Spanned {
-            t:
-                ast::TypeField {
-                    ty: Spanned { t: ty, .. },
-                    ..
-                },
-            ..
-        } in &fn_decl.type_fields
-        {
-            param_types.push(Rc::new(ty.clone().into()));
-        }
-        let return_type = if let Some(Spanned { t: return_type, .. }) = &fn_decl.return_type {
-            return_type.clone().into()
-        } else {
-            Type::Unit
-        };
-
         // Check if there already exists another function with the same name
         if self.vars.contains_key(&fn_decl.id.t) {
             let span = self.var_def_spans[&fn_decl.id.t];
-            Err(vec![TypecheckErr::new_err(
+            return Err(vec![TypecheckErr::new_err(
                 TypecheckErrType::DuplicateFn(fn_decl.id.t.clone()),
                 fn_decl.id.span,
             )
             .with_source(Spanned::new(
                 format!("{} was defined here", fn_decl.id.t.clone()),
                 span,
-            ))])
-        } else {
-            self.vars.insert(
-                fn_decl.id.t.clone(),
-                VarProperties {
-                    ty: Rc::new(Type::Fn(param_types, Rc::new(return_type))),
-                    mutable: false,
-                },
-            );
-            self.var_def_spans
-                .insert(fn_decl.id.t.clone(), fn_decl.span);
-            Ok(())
+            ))]);
         }
+
+        let param_decl_spans = Self::check_for_duplicates(
+            &fn_decl.type_fields,
+            |type_field| &type_field.id.t,
+            |type_field, span| {
+                TypecheckErr::new_err(
+                    TypecheckErrType::DuplicateParam(type_field.id.t.clone()),
+                    type_field.span,
+                )
+                .with_source(Spanned::new(
+                    format!("{} was declared here", type_field.id.t.clone()),
+                    span,
+                ))
+            },
+        )?
+        .into_iter()
+        .map(|(k, v)| (k.clone(), v))
+        .collect();
+        self.fn_param_decl_spans
+            .insert(fn_decl.id.t.clone(), param_decl_spans);
+
+        let param_types = fn_decl
+            .type_fields
+            .iter()
+            .map(|type_field| Rc::new(type_field.ty.t.clone().into()))
+            .collect();
+        let return_type = if let Some(Spanned { t: return_type, .. }) = &fn_decl.return_type {
+            return_type.clone().into()
+        } else {
+            Type::Unit
+        };
+
+        self.vars.insert(
+            fn_decl.id.t.clone(),
+            VarProperties {
+                ty: Rc::new(Type::Fn(param_types, Rc::new(return_type))),
+                mutable: false,
+            },
+        );
+        self.var_def_spans
+            .insert(fn_decl.id.t.clone(), fn_decl.span);
+        Ok(())
     }
 
     fn translate_fn_decl_body(&mut self, fn_decl: &Spanned<FnDecl>) -> Result<()> {
@@ -579,33 +626,23 @@ impl Env {
 
         let ty = decl.ty.t.clone().into();
         if let ast::Type::Record(ref record_fields) = decl.ty.t {
-            let mut field_def_spans = HashMap::new();
-            let mut errors = vec![];
-            for Spanned {
-                t: type_field,
-                span,
-            } in record_fields
-            {
-                let type_field_id = type_field.id.t.clone();
-                if let Some(field_def_span) = field_def_spans.get(&type_field_id) {
-                    errors.push(
-                        TypecheckErr::new_err(
-                            TypecheckErrType::DuplicateField(type_field_id.clone()),
-                            *span,
-                        )
-                        .with_source(Spanned::new(
-                            format!("{} was declared here", type_field_id),
-                            *field_def_span,
-                        )),
-                    );
-                    continue;
-                }
-                field_def_spans.insert(type_field_id, *span);
-            }
-
-            if !errors.is_empty() {
-                return Err(errors);
-            }
+            let field_def_spans: HashMap<String, ByteSpan> = Self::check_for_duplicates(
+                record_fields,
+                |field| &field.t.id.t,
+                |field, span| {
+                    TypecheckErr::new_err(
+                        TypecheckErrType::DuplicateField(field.t.id.t.clone()),
+                        field.span,
+                    )
+                    .with_source(Spanned::new(
+                        format!("{} aws declared here", field.t.id.t.clone()),
+                        span,
+                    ))
+                },
+            )?
+            .into_iter()
+            .map(|(k, v)| (k.clone(), v))
+            .collect();
 
             self.record_field_decl_spans
                 .insert(id.clone(), field_def_spans);
@@ -870,30 +907,24 @@ impl Env {
                     ));
                 }
 
-                let mut checked_fields: HashMap<&String, ByteSpan> = HashMap::new();
-                for Spanned {
-                    t: FieldAssign { id, .. },
-                    span,
-                } in field_assigns
-                {
-                    if let Some(prev_def_span) = checked_fields.get(&id.t) {
-                        errors.push(
-                            TypecheckErr::new_err(
-                                TypecheckErrType::DuplicateField(id.t.clone()),
-                                *span,
-                            )
-                            .with_source(Spanned::new(
-                                format!("{} was defined here", id.t.clone()),
-                                *prev_def_span,
-                            )),
-                        );
-                    }
-                    checked_fields.insert(&id.t, *span);
-                }
-
                 if !errors.is_empty() {
                     return Err(errors);
                 }
+
+                Self::check_for_duplicates(
+                    field_assigns,
+                    |field_assign| &field_assign.id.t,
+                    |field_assign, span| {
+                        TypecheckErr::new_err(
+                            TypecheckErrType::DuplicateField(field_assign.id.t.clone()),
+                            field_assign.span,
+                        )
+                        .with_source(Spanned::new(
+                            format!("{} was defined here", field_assign.id.t.clone()),
+                            span,
+                        ))
+                    },
+                )?;
 
                 let mut errors = vec![];
                 for Spanned {
@@ -908,13 +939,19 @@ impl Env {
                     let ty = self.translate_expr(expr)?;
                     let actual_type = self.resolve_type(&ty, expr.span)?;
                     if expected_type != actual_type {
-                        errors.push(TypecheckErr::new_err(
-                            TypecheckErrType::TypeMismatch(
-                                expected_type.clone(),
-                                actual_type.clone(),
-                            ),
-                            *span,
-                        ));
+                        errors.push(
+                            TypecheckErr::new_err(
+                                TypecheckErrType::TypeMismatch(
+                                    expected_type.clone(),
+                                    actual_type.clone(),
+                                ),
+                                *span,
+                            )
+                            .with_source(Spanned::new(
+                                format!("{} was declared here", field_id.t),
+                                self.record_field_decl_spans[&record_id.t][&field_id.t],
+                            )),
+                        );
                     }
                 }
 
@@ -1037,7 +1074,7 @@ mod tests {
     }
 
     #[test]
-    fn test_translate_record_field() {
+    fn test_translate_lval_record_field() {
         let mut env = Env::default();
         let record = hashmap! {
             "f".to_owned() => Rc::new(Type::Int)
@@ -1064,7 +1101,7 @@ mod tests {
     }
 
     #[test]
-    fn test_translate_record_field_err1() {
+    fn test_translate_lval_record_field_err1() {
         let mut env = Env::default();
         env.insert_var(
             "x".to_owned(),
@@ -1088,7 +1125,7 @@ mod tests {
     }
 
     #[test]
-    fn test_translate_record_field_err2() {
+    fn test_translate_lval_record_field_err2() {
         let mut env = Env::default();
         env.insert_var(
             "x".to_owned(),
@@ -1445,6 +1482,55 @@ mod tests {
     }
 
     #[test]
+    fn test_translate_fn_decl_duplicate() {
+        let mut env = Env::default();
+        let fn_decl1 = zspan!(FnDecl {
+            id: zspan!("f".to_owned()),
+            type_fields: vec![],
+            return_type: None,
+            body: zspan!(ExprType::Unit)
+        });
+        let fn_decl2 = zspan!(FnDecl {
+            id: zspan!("f".to_owned()),
+            type_fields: vec![],
+            return_type: Some(zspan!(ast::Type::Type(zspan!("int".to_owned())))),
+            body: zspan!(ExprType::Number(0))
+        });
+        env.translate_fn_decl_sig(&fn_decl1)
+            .expect("translate function signature");
+
+        assert_eq!(
+            env.translate_fn_decl_sig(&fn_decl2).unwrap_err()[0].t.ty,
+            TypecheckErrType::DuplicateFn("f".to_owned())
+        );
+    }
+
+    #[test]
+    fn test_translate_fn_decl_duplicate_param() {
+        let mut env = Env::default();
+        let fn_decl = zspan!(FnDecl {
+            id: zspan!("f".to_owned()),
+            type_fields: vec![
+                zspan!(TypeField {
+                    id: zspan!("a".to_owned()),
+                    ty: zspan!(ast::Type::Type(zspan!("int".to_owned()))),
+                }),
+                zspan!(TypeField {
+                    id: zspan!("a".to_owned()),
+                    ty: zspan!(ast::Type::Type(zspan!("int".to_owned()))),
+                }),
+            ],
+            return_type: None,
+            body: zspan!(ExprType::Unit)
+        });
+
+        assert_eq!(
+            env.translate_fn_decl_sig(&fn_decl).unwrap_err()[0].t.ty,
+            TypecheckErrType::DuplicateParam("a".to_owned())
+        );
+    }
+
+    #[test]
     fn test_validate_type() {
         let mut env = Env::default();
         let mut record_fields = HashMap::new();
@@ -1564,6 +1650,29 @@ mod tests {
     }
 
     #[test]
+    fn test_translate_record_field_type_mismatch() {
+        let mut env = Env::default();
+        let record_type = Type::Record(hashmap! {
+            "a".to_owned() => Rc::new(Type::Int)
+        });
+        env.insert_type("r".to_owned(), record_type, zspan!());
+        env.record_field_decl_spans
+            .insert("r".to_owned(), hashmap! { "a".to_owned() => zspan!() });
+        let record = zspan!(Record {
+            id: zspan!("r".to_owned()),
+            field_assigns: vec![zspan!(FieldAssign {
+                id: zspan!("a".to_owned()),
+                expr: zspan!(ExprType::String("asdf".to_owned()))
+            })]
+        });
+
+        assert_eq!(
+            env.translate_record(&record).unwrap_err()[0].t.ty,
+            TypecheckErrType::TypeMismatch(Rc::new(Type::Int), Rc::new(Type::String))
+        );
+    }
+
+    #[test]
     fn test_translate_fn_independent() {
         let mut env = Env::default();
         let fn_expr1 = zspan!(ExprType::Seq(
@@ -1596,6 +1705,37 @@ mod tests {
             env.translate_decls(&[fn1, fn2]).unwrap_err()[0].t.ty,
             TypecheckErrType::UndefinedVar("a".to_owned())
         );
+    }
+
+    #[test]
+    fn test_translate_fn_body() {
+        let mut env = Env::default();
+        let fn_expr = zspan!(ExprType::Arith(
+            Box::new(zspan!(ExprType::LVal(Box::new(zspan!(LVal::Simple(
+                "a".to_owned()
+            )))))),
+            zspan!(ast::ArithOp::Add),
+            Box::new(zspan!(ExprType::LVal(Box::new(zspan!(LVal::Simple(
+                "b".to_owned()
+            ))))))
+        ));
+        let fn_decl = zspan!(DeclType::Fn(zspan!(FnDecl {
+            id: zspan!("f".to_owned()),
+            type_fields: vec![
+                zspan!(TypeField {
+                    id: zspan!("a".to_owned()),
+                    ty: zspan!(ast::Type::Type(zspan!("int".to_owned())))
+                }),
+                zspan!(TypeField {
+                    id: zspan!("b".to_owned()),
+                    ty: zspan!(ast::Type::Type(zspan!("int".to_owned())))
+                })
+            ],
+            return_type: Some(zspan!(ast::Type::Type(zspan!("int".to_owned())))),
+            body: fn_expr,
+        })));
+
+        assert_eq!(env.translate_decls(&[fn_decl]), Ok(()));
     }
 
     #[test]
