@@ -1,6 +1,6 @@
 use crate::ast::{
-    self, Assign, Decl, DeclType, Expr, ExprType, FieldAssign, FnCall, FnDecl, LVal, Let, Pattern,
-    Record, Spanned, TypeDecl,
+    self, Assign, Decl, DeclType, Expr, ExprType, FieldAssign, FnCall, FnDecl, LVal, Let, Pattern, Record, Spanned,
+    TypeDecl,
 };
 use codespan::{ByteIndex, ByteSpan};
 use codespan_reporting::{Diagnostic, Label};
@@ -43,14 +43,12 @@ impl TypecheckErrType {
     pub fn diagnostic(&self, env: &Env) -> Diagnostic {
         use TypecheckErrType::*;
         let msg = match self {
-            TypeMismatch(expected, actual) => format!(
-                "type mismatch\nexpected: {:?}\n  actual: {:?}",
-                expected, actual
-            ),
-            ArityMismatch(expected, actual) => format!(
-                "arity mismatch\nexpected: {:?}\n  actual: {:?}",
-                expected, actual
-            ),
+            TypeMismatch(expected, actual) => {
+                format!("type mismatch\nexpected: {:?}\n  actual: {:?}", expected, actual)
+            }
+            ArityMismatch(expected, actual) => {
+                format!("arity mismatch\nexpected: {:?}\n  actual: {:?}", expected, actual)
+            }
             NotAFn(fun) => {
                 let ty = env.vars.get(fun).unwrap();
                 format!("not a function: {} (has type {:?})", fun, ty)
@@ -231,14 +229,8 @@ impl Default for Env {
         types.insert("int".to_owned(), Rc::new(Type::Int));
         types.insert("string".to_owned(), Rc::new(Type::String));
         let mut type_def_spans = HashMap::new();
-        type_def_spans.insert(
-            "int".to_owned(),
-            ByteSpan::new(ByteIndex::none(), ByteIndex::none()),
-        );
-        type_def_spans.insert(
-            "string".to_owned(),
-            ByteSpan::new(ByteIndex::none(), ByteIndex::none()),
-        );
+        type_def_spans.insert("int".to_owned(), ByteSpan::new(ByteIndex::none(), ByteIndex::none()));
+        type_def_spans.insert("string".to_owned(), ByteSpan::new(ByteIndex::none(), ByteIndex::none()));
         Env {
             vars: HashMap::new(),
             types,
@@ -545,8 +537,7 @@ impl Env {
         .into_iter()
         .map(|(k, v)| (k.clone(), v))
         .collect();
-        self.fn_param_decl_spans
-            .insert(fn_decl.id.t.clone(), param_decl_spans);
+        self.fn_param_decl_spans.insert(fn_decl.id.t.clone(), param_decl_spans);
 
         let param_types = fn_decl
             .type_fields
@@ -566,8 +557,7 @@ impl Env {
                 immutable: true,
             },
         );
-        self.var_def_spans
-            .insert(fn_decl.id.t.clone(), fn_decl.span);
+        self.var_def_spans.insert(fn_decl.id.t.clone(), fn_decl.span);
         Ok(())
     }
 
@@ -633,22 +623,18 @@ impl Env {
                 record_fields,
                 |field| &field.t.id.t,
                 |field, span| {
-                    TypecheckErr::new_err(
-                        TypecheckErrType::DuplicateField(field.t.id.t.clone()),
-                        field.span,
-                    )
-                    .with_source(Spanned::new(
-                        format!("{} aws declared here", field.t.id.t.clone()),
-                        span,
-                    ))
+                    TypecheckErr::new_err(TypecheckErrType::DuplicateField(field.t.id.t.clone()), field.span)
+                        .with_source(Spanned::new(
+                            format!("{} aws declared here", field.t.id.t.clone()),
+                            span,
+                        ))
                 },
             )?
             .into_iter()
             .map(|(k, v)| (k.clone(), v))
             .collect();
 
-            self.record_field_decl_spans
-                .insert(id.clone(), field_def_spans);
+            self.record_field_decl_spans.insert(id.clone(), field_def_spans);
         }
         self.insert_type(id, ty, decl.span);
 
@@ -688,10 +674,7 @@ impl Env {
                 Ok(Rc::new(Type::Bool))
             }
             ExprType::LVal(lval) => Ok(self.translate_lval(lval)?.ty),
-            ExprType::Let(_) => Err(vec![TypecheckErr::new_err(
-                TypecheckErrType::IllegalLetExpr,
-                expr.span,
-            )]),
+            ExprType::Let(_) => Err(vec![TypecheckErr::new_err(TypecheckErrType::IllegalLetExpr, expr.span)]),
             ExprType::FnCall(fn_call) => self.translate_fn_call(fn_call),
             ExprType::Record(record) => self.translate_record(record),
             ExprType::Assign(assign) => self.translate_assign(assign),
@@ -727,9 +710,7 @@ impl Env {
             }
             LVal::Field(var, field) => {
                 let lval_properties = self.translate_lval(var)?;
-                if let Type::Record(fields) =
-                    self.resolve_type(&lval_properties.ty, var.span)?.as_ref()
-                {
+                if let Type::Record(fields) = self.resolve_type(&lval_properties.ty, var.span)?.as_ref() {
                     if let Some(field_type) = fields.get(&field.t) {
                         // A field is mutable only if the record it belongs to is mutable
                         return Ok(LValProperties {
@@ -746,9 +727,7 @@ impl Env {
             LVal::Subscript(var, index) => {
                 let lval_properties = self.translate_lval(var)?;
                 let index_type = self.translate_expr(index)?;
-                if let Type::Array(ty, _) =
-                    self.resolve_type(&lval_properties.ty, var.span)?.as_ref()
-                {
+                if let Type::Array(ty, _) = self.resolve_type(&lval_properties.ty, var.span)?.as_ref() {
                     if self.resolve_type(&index_type, index.span)? == Rc::new(Type::Int) {
                         Ok(LValProperties {
                             ty: ty.clone(),
@@ -835,14 +814,10 @@ impl Env {
                             Ok(ty) => {
                                 // param_type should already be well-defined because we have already
                                 // checked for invalid types
-                                if self.resolve_type(&ty, arg.span)?
-                                    != self.resolve_type(param_type, zspan!()).unwrap()
+                                if self.resolve_type(&ty, arg.span)? != self.resolve_type(param_type, zspan!()).unwrap()
                                 {
                                     errs.push(TypecheckErr::new_err(
-                                        TypecheckErrType::TypeMismatch(
-                                            param_type.clone(),
-                                            ty.clone(),
-                                        ),
+                                        TypecheckErrType::TypeMismatch(param_type.clone(), ty.clone()),
                                         arg.span,
                                     ));
                                 }
@@ -876,111 +851,135 @@ impl Env {
             span,
         }: &Spanned<Record>,
     ) -> Result<Rc<Type>> {
-        if let Some(ty) = self.types.get(&record_id.t) {
-            if let Type::Record(field_types) = ty.as_ref() {
-                let mut field_assigns_hm = HashMap::new();
-                for field_assign in field_assigns {
-                    field_assigns_hm.insert(field_assign.id.t.clone(), field_assign.expr.clone());
-                }
+        if let Some(record_id) = record_id {
+            if let Some(ty) = self.types.get(&record_id.t) {
+                if let Type::Record(field_types) = ty.as_ref() {
+                    let mut field_assigns_hm = HashMap::new();
+                    for field_assign in field_assigns {
+                        field_assigns_hm.insert(field_assign.id.t.clone(), field_assign.expr.clone());
+                    }
 
-                let mut errors = vec![];
+                    let mut errors = vec![];
 
-                let missing_fields: HashSet<&String> = field_types
-                    .keys()
-                    .collect::<HashSet<&String>>()
-                    .difference(&field_assigns_hm.keys().collect())
-                    .map(|&k| k)
-                    .collect();
-                if !missing_fields.is_empty() {
-                    let mut missing_fields: Vec<String> =
-                        missing_fields.into_iter().cloned().collect();
-                    missing_fields.sort_unstable();
-                    errors.push(TypecheckErr::new_err(
-                        TypecheckErrType::MissingFields(missing_fields),
-                        *span,
-                    ));
-                }
+                    let missing_fields: HashSet<&String> = field_types
+                        .keys()
+                        .collect::<HashSet<&String>>()
+                        .difference(&field_assigns_hm.keys().collect())
+                        .map(|&k| k)
+                        .collect();
+                    if !missing_fields.is_empty() {
+                        let mut missing_fields: Vec<String> = missing_fields.into_iter().cloned().collect();
+                        missing_fields.sort_unstable();
+                        errors.push(TypecheckErr::new_err(
+                            TypecheckErrType::MissingFields(missing_fields),
+                            *span,
+                        ));
+                    }
 
-                let invalid_fields: HashSet<&String> = field_assigns_hm
-                    .keys()
-                    .collect::<HashSet<&String>>()
-                    .difference(&field_types.keys().collect())
-                    .map(|&k| k)
-                    .collect();
-                if !invalid_fields.is_empty() {
-                    let mut invalid_fields: Vec<String> =
-                        invalid_fields.into_iter().cloned().collect();
-                    invalid_fields.sort_unstable();
-                    errors.push(TypecheckErr::new_err(
-                        TypecheckErrType::InvalidFields(invalid_fields),
-                        *span,
-                    ));
-                }
+                    let invalid_fields: HashSet<&String> = field_assigns_hm
+                        .keys()
+                        .collect::<HashSet<&String>>()
+                        .difference(&field_types.keys().collect())
+                        .map(|&k| k)
+                        .collect();
+                    if !invalid_fields.is_empty() {
+                        let mut invalid_fields: Vec<String> = invalid_fields.into_iter().cloned().collect();
+                        invalid_fields.sort_unstable();
+                        errors.push(TypecheckErr::new_err(
+                            TypecheckErrType::InvalidFields(invalid_fields),
+                            *span,
+                        ));
+                    }
 
-                if !errors.is_empty() {
-                    return Err(errors);
-                }
+                    if !errors.is_empty() {
+                        return Err(errors);
+                    }
 
-                Self::check_for_duplicates(
-                    field_assigns,
-                    |field_assign| &field_assign.id.t,
-                    |field_assign, span| {
-                        TypecheckErr::new_err(
-                            TypecheckErrType::DuplicateField(field_assign.id.t.clone()),
-                            field_assign.span,
-                        )
-                        .with_source(Spanned::new(
-                            format!("{} was defined here", field_assign.id.t.clone()),
-                            span,
-                        ))
-                    },
-                )?;
-
-                let mut errors = vec![];
-                for Spanned {
-                    t: FieldAssign { id: field_id, expr },
-                    span,
-                } in field_assigns
-                {
-                    // This should never error because we already checked for invalid types
-                    let expected_type = self
-                        .resolve_type(&field_types[&field_id.t], zspan!())
-                        .unwrap();
-                    let ty = self.translate_expr(expr)?;
-                    let actual_type = self.resolve_type(&ty, expr.span)?;
-                    if expected_type != actual_type {
-                        errors.push(
+                    Self::check_for_duplicates(
+                        field_assigns,
+                        |field_assign| &field_assign.id.t,
+                        |field_assign, span| {
                             TypecheckErr::new_err(
-                                TypecheckErrType::TypeMismatch(
-                                    expected_type.clone(),
-                                    actual_type.clone(),
-                                ),
-                                *span,
+                                TypecheckErrType::DuplicateField(field_assign.id.t.clone()),
+                                field_assign.span,
                             )
                             .with_source(Spanned::new(
-                                format!("{} was declared here", field_id.t),
-                                self.record_field_decl_spans[&record_id.t][&field_id.t],
-                            )),
-                        );
+                                format!("{} was defined here", field_assign.id.t.clone()),
+                                span,
+                            ))
+                        },
+                    )?;
+
+                    let mut errors = vec![];
+                    for Spanned {
+                        t: FieldAssign { id: field_id, expr },
+                        span,
+                    } in field_assigns
+                    {
+                        // This should never error because we already checked for invalid types
+                        let expected_type = self.resolve_type(&field_types[&field_id.t], zspan!()).unwrap();
+                        let ty = self.translate_expr(expr)?;
+                        let actual_type = self.resolve_type(&ty, expr.span)?;
+                        if expected_type != actual_type {
+                            errors.push(
+                                TypecheckErr::new_err(
+                                    TypecheckErrType::TypeMismatch(expected_type.clone(), actual_type.clone()),
+                                    *span,
+                                )
+                                .with_source(Spanned::new(
+                                    format!("{} was declared here", field_id.t),
+                                    self.record_field_decl_spans[&record_id.t][&field_id.t],
+                                )),
+                            );
+                        }
                     }
-                }
 
-                if !errors.is_empty() {
-                    return Err(errors);
-                }
+                    if !errors.is_empty() {
+                        return Err(errors);
+                    }
 
-                Ok(ty.clone())
+                    Ok(ty.clone())
+                } else {
+                    Err(vec![TypecheckErr::new_err(
+                        TypecheckErrType::NotARecord(ty.clone()),
+                        *span,
+                    )])
+                }
             } else {
                 Err(vec![TypecheckErr::new_err(
-                    TypecheckErrType::NotARecord(ty.clone()),
-                    *span,
+                    TypecheckErrType::UndefinedType(record_id.t.clone()),
+                    record_id.span,
                 )])
             }
         } else {
-            Err(vec![TypecheckErr::new_err(
-                TypecheckErrType::UndefinedType(record_id.t.clone()),
-                record_id.span,
-            )])
+            // Anonymous record
+            Self::check_for_duplicates(
+                field_assigns,
+                |field_assign| &field_assign.id.t,
+                |field_assign, span| {
+                    TypecheckErr::new_err(
+                        TypecheckErrType::DuplicateField(field_assign.id.t.clone()),
+                        field_assign.span,
+                    )
+                    .with_source(Spanned::new(
+                        format!("{} was defined here", field_assign.id.t.clone()),
+                        span,
+                    ))
+                },
+            )?;
+
+            let mut record_fields: HashMap<String, Rc<Type>> = HashMap::new();
+            for Spanned {
+                t: FieldAssign { id: field_id, expr },
+                ..
+            } in field_assigns
+            {
+                let ty = self.translate_expr(expr)?;
+                let resolved_type = self.resolve_type(&ty, expr.span)?;
+                record_fields.insert(field_id.t.clone(), resolved_type);
+            }
+
+            Ok(Rc::new(Type::Record(record_fields)))
         }
     }
 
@@ -994,23 +993,15 @@ impl Env {
                             TypecheckErrType::MutatingImmutable(var.clone()),
                             assign.lval.span,
                         )
-                        .with_source(Spanned::new(
-                            format!("{} was defined here", var.clone()),
-                            def_span,
-                        ))]);
+                        .with_source(Spanned::new(format!("{} was defined here", var.clone()), def_span))]);
                     }
 
-                    let resolved_expected_ty = self
-                        .resolve_type(&var_properties.ty, assign.lval.span)?
-                        .clone();
+                    let resolved_expected_ty = self.resolve_type(&var_properties.ty, assign.lval.span)?.clone();
                     let resolved_actual_ty =
                         self.resolve_type(&self.translate_expr(&assign.expr)?, assign.expr.span)?;
                     if resolved_expected_ty != resolved_actual_ty {
                         return Err(vec![TypecheckErr::new_err(
-                            TypecheckErrType::TypeMismatch(
-                                resolved_expected_ty,
-                                resolved_actual_ty,
-                            ),
+                            TypecheckErrType::TypeMismatch(resolved_expected_ty, resolved_actual_ty),
                             *span,
                         )]);
                     }
@@ -1031,16 +1022,12 @@ impl Env {
                 let lval_type = self.resolve_type(&lval_properties.ty, lval_expr.span)?;
                 if let Type::Record(record_field_types) = lval_type.as_ref() {
                     if let Some(expected_ty) = record_field_types.get(&field.t) {
-                        let resolved_expected_ty =
-                            self.resolve_type(expected_ty, assign.lval.span)?;
-                        let resolved_actual_ty = self
-                            .resolve_type(&self.translate_expr(&assign.expr)?, assign.expr.span)?;
+                        let resolved_expected_ty = self.resolve_type(expected_ty, assign.lval.span)?;
+                        let resolved_actual_ty =
+                            self.resolve_type(&self.translate_expr(&assign.expr)?, assign.expr.span)?;
                         if resolved_expected_ty != resolved_actual_ty {
                             return Err(vec![TypecheckErr::new_err(
-                                TypecheckErrType::TypeMismatch(
-                                    resolved_expected_ty,
-                                    resolved_actual_ty,
-                                ),
+                                TypecheckErrType::TypeMismatch(resolved_expected_ty, resolved_actual_ty),
                                 *span,
                             )]);
                         }
@@ -1382,10 +1369,7 @@ mod tests {
         let _ = env.translate_type_decl(&type_decl);
         assert_eq!(
             env.translate_let(&let_expr).unwrap_err()[0].t.ty,
-            TypecheckErrType::TypeMismatch(
-                Rc::new(Type::Alias("a".to_owned())),
-                Rc::new(Type::String)
-            )
+            TypecheckErrType::TypeMismatch(Rc::new(Type::Alias("a".to_owned())), Rc::new(Type::String))
         );
     }
 
@@ -1402,11 +1386,8 @@ mod tests {
             ty: Some(zspan!(ast::Type::Type(zspan!("i".to_owned())))),
             expr: zspan!(ExprType::Number(0))
         });
-        let expr = zspan!(ExprType::LVal(Box::new(zspan!(LVal::Simple(
-            "i".to_owned()
-        )))));
-        env.translate_type_decl(&type_decl)
-            .expect("translate type decl");
+        let expr = zspan!(ExprType::LVal(Box::new(zspan!(LVal::Simple("i".to_owned())))));
+        env.translate_type_decl(&type_decl).expect("translate type decl");
         env.translate_let(&var_def).expect("translate var def");
         assert_eq!(
             env.translate_expr_mut(&expr).unwrap(),
@@ -1424,8 +1405,7 @@ mod tests {
                 ty: zspan!(ast::Type::Type(zspan!("i".to_owned())))
             })]))
         })));
-        env.translate_decl_first_pass(&type_decl)
-            .expect("translate decl");
+        env.translate_decl_first_pass(&type_decl).expect("translate decl");
     }
 
     #[test]
@@ -1433,9 +1413,7 @@ mod tests {
         let mut env = Env::default();
         env.insert_type("a".to_owned(), Type::Alias("a".to_owned()), zspan!());
         assert_eq!(
-            env.check_for_type_decl_cycles("a", vec![]).unwrap_err()[0]
-                .t
-                .ty,
+            env.check_for_type_decl_cycles("a", vec![]).unwrap_err()[0].t.ty,
             TypecheckErrType::TypeDeclCycle("a".to_owned(), Rc::new(Type::Alias("a".to_owned())))
         );
     }
@@ -1447,9 +1425,7 @@ mod tests {
         env.insert_type("b".to_owned(), Type::Alias("c".to_owned()), zspan!());
         env.insert_type("c".to_owned(), Type::Alias("a".to_owned()), zspan!());
         assert_eq!(
-            env.check_for_type_decl_cycles("a", vec![]).unwrap_err()[0]
-                .t
-                .ty,
+            env.check_for_type_decl_cycles("a", vec![]).unwrap_err()[0].t.ty,
             TypecheckErrType::TypeDeclCycle("c".to_owned(), Rc::new(Type::Alias("a".to_owned())))
         );
     }
@@ -1524,10 +1500,7 @@ mod tests {
         assert_eq!(
             result,
             Err(vec![TypecheckErr::new_err(
-                TypecheckErrType::TypeDeclCycle(
-                    "a".to_owned(),
-                    Rc::new(Type::Alias("a".to_owned()))
-                ),
+                TypecheckErrType::TypeDeclCycle("a".to_owned(), Rc::new(Type::Alias("a".to_owned()))),
                 zspan!()
             )])
         );
@@ -1593,10 +1566,7 @@ mod tests {
         let errs = env.check_for_invalid_types().unwrap_err();
         assert_eq!(errs.len(), 1);
         // Recursive type def in records is allowed
-        assert_eq!(
-            errs[0].t.ty,
-            TypecheckErrType::UndefinedType("b".to_owned())
-        );
+        assert_eq!(errs[0].t.ty, TypecheckErrType::UndefinedType("b".to_owned()));
     }
 
     #[test]
@@ -1607,7 +1577,7 @@ mod tests {
         });
         env.insert_type("r".to_owned(), record_type, zspan!());
         let record = zspan!(Record {
-            id: zspan!("r".to_owned()),
+            id: Some(zspan!("r".to_owned())),
             field_assigns: vec![]
         });
         assert_eq!(
@@ -1622,7 +1592,7 @@ mod tests {
         let record_type = Type::Record(HashMap::new());
         env.insert_type("r".to_owned(), record_type, zspan!());
         let record = zspan!(Record {
-            id: zspan!("r".to_owned()),
+            id: Some(zspan!("r".to_owned())),
             field_assigns: vec![zspan!(FieldAssign {
                 id: zspan!("b".to_owned()),
                 expr: zspan!(ExprType::Number(0))
@@ -1650,7 +1620,7 @@ mod tests {
         );
 
         let record = zspan!(Record {
-            id: zspan!("r".to_owned()),
+            id: Some(zspan!("r".to_owned())),
             field_assigns: vec![
                 zspan!(FieldAssign {
                     id: zspan!("a".to_owned()),
@@ -1685,7 +1655,31 @@ mod tests {
             },
         );
         let record = zspan!(Record {
-            id: zspan!("r".to_owned()),
+            id: Some(zspan!("r".to_owned())),
+            field_assigns: vec![
+                zspan!(FieldAssign {
+                    id: zspan!("a".to_owned()),
+                    expr: zspan!(ExprType::Number(0))
+                }),
+                zspan!(FieldAssign {
+                    id: zspan!("b".to_owned()),
+                    expr: zspan!(ExprType::String("b".to_owned()))
+                }),
+            ]
+        });
+
+        assert_eq!(env.translate_record(&record).unwrap(), Rc::new(record_type));
+    }
+
+    #[test]
+    fn test_translate_anonymous_record() {
+        let env = Env::default();
+        let record_type = Type::Record(hashmap! {
+            "a".to_owned() => Rc::new(Type::Int),
+            "b".to_owned() => Rc::new(Type::String),
+        });
+        let record = zspan!(Record {
+            id: None,
             field_assigns: vec![
                 zspan!(FieldAssign {
                     id: zspan!("a".to_owned()),
@@ -1711,7 +1705,7 @@ mod tests {
         env.record_field_decl_spans
             .insert("r".to_owned(), hashmap! { "a".to_owned() => zspan!() });
         let record = zspan!(Record {
-            id: zspan!("r".to_owned()),
+            id: Some(zspan!("r".to_owned())),
             field_assigns: vec![zspan!(FieldAssign {
                 id: zspan!("a".to_owned()),
                 expr: zspan!(ExprType::String("asdf".to_owned()))
@@ -1736,9 +1730,7 @@ mod tests {
             }))))],
             false
         ));
-        let fn_expr2 = zspan!(ExprType::LVal(Box::new(zspan!(LVal::Simple(
-            "a".to_owned()
-        )))));
+        let fn_expr2 = zspan!(ExprType::LVal(Box::new(zspan!(LVal::Simple("a".to_owned())))));
 
         let fn1 = zspan!(DeclType::Fn(zspan!(FnDecl {
             id: zspan!("f1".to_owned()),
@@ -1763,13 +1755,9 @@ mod tests {
     fn test_translate_fn_body() {
         let mut env = Env::default();
         let fn_expr = zspan!(ExprType::Arith(
-            Box::new(zspan!(ExprType::LVal(Box::new(zspan!(LVal::Simple(
-                "a".to_owned()
-            )))))),
+            Box::new(zspan!(ExprType::LVal(Box::new(zspan!(LVal::Simple("a".to_owned())))))),
             zspan!(ast::ArithOp::Add),
-            Box::new(zspan!(ExprType::LVal(Box::new(zspan!(LVal::Simple(
-                "b".to_owned()
-            ))))))
+            Box::new(zspan!(ExprType::LVal(Box::new(zspan!(LVal::Simple("b".to_owned()))))))
         ));
         let fn_decl = zspan!(DeclType::Fn(zspan!(FnDecl {
             id: zspan!("f".to_owned()),
@@ -1802,9 +1790,7 @@ mod tests {
             }))))],
             false
         ));
-        let seq_expr2 = zspan!(ExprType::LVal(Box::new(zspan!(LVal::Simple(
-            "a".to_owned()
-        )))));
+        let seq_expr2 = zspan!(ExprType::LVal(Box::new(zspan!(LVal::Simple("a".to_owned())))));
 
         env.translate_expr(&seq_expr1).expect("translate expr");
         assert_eq!(

@@ -161,12 +161,7 @@ impl Lexer {
         let mut col = 1;
         let mut chars = vec![];
         for (index, ch) in input.char_indices() {
-            chars.push(CharInfo {
-                index,
-                row,
-                col,
-                ch,
-            });
+            chars.push(CharInfo { index, row, col, ch });
             if ch == '\n' {
                 row += 1;
                 col = 1;
@@ -397,11 +392,7 @@ impl Lexer {
         }
 
         let number: usize = number_str.parse().unwrap();
-        Ok((
-            start_char_info.index,
-            Tok::Number(number),
-            end_char_info.index + 1,
-        ))
+        Ok((start_char_info.index, Tok::Number(number), end_char_info.index + 1))
     }
 
     fn lex_string(&mut self) -> Result {
@@ -432,11 +423,7 @@ impl Lexer {
             .iter()
             .map(|char_info| char_info.ch)
             .collect();
-        Ok((
-            start_char_info.index,
-            Tok::String(s),
-            end_char_info.index + 1,
-        ))
+        Ok((start_char_info.index, Tok::String(s), end_char_info.index + 1))
     }
 }
 
@@ -473,10 +460,7 @@ mod tests {
     #[test]
     fn test_lex_identifier() {
         let mut lexer = Lexer::new("asdf");
-        assert_eq!(
-            lexer.lex_identifier(),
-            (0, Tok::Identifier("asdf".to_owned()), 4)
-        );
+        assert_eq!(lexer.lex_identifier(), (0, Tok::Identifier("asdf".to_owned()), 4));
         assert_eq!(lexer.next(), None);
     }
 
@@ -503,10 +487,7 @@ mod tests {
     fn test_lex_whitespace_and_identifier() {
         let mut lexer = Lexer::new("    asdf");
         lexer.lex_whitespace();
-        assert_eq!(
-            lexer.lex_identifier(),
-            (4, Tok::Identifier("asdf".to_owned()), 8)
-        );
+        assert_eq!(lexer.lex_identifier(), (4, Tok::Identifier("asdf".to_owned()), 8));
         assert_eq!(lexer.next(), None);
     }
 
@@ -527,10 +508,7 @@ mod tests {
     #[test]
     fn test_lex_string() {
         let mut lexer = Lexer::new("\"asdf\"");
-        assert_eq!(
-            lexer.lex_string(),
-            Ok((0, Tok::String("asdf".to_owned()), 6))
-        );
+        assert_eq!(lexer.lex_string(), Ok((0, Tok::String("asdf".to_owned()), 6)));
         assert_eq!(lexer.next(), None);
 
         let mut lexer = Lexer::new("\"asdf");

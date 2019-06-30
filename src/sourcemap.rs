@@ -23,19 +23,13 @@ pub enum SourcemapError {
 }
 
 impl Sourcemap {
-    pub fn add_file_from_disk<P: AsRef<Path>>(
-        &mut self,
-        path: P,
-    ) -> Result<Vec<ast::Decl>, SourcemapError> {
+    pub fn add_file_from_disk<P: AsRef<Path>>(&mut self, path: P) -> Result<Vec<ast::Decl>, SourcemapError> {
         match File::open(path.as_ref()) {
             Ok(file) => {
                 let mut buf_reader = BufReader::new(file);
                 let mut contents = String::new();
                 match buf_reader.read_to_string(&mut contents) {
-                    Ok(_) => self.add_file(
-                        codespan::FileName::Real(path.as_ref().to_path_buf()),
-                        contents,
-                    ),
+                    Ok(_) => self.add_file(codespan::FileName::Real(path.as_ref().to_path_buf()), contents),
                     Err(err) => Err(SourcemapError::Io(path.as_ref().to_path_buf(), err)),
                 }
             }
@@ -43,28 +37,21 @@ impl Sourcemap {
         }
     }
 
-    pub fn add_file(
-        &mut self,
-        filename: codespan::FileName,
-        file: String,
-    ) -> Result<Vec<ast::Decl>, SourcemapError> {
+    pub fn add_file(&mut self, filename: codespan::FileName, file: String) -> Result<Vec<ast::Decl>, SourcemapError> {
         let lexer = lexer::Lexer::new(&file);
         let mut errors = vec![];
         let filemap = self.codemap.add_filemap(filename, file);
-        match parser::ProgramParser::new().parse(
-            ByteOffset(filemap.span().start().0 as RawOffset),
-            &mut errors,
-            lexer,
-        ) {
+        match parser::ProgramParser::new().parse(ByteOffset(filemap.span().start().0 as RawOffset), &mut errors, lexer)
+        {
             Ok(decls) => {
                 if errors.is_empty() {
                     Ok(decls)
                 } else {
                     let mut converted_errors = vec![];
                     for ErrorRecovery { error, .. } in errors {
-                        converted_errors.push(error.map_location(|loc| {
-                            ByteIndex(filemap.span().start().0 + u32::try_from(loc).unwrap())
-                        }));
+                        converted_errors.push(
+                            error.map_location(|loc| ByteIndex(filemap.span().start().0 + u32::try_from(loc).unwrap())),
+                        );
                     }
                     Err(SourcemapError::Parse(converted_errors))
                 }
@@ -72,13 +59,12 @@ impl Sourcemap {
             Err(err) => {
                 let mut converted_errors = vec![];
                 for ErrorRecovery { error, .. } in errors {
-                    converted_errors.push(error.map_location(|loc| {
-                        ByteIndex(filemap.span().start().0 + u32::try_from(loc).unwrap())
-                    }));
+                    converted_errors.push(
+                        error.map_location(|loc| ByteIndex(filemap.span().start().0 + u32::try_from(loc).unwrap())),
+                    );
                 }
-                converted_errors.push(err.map_location(|loc| {
-                    ByteIndex(filemap.span().start().0 + u32::try_from(loc).unwrap())
-                }));
+                converted_errors
+                    .push(err.map_location(|loc| ByteIndex(filemap.span().start().0 + u32::try_from(loc).unwrap())));
                 Err(SourcemapError::Parse(converted_errors))
             }
         }

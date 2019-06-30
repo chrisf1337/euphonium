@@ -27,12 +27,7 @@ impl From<std::io::Error> for EuphcErr {
 fn main() -> Result<(), EuphcErr> {
     let matches = App::new("euphc")
         .about("Euphonium compiler")
-        .arg(
-            Arg::with_name("FILES")
-                .required(true)
-                .multiple(true)
-                .help(""),
-        )
+        .arg(Arg::with_name("FILES").required(true).multiple(true).help(""))
         .get_matches();
     let files = matches.values_of("FILES").unwrap();
     let mut sourcemap = Sourcemap::default();
@@ -55,8 +50,7 @@ fn main() -> Result<(), EuphcErr> {
                             &mut writer,
                             &sourcemap.codemap,
                             &Diagnostic::new_error("parse error").with_label(
-                                Label::new_primary(parse_err.span())
-                                    .with_message(format!("{:?}", parse_err)),
+                                Label::new_primary(parse_err.span()).with_message(format!("{:?}", parse_err)),
                             ),
                         )?;
                     }
@@ -65,11 +59,7 @@ fn main() -> Result<(), EuphcErr> {
                     codespan_reporting::emit(
                         &mut writer,
                         &sourcemap.codemap,
-                        &Diagnostic::new_error(format!(
-                            "{}: IO error: {:?}",
-                            path.to_str().unwrap_or(""),
-                            err
-                        )),
+                        &Diagnostic::new_error(format!("{}: IO error: {:?}", path.to_str().unwrap_or(""), err)),
                     )?;
                 }
             }

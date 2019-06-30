@@ -25,12 +25,7 @@ mod tests {
         let mut errors = vec![];
         let parse_result = parser::ProgramParser::new()
             .parse(ByteOffset(0), &mut errors, lexer)
-            .map(|decls| {
-                decls
-                    .into_iter()
-                    .map(Spanned::unwrap)
-                    .collect::<Vec<_DeclType>>()
-            });
+            .map(|decls| decls.into_iter().map(Spanned::unwrap).collect::<Vec<_DeclType>>());
         assert_eq!(errors, vec![]);
         assert_eq!(
             parse_result,
@@ -78,12 +73,7 @@ mod tests {
         let mut errors = vec![];
         let parse_result = parser::ProgramParser::new()
             .parse(ByteOffset(0), &mut errors, lexer)
-            .map(|decls| {
-                decls
-                    .into_iter()
-                    .map(Spanned::unwrap)
-                    .collect::<Vec<_DeclType>>()
-            });
+            .map(|decls| decls.into_iter().map(Spanned::unwrap).collect::<Vec<_DeclType>>());
         assert_eq!(errors, vec![]);
         assert_eq!(
             parse_result,
@@ -126,7 +116,7 @@ mod tests {
                             args: vec![_ExprType::Number(1), _ExprType::Number(2)]
                         })),
                         _ExprType::Record(Box::new(_Record {
-                            id: "record".to_owned(),
+                            id: Some("record".to_owned()),
                             field_assigns: vec![
                                 _FieldAssign {
                                     id: "a".to_owned(),
@@ -175,15 +165,8 @@ mod tests {
     fn test_parser() {
         let lexer = lexer::Lexer::new(include_str!("../test/test1.euph"));
         let mut errors = vec![];
-        let parse_result =
-            dbg!(parser::ProgramParser::new().parse(ByteOffset(0), &mut errors, lexer)).map(
-                |decls| {
-                    decls
-                        .into_iter()
-                        .map(Spanned::unwrap)
-                        .collect::<Vec<_DeclType>>()
-                },
-            );
+        let parse_result = dbg!(parser::ProgramParser::new().parse(ByteOffset(0), &mut errors, lexer))
+            .map(|decls| decls.into_iter().map(Spanned::unwrap).collect::<Vec<_DeclType>>());
         assert_eq!(errors, vec![]);
         assert_eq!(
             parse_result,
@@ -242,12 +225,7 @@ mod tests {
         let mut errors = vec![];
         let parse_result = parser::ProgramParser::new()
             .parse(ByteOffset(0), &mut errors, lexer)
-            .map(|decls| {
-                decls
-                    .into_iter()
-                    .map(Spanned::unwrap)
-                    .collect::<Vec<_DeclType>>()
-            });
+            .map(|decls| decls.into_iter().map(Spanned::unwrap).collect::<Vec<_DeclType>>());
         assert!(parse_result.is_err() || !errors.is_empty());
     }
 }

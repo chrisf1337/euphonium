@@ -74,9 +74,7 @@ impl From<Type> for _Type {
         match ty {
             Type::Type(ty) => _Type::Type(ty.t),
             Type::Enum(cases) => _Type::Enum(cases.into_iter().map(|c| c.t.into()).collect()),
-            Type::Record(type_fields) => {
-                _Type::Record(type_fields.into_iter().map(|tf| tf.t.into()).collect())
-            }
+            Type::Record(type_fields) => _Type::Record(type_fields.into_iter().map(|tf| tf.t.into()).collect()),
             Type::Array(ty, len) => _Type::Array(Box::new(ty.t.into()), len.t),
             Type::Unit => _Type::Unit,
         }
@@ -99,11 +97,7 @@ impl From<EnumCase> for _EnumCase {
     fn from(e: EnumCase) -> _EnumCase {
         Self {
             id: e.id.t,
-            params: e
-                .params
-                .into_iter()
-                .map(|p| _EnumParam::from(p.t))
-                .collect(),
+            params: e.params.into_iter().map(|p| _EnumParam::from(p.t)).collect(),
         }
     }
 }
@@ -283,22 +277,17 @@ pub enum _ExprType {
 impl From<ExprType> for _ExprType {
     fn from(expr: ExprType) -> Self {
         match expr {
-            ExprType::Seq(exprs, returns) => _ExprType::Seq(
-                exprs.into_iter().map(|expr| expr.t.into()).collect(),
-                returns,
-            ),
+            ExprType::Seq(exprs, returns) => {
+                _ExprType::Seq(exprs.into_iter().map(|expr| expr.t.into()).collect(), returns)
+            }
             ExprType::String(s) => _ExprType::String(s),
             ExprType::Number(n) => _ExprType::Number(n),
             ExprType::Neg(expr) => _ExprType::Neg(Box::new(expr.t.into())),
-            ExprType::Arith(l, op, r) => {
-                _ExprType::Arith(Box::new(l.t.into()), op.t, Box::new(r.t.into()))
-            }
+            ExprType::Arith(l, op, r) => _ExprType::Arith(Box::new(l.t.into()), op.t, Box::new(r.t.into())),
             ExprType::Unit => _ExprType::Unit,
             ExprType::BoolLiteral(b) => _ExprType::BoolLiteral(b),
             ExprType::Not(expr) => _ExprType::Not(Box::new(expr.t.into())),
-            ExprType::Bool(l, op, r) => {
-                _ExprType::Bool(Box::new(l.t.into()), op.t, Box::new(r.t.into()))
-            }
+            ExprType::Bool(l, op, r) => _ExprType::Bool(Box::new(l.t.into()), op.t, Box::new(r.t.into())),
             ExprType::Continue => _ExprType::Continue,
             ExprType::Break => _ExprType::Break,
             ExprType::LVal(expr) => _ExprType::LVal(Box::new(expr.t.into())),
@@ -308,14 +297,10 @@ impl From<ExprType> for _ExprType {
             ExprType::Assign(expr) => _ExprType::Assign(Box::new(expr.t.into())),
             ExprType::Array(expr) => _ExprType::Array(Box::new(expr.t.into())),
             ExprType::If(expr) => _ExprType::If(Box::new(expr.t.into())),
-            ExprType::Range(from, to) => {
-                _ExprType::Range(Box::new(from.t.into()), Box::new(to.t.into()))
-            }
+            ExprType::Range(from, to) => _ExprType::Range(Box::new(from.t.into()), Box::new(to.t.into())),
             ExprType::For(expr) => _ExprType::For(Box::new(expr.t.into())),
             ExprType::While(expr) => _ExprType::While(Box::new(expr.t.into())),
-            ExprType::Compare(l, op, r) => {
-                _ExprType::Compare(Box::new(l.t.into()), op.t, Box::new(r.t.into()))
-            }
+            ExprType::Compare(l, op, r) => _ExprType::Compare(Box::new(l.t.into()), op.t, Box::new(r.t.into())),
         }
     }
 }
@@ -424,25 +409,21 @@ impl From<FnCall> for _FnCall {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Record {
-    pub id: Spanned<String>,
+    pub id: Option<Spanned<String>>,
     pub field_assigns: Vec<Spanned<FieldAssign>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct _Record {
-    pub id: String,
+    pub id: Option<String>,
     pub field_assigns: Vec<_FieldAssign>,
 }
 
 impl From<Record> for _Record {
     fn from(record: Record) -> Self {
         Self {
-            id: record.id.t,
-            field_assigns: record
-                .field_assigns
-                .into_iter()
-                .map(|assign| assign.t.into())
-                .collect(),
+            id: record.id.map(|id| id.t),
+            field_assigns: record.field_assigns.into_iter().map(|assign| assign.t.into()).collect(),
         }
     }
 }

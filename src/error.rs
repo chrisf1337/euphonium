@@ -19,15 +19,9 @@ where
 {
     fn span(&self) -> ByteSpan {
         match self {
-            ParseError::InvalidToken { location } => {
-                ByteSpan::new(*location, *location + ByteOffset(1))
-            }
-            ParseError::UnrecognizedToken {
-                token: (l, _, r), ..
-            } => ByteSpan::new(*l, *r),
-            ParseError::UnrecognizedEOF { location, .. } => {
-                ByteSpan::new(*location, *location + ByteOffset(1))
-            }
+            ParseError::InvalidToken { location } => ByteSpan::new(*location, *location + ByteOffset(1)),
+            ParseError::UnrecognizedToken { token: (l, _, r), .. } => ByteSpan::new(*l, *r),
+            ParseError::UnrecognizedEOF { location, .. } => ByteSpan::new(*location, *location + ByteOffset(1)),
             ParseError::ExtraToken { token: (l, _, r) } => ByteSpan::new(*l, *r),
             ParseError::User { error } => ByteSpan::new(
                 ByteIndex(u32::try_from(error.index).unwrap()),

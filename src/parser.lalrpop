@@ -305,8 +305,8 @@ _FnCall: ast::FnCall = {
 Record = Spanned<_Record>;
 
 _Record: ast::Record = {
-    <id:Spanned<"identifier">> "%{" <field_assigns:(<Spanned<FieldAssign>> ",")*> "}" => ast::Record { <> },
-    <id:Spanned<"identifier">> "%{" <field_assigns:(<Spanned<FieldAssign>> ",")*> <last:Spanned<FieldAssign>> "}" => {
+    <id:Spanned<"identifier">?> "%{" <field_assigns:(<Spanned<FieldAssign>> ",")*> "}" => ast::Record { <> },
+    <id:Spanned<"identifier">?> "%{" <field_assigns:(<Spanned<FieldAssign>> ",")*> <last:Spanned<FieldAssign>> "}" => {
         let mut field_assigns = field_assigns;
         field_assigns.push(last);
         ast::Record {
