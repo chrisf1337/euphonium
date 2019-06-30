@@ -21,7 +21,7 @@ pub enum TypecheckErrType {
     // function type.
     ArityMismatch(usize, usize),
     NotAFn(String),
-    NotARecord(String),
+    NotARecord(Rc<Type>),
     UndefinedVar(String),
     UndefinedFn(String),
     UndefinedField(String),
@@ -55,10 +55,7 @@ impl TypecheckErrType {
                 let ty = env.vars.get(fun).unwrap();
                 format!("not a function: {} (has type {:?})", fun, ty)
             }
-            NotARecord(ty) => {
-                let actual_ty = env.types.get(ty).unwrap();
-                format!("not a record: {} (has type {:?})", ty, actual_ty)
-            }
+            NotARecord(ty) => format!("not a record: (has type {:?})", ty.as_ref()),
             UndefinedVar(var) => format!("undefined variable: {}", var),
             UndefinedFn(fun) => format!("undefined function: {}", fun),
             UndefinedField(field) => format!("undefined field: {}", field),
@@ -209,6 +206,12 @@ impl From<ast::EnumCase> for EnumCase {
 pub struct VarProperties {
     pub ty: Rc<Type>,
     pub immutable: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LValProperties {
+    pub ty: Rc<Type>,
+    pub immutable: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -703,11 +706,18 @@ impl Env {
         }
     }
 
-    fn translate_lval(&self, lval: &Spanned<LVal>) -> Result<VarProperties> {
+    fn translate_lval(&self, lval: &Spanned<LVal>) -> Result<LValProperties> {
         match &lval.t {
             LVal::Simple(var) => {
                 if let Some(var_properties) = self.vars.get(var) {
-                    Ok(var_properties.clone())
+                    Ok(LValProperties {
+                        ty: var_properties.ty.clone(),
+                        immutable: if var_properties.immutable {
+                            Some(var.clone())
+                        } else {
+                            None
+                        },
+                    })
                 } else {
                     Err(vec![TypecheckErr::new_err(
                         TypecheckErrType::UndefinedVar(var.clone()),
@@ -716,15 +726,15 @@ impl Env {
                 }
             }
             LVal::Field(var, field) => {
-                let var_properties = self.translate_lval(var)?;
+                let lval_properties = self.translate_lval(var)?;
                 if let Type::Record(fields) =
-                    self.resolve_type(&var_properties.ty, var.span)?.as_ref()
+                    self.resolve_type(&lval_properties.ty, var.span)?.as_ref()
                 {
                     if let Some(field_type) = fields.get(&field.t) {
                         // A field is mutable only if the record it belongs to is mutable
-                        return Ok(VarProperties {
+                        return Ok(LValProperties {
                             ty: field_type.clone(),
-                            immutable: var_properties.immutable,
+                            immutable: lval_properties.immutable,
                         });
                     }
                 }
@@ -734,15 +744,15 @@ impl Env {
                 )])
             }
             LVal::Subscript(var, index) => {
-                let var_properties = self.translate_lval(var)?;
+                let lval_properties = self.translate_lval(var)?;
                 let index_type = self.translate_expr(index)?;
                 if let Type::Array(ty, _) =
-                    self.resolve_type(&var_properties.ty, var.span)?.as_ref()
+                    self.resolve_type(&lval_properties.ty, var.span)?.as_ref()
                 {
                     if self.resolve_type(&index_type, index.span)? == Rc::new(Type::Int) {
-                        Ok(VarProperties {
+                        Ok(LValProperties {
                             ty: ty.clone(),
-                            immutable: var_properties.immutable,
+                            immutable: lval_properties.immutable,
                         })
                     } else {
                         Err(vec![TypecheckErr::new_err(
@@ -962,7 +972,7 @@ impl Env {
                 Ok(ty.clone())
             } else {
                 Err(vec![TypecheckErr::new_err(
-                    TypecheckErrType::NotARecord(record_id.t.clone()),
+                    TypecheckErrType::NotARecord(ty.clone()),
                     *span,
                 )])
             }
@@ -993,7 +1003,8 @@ impl Env {
                     let resolved_expected_ty = self
                         .resolve_type(&var_properties.ty, assign.lval.span)?
                         .clone();
-                    let resolved_actual_ty = self.translate_expr(&assign.expr)?;
+                    let resolved_actual_ty =
+                        self.resolve_type(&self.translate_expr(&assign.expr)?, assign.expr.span)?;
                     if resolved_expected_ty != resolved_actual_ty {
                         return Err(vec![TypecheckErr::new_err(
                             TypecheckErrType::TypeMismatch(
@@ -1007,19 +1018,44 @@ impl Env {
             }
             LVal::Field(lval_expr, field) => {
                 let lval_properties = self.translate_lval(&lval_expr)?;
-                if lval_properties.immutable {
-                    // return Err(vec![TypecheckErr::new_err(TypecheckErrType::MutatingImmutable())])
+                if let Some(ref base_var) = lval_properties.immutable {
+                    return Err(vec![TypecheckErr::new_err(
+                        TypecheckErrType::MutatingImmutable(base_var.clone()),
+                        *span,
+                    )
+                    .with_source(Spanned::new(
+                        format!("{} was defined here", base_var),
+                        self.var_def_spans[base_var],
+                    ))]);
                 }
-                if let Type::Record(record_field_types) = self
-                    .resolve_type(&lval_properties.ty, lval_expr.span)?
-                    .as_ref()
-                {
-
+                let lval_type = self.resolve_type(&lval_properties.ty, lval_expr.span)?;
+                if let Type::Record(record_field_types) = lval_type.as_ref() {
+                    if let Some(expected_ty) = record_field_types.get(&field.t) {
+                        let resolved_expected_ty =
+                            self.resolve_type(expected_ty, assign.lval.span)?;
+                        let resolved_actual_ty = self
+                            .resolve_type(&self.translate_expr(&assign.expr)?, assign.expr.span)?;
+                        if resolved_expected_ty != resolved_actual_ty {
+                            return Err(vec![TypecheckErr::new_err(
+                                TypecheckErrType::TypeMismatch(
+                                    resolved_expected_ty,
+                                    resolved_actual_ty,
+                                ),
+                                *span,
+                            )]);
+                        }
+                    } else {
+                        return Err(vec![TypecheckErr::new_err(
+                            TypecheckErrType::UndefinedField(field.t.clone()),
+                            field.span,
+                        )]);
+                    }
                 } else {
-
+                    return Err(vec![TypecheckErr::new_err(
+                        TypecheckErrType::NotARecord(lval_type),
+                        lval_expr.span,
+                    )]);
                 }
-
-                unimplemented!();
             }
             _ => unimplemented!(),
         }
@@ -1109,9 +1145,9 @@ mod tests {
         ));
         assert_eq!(
             env.translate_lval(&lval),
-            Ok(VarProperties {
+            Ok(LValProperties {
                 ty: Rc::new(Type::Int),
-                immutable: false
+                immutable: None,
             })
         );
     }
@@ -1181,9 +1217,9 @@ mod tests {
         ));
         assert_eq!(
             env.translate_lval(&lval),
-            Ok(VarProperties {
+            Ok(LValProperties {
                 ty: Rc::new(Type::Int),
-                immutable: true
+                immutable: Some("x".to_owned())
             })
         );
     }
@@ -1819,6 +1855,105 @@ mod tests {
                 .t
                 .ty,
             TypecheckErrType::MutatingImmutable("a".to_owned())
+        );
+    }
+
+    #[test]
+    fn test_assign_record_field_immut_err() {
+        let mut env = Env::default();
+        let record_type = Type::Record(hashmap! {
+            "a".to_owned() => Rc::new(Type::Int)
+        });
+        env.insert_type("r".to_owned(), record_type.clone(), zspan!());
+        env.record_field_decl_spans
+            .insert("r".to_owned(), hashmap! { "a".to_owned() => zspan!() });
+
+        env.insert_var(
+            "r".to_owned(),
+            VarProperties {
+                ty: Rc::new(record_type),
+                immutable: true,
+            },
+            zspan!(),
+        );
+
+        assert_eq!(
+            env.translate_assign(&zspan!(Assign {
+                lval: zspan!(LVal::Field(
+                    Box::new(zspan!(LVal::Simple("r".to_owned()))),
+                    zspan!("a".to_owned())
+                )),
+                expr: zspan!(ExprType::Number(0))
+            }))
+            .unwrap_err()[0]
+                .t
+                .ty,
+            TypecheckErrType::MutatingImmutable("r".to_owned())
+        );
+    }
+
+    #[test]
+    fn test_assign_record_field_type_mismatch() {
+        let mut env = Env::default();
+        let record_type = Type::Record(hashmap! {
+            "a".to_owned() => Rc::new(Type::Int)
+        });
+        env.insert_type("r".to_owned(), record_type.clone(), zspan!());
+        env.record_field_decl_spans
+            .insert("r".to_owned(), hashmap! { "a".to_owned() => zspan!() });
+
+        env.insert_var(
+            "r".to_owned(),
+            VarProperties {
+                ty: Rc::new(record_type),
+                immutable: false,
+            },
+            zspan!(),
+        );
+
+        assert_eq!(
+            env.translate_assign(&zspan!(Assign {
+                lval: zspan!(LVal::Field(
+                    Box::new(zspan!(LVal::Simple("r".to_owned()))),
+                    zspan!("a".to_owned())
+                )),
+                expr: zspan!(ExprType::Unit)
+            }))
+            .unwrap_err()[0]
+                .t
+                .ty,
+            TypecheckErrType::TypeMismatch(Rc::new(Type::Int), Rc::new(Type::Unit))
+        );
+    }
+
+    #[test]
+    fn test_assign_record_field_type() {
+        let mut env = Env::default();
+        let record_type = Type::Record(hashmap! {
+            "a".to_owned() => Rc::new(Type::Int)
+        });
+        env.insert_type("r".to_owned(), record_type.clone(), zspan!());
+        env.record_field_decl_spans
+            .insert("r".to_owned(), hashmap! { "a".to_owned() => zspan!() });
+
+        env.insert_var(
+            "r".to_owned(),
+            VarProperties {
+                ty: Rc::new(record_type),
+                immutable: false,
+            },
+            zspan!(),
+        );
+
+        assert_eq!(
+            env.translate_assign(&zspan!(Assign {
+                lval: zspan!(LVal::Field(
+                    Box::new(zspan!(LVal::Simple("r".to_owned()))),
+                    zspan!("a".to_owned())
+                )),
+                expr: zspan!(ExprType::Number(0))
+            })),
+            Ok(Rc::new(Type::Unit))
         );
     }
 }
