@@ -22,6 +22,7 @@ pub enum TypecheckErrType {
     ArityMismatch(usize, usize),
     NotAFn(String),
     NotARecord(Rc<Type>),
+    NotAnArray(Rc<Type>),
     UndefinedVar(String),
     UndefinedFn(String),
     UndefinedField(String),
@@ -54,6 +55,7 @@ impl TypecheckErrType {
                 format!("not a function: {} (has type {:?})", fun, ty)
             }
             NotARecord(ty) => format!("not a record: (has type {:?})", ty.as_ref()),
+            NotAnArray(ty) => format!("not an array: (has type {:?})", ty.as_ref()),
             UndefinedVar(var) => format!("undefined variable: {}", var),
             UndefinedFn(fun) => format!("undefined function: {}", fun),
             UndefinedField(field) => format!("undefined field: {}", field),
@@ -1007,8 +1009,8 @@ impl Env {
                     }
                 }
             }
-            LVal::Field(lval_expr, field) => {
-                let lval_properties = self.translate_lval(&lval_expr)?;
+            LVal::Field(lval, field) => {
+                let lval_properties = self.translate_lval(&lval)?;
                 if let Some(ref base_var) = lval_properties.immutable {
                     return Err(vec![TypecheckErr::new_err(
                         TypecheckErrType::MutatingImmutable(base_var.clone()),
@@ -1019,7 +1021,7 @@ impl Env {
                         self.var_def_spans[base_var],
                     ))]);
                 }
-                let lval_type = self.resolve_type(&lval_properties.ty, lval_expr.span)?;
+                let lval_type = self.resolve_type(&lval_properties.ty, lval.span)?;
                 if let Type::Record(record_field_types) = lval_type.as_ref() {
                     if let Some(expected_ty) = record_field_types.get(&field.t) {
                         let resolved_expected_ty = self.resolve_type(expected_ty, assign.lval.span)?;
@@ -1040,11 +1042,40 @@ impl Env {
                 } else {
                     return Err(vec![TypecheckErr::new_err(
                         TypecheckErrType::NotARecord(lval_type),
-                        lval_expr.span,
+                        lval.span,
                     )]);
                 }
             }
-            _ => unimplemented!(),
+            LVal::Subscript(lval, _) => {
+                let lval_properties = self.translate_lval(&lval)?;
+                if let Some(ref base_var) = lval_properties.immutable {
+                    return Err(vec![TypecheckErr::new_err(
+                        TypecheckErrType::MutatingImmutable(base_var.clone()),
+                        *span,
+                    )
+                    .with_source(Spanned::new(
+                        format!("{} was defined here", base_var),
+                        self.var_def_spans[base_var],
+                    ))]);
+                }
+                let lval_type = self.resolve_type(&lval_properties.ty, lval.span)?;
+                if let Type::Array(elem_type, _) = lval_type.as_ref() {
+                    let resolved_expected_ty = self.resolve_type(elem_type, assign.lval.span)?;
+                    let resolved_actual_ty =
+                        self.resolve_type(&self.translate_expr(&assign.expr)?, assign.expr.span)?;
+                    if resolved_expected_ty != resolved_actual_ty {
+                        return Err(vec![TypecheckErr::new_err(
+                            TypecheckErrType::TypeMismatch(resolved_expected_ty, resolved_actual_ty),
+                            *span,
+                        )]);
+                    }
+                } else {
+                    return Err(vec![TypecheckErr::new_err(
+                        TypecheckErrType::NotAnArray(lval_type),
+                        lval.span,
+                    )]);
+                }
+            }
         }
 
         Ok(Rc::new(Type::Unit))
@@ -1936,6 +1967,87 @@ mod tests {
                 lval: zspan!(LVal::Field(
                     Box::new(zspan!(LVal::Simple("r".to_owned()))),
                     zspan!("a".to_owned())
+                )),
+                expr: zspan!(ExprType::Number(0))
+            })),
+            Ok(Rc::new(Type::Unit))
+        );
+    }
+
+    #[test]
+    fn test_assign_array_immut_err() {
+        let mut env = Env::default();
+        let array_type = Type::Array(Rc::new(Type::Int), 1);
+        env.insert_var(
+            "a".to_owned(),
+            VarProperties {
+                ty: Rc::new(array_type),
+                immutable: true,
+            },
+            zspan!(),
+        );
+
+        assert_eq!(
+            env.translate_assign(&zspan!(Assign {
+                lval: zspan!(LVal::Subscript(
+                    Box::new(zspan!(LVal::Simple("a".to_owned()))),
+                    zspan!(ExprType::Number(0))
+                )),
+                expr: zspan!(ExprType::Number(0))
+            }))
+            .unwrap_err()[0]
+                .t
+                .ty,
+            TypecheckErrType::MutatingImmutable("a".to_owned())
+        );
+    }
+
+    #[test]
+    fn test_assign_array_type_mismatch() {
+        let mut env = Env::default();
+        let array_type = Type::Array(Rc::new(Type::Int), 1);
+        env.insert_var(
+            "a".to_owned(),
+            VarProperties {
+                ty: Rc::new(array_type),
+                immutable: false,
+            },
+            zspan!(),
+        );
+
+        assert_eq!(
+            env.translate_assign(&zspan!(Assign {
+                lval: zspan!(LVal::Subscript(
+                    Box::new(zspan!(LVal::Simple("a".to_owned()))),
+                    zspan!(ExprType::Number(0))
+                )),
+                expr: zspan!(ExprType::String("s".to_owned()))
+            }))
+            .unwrap_err()[0]
+                .t
+                .ty,
+            TypecheckErrType::TypeMismatch(Rc::new(Type::Int), Rc::new(Type::String))
+        );
+    }
+
+    #[test]
+    fn test_assign_array() {
+        let mut env = Env::default();
+        let array_type = Type::Array(Rc::new(Type::Int), 1);
+        env.insert_var(
+            "a".to_owned(),
+            VarProperties {
+                ty: Rc::new(array_type),
+                immutable: false,
+            },
+            zspan!(),
+        );
+
+        assert_eq!(
+            env.translate_assign(&zspan!(Assign {
+                lval: zspan!(LVal::Subscript(
+                    Box::new(zspan!(LVal::Simple("a".to_owned()))),
+                    zspan!(ExprType::Number(0))
                 )),
                 expr: zspan!(ExprType::Number(0))
             })),
