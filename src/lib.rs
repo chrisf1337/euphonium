@@ -83,24 +83,24 @@ mod tests {
                 return_type: None,
                 body: _ExprType::Seq(
                     vec![
-                        _ExprType::Arith(
-                            Box::new(_ExprType::Number(1)),
-                            ArithOp::Add,
-                            Box::new(_ExprType::Arith(
-                                Box::new(_ExprType::Number(2)),
-                                ArithOp::Mul,
-                                Box::new(_ExprType::Number(3))
-                            ))
-                        ),
-                        _ExprType::Bool(
-                            Box::new(_ExprType::Not(Box::new(_ExprType::BoolLiteral(true)))),
-                            BoolOp::Or,
-                            Box::new(_ExprType::Bool(
-                                Box::new(_ExprType::BoolLiteral(true)),
-                                BoolOp::And,
-                                Box::new(_ExprType::BoolLiteral(false))
-                            ))
-                        ),
+                        _ExprType::Arith(Box::new(_Arith {
+                            l: _ExprType::Number(1),
+                            op: ArithOp::Add,
+                            r: _ExprType::Arith(Box::new(_Arith {
+                                l: _ExprType::Number(2),
+                                op: ArithOp::Mul,
+                                r: _ExprType::Number(3)
+                            }))
+                        })),
+                        _ExprType::Bool(Box::new(_Bool {
+                            l: _ExprType::Not(Box::new(_ExprType::BoolLiteral(true))),
+                            op: BoolOp::Or,
+                            r: _ExprType::Bool(Box::new(_Bool {
+                                l: _ExprType::BoolLiteral(true),
+                                op: BoolOp::And,
+                                r: _ExprType::BoolLiteral(false)
+                            }))
+                        })),
                         _ExprType::Assign(Box::new(_Assign {
                             lval: _LVal::Field(
                                 Box::new(_LVal::Subscript(
@@ -129,11 +129,11 @@ mod tests {
                             ]
                         })),
                         _ExprType::If(Box::new(_If {
-                            cond: _ExprType::Compare(
-                                Box::new(_ExprType::Number(1)),
-                                CompareOp::Equal,
-                                Box::new(_ExprType::Seq(vec![_ExprType::Number(1)], true))
-                            ),
+                            cond: _ExprType::Compare(Box::new(_Compare {
+                                l: _ExprType::Number(1),
+                                op: CompareOp::Equal,
+                                r: _ExprType::Seq(vec![_ExprType::Number(1)], true)
+                            })),
                             then_expr: _ExprType::Seq(vec![_ExprType::Number(2)], true),
                             else_expr: Some(_ExprType::If(Box::new(_If {
                                 cond: _ExprType::Number(3),
@@ -150,10 +150,10 @@ mod tests {
                             initial_value: _ExprType::Number(0),
                             len: _ExprType::Number(3),
                         })),
-                        _ExprType::Range(
-                            Box::new(_ExprType::Seq(vec![_ExprType::Number(1)], true)),
-                            Box::new(_ExprType::Number(2))
-                        )
+                        _ExprType::Range(Box::new(_Range {
+                            start: _ExprType::Seq(vec![_ExprType::Number(1)], true),
+                            end: _ExprType::Number(2)
+                        }))
                     ],
                     false
                 )
@@ -181,11 +181,11 @@ mod tests {
                                 pattern: Pattern::String("a".to_owned()),
                                 immutable: true,
                                 ty: Some(_Type::Type("a".to_owned())),
-                                expr: _ExprType::Arith(
-                                    Box::new(_ExprType::Number(1)),
-                                    ArithOp::Sub,
-                                    Box::new(_ExprType::Neg(Box::new(_ExprType::Number(1))))
-                                )
+                                expr: _ExprType::Arith(Box::new(_Arith {
+                                    l: _ExprType::Number(1),
+                                    op: ArithOp::Sub,
+                                    r: _ExprType::Neg(Box::new(_ExprType::Number(1)))
+                                }))
                             })),
                             _ExprType::Let(Box::new(_Let {
                                 pattern: Pattern::String("b".to_owned()),
@@ -193,11 +193,11 @@ mod tests {
                                 ty: None,
                                 expr: _ExprType::String("".to_owned())
                             })),
-                            _ExprType::Arith(
-                                Box::new(_ExprType::LVal(Box::new(_LVal::Simple("a".to_owned())))),
-                                ArithOp::Add,
-                                Box::new(_ExprType::LVal(Box::new(_LVal::Simple("b".to_owned()))))
-                            ),
+                            _ExprType::Arith(Box::new(_Arith {
+                                l: _ExprType::LVal(Box::new(_LVal::Simple("a".to_owned()))),
+                                op: ArithOp::Add,
+                                r: _ExprType::LVal(Box::new(_LVal::Simple("b".to_owned())))
+                            })),
                         ],
                         true
                     )
@@ -209,11 +209,11 @@ mod tests {
                         ty: _Type::Type("int".to_owned())
                     }],
                     return_type: Some(_Type::Type("int".to_owned())),
-                    body: _ExprType::Arith(
-                        Box::new(_ExprType::Number(1)),
-                        ArithOp::Div,
-                        Box::new(_ExprType::Number(2))
-                    ),
+                    body: _ExprType::Arith(Box::new(_Arith {
+                        l: _ExprType::Number(1),
+                        op: ArithOp::Div,
+                        r: _ExprType::Number(2)
+                    })),
                 }),
             ])
         );

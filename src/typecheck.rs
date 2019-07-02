@@ -662,17 +662,17 @@ impl Env {
             ExprType::String(_) => Ok(Rc::new(Type::String)),
             ExprType::Number(_) => Ok(Rc::new(Type::Int)),
             ExprType::Neg(expr) => assert_ty!(self, expr, Rc::new(Type::Int)),
-            ExprType::Arith(l, _, r) => {
-                assert_ty!(self, l, Rc::new(Type::Int))?;
-                assert_ty!(self, r, Rc::new(Type::Int))?;
+            ExprType::Arith(arith) => {
+                assert_ty!(self, &arith.l, Rc::new(Type::Int))?;
+                assert_ty!(self, &arith.r, Rc::new(Type::Int))?;
                 Ok(Rc::new(Type::Int))
             }
             ExprType::Unit | ExprType::Continue | ExprType::Break => Ok(Rc::new(Type::Unit)),
             ExprType::BoolLiteral(_) => Ok(Rc::new(Type::Bool)),
             ExprType::Not(expr) => assert_ty!(self, expr, Rc::new(Type::Bool)),
-            ExprType::Bool(l, _, r) => {
-                assert_ty!(self, l, Rc::new(Type::Bool))?;
-                assert_ty!(self, r, Rc::new(Type::Bool))?;
+            ExprType::Bool(bool_expr) => {
+                assert_ty!(self, &bool_expr.l, Rc::new(Type::Bool))?;
+                assert_ty!(self, &bool_expr.r, Rc::new(Type::Bool))?;
                 Ok(Rc::new(Type::Bool))
             }
             ExprType::LVal(lval) => Ok(self.translate_lval(lval)?.ty),
@@ -1085,7 +1085,7 @@ impl Env {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::{self, BoolOp, TypeField};
+    use crate::ast::{self, BoolOp, TypeField, Arith, Bool};
     use codespan::ByteOffset;
     use maplit::hashmap;
     use pretty_assertions::assert_eq;
@@ -1113,26 +1113,26 @@ mod tests {
 
     #[test]
     fn test_translate_bool_expr() {
-        let expr = zspan!(ExprType::Bool(
-            Box::new(zspan!(ExprType::BoolLiteral(true))),
-            zspan!(BoolOp::And),
-            Box::new(zspan!(ExprType::BoolLiteral(true))),
-        ));
+        let expr = zspan!(ExprType::Bool(Box::new(zspan!(Bool {
+            l: zspan!(ExprType::BoolLiteral(true)),
+            op: zspan!(BoolOp::And),
+            r: zspan!(ExprType::BoolLiteral(true)),
+        }))));
         let env = Env::default();
         assert_eq!(env.translate_expr(&expr), Ok(Rc::new(Type::Bool)));
     }
 
     #[test]
     fn test_translate_bool_expr_source() {
-        let expr = zspan!(ExprType::Bool(
-            Box::new(zspan!(ExprType::Bool(
-                Box::new(zspan!(ExprType::BoolLiteral(true))),
-                zspan!(BoolOp::And),
-                Box::new(zspan!(ExprType::Number(1)))
-            ))),
-            zspan!(BoolOp::And),
-            Box::new(zspan!(ExprType::BoolLiteral(true))),
-        ));
+        let expr = zspan!(ExprType::Bool(Box::new(zspan!(Bool {
+            l: zspan!(ExprType::Bool(Box::new(zspan!(Bool {
+                l: zspan!(ExprType::BoolLiteral(true)),
+                op: zspan!(BoolOp::And),
+                r: zspan!(ExprType::Number(1))
+            })))),
+            op: zspan!(BoolOp::And),
+            r: zspan!(ExprType::BoolLiteral(true)),
+        }))));
         let env = Env::default();
         assert_eq!(
             env.translate_expr(&expr),
@@ -1785,11 +1785,11 @@ mod tests {
     #[test]
     fn test_translate_fn_body() {
         let mut env = Env::default();
-        let fn_expr = zspan!(ExprType::Arith(
-            Box::new(zspan!(ExprType::LVal(Box::new(zspan!(LVal::Simple("a".to_owned())))))),
-            zspan!(ast::ArithOp::Add),
-            Box::new(zspan!(ExprType::LVal(Box::new(zspan!(LVal::Simple("b".to_owned()))))))
-        ));
+        let fn_expr = zspan!(ExprType::Arith(Box::new(zspan!(Arith {
+            l: zspan!(ExprType::LVal(Box::new(zspan!(LVal::Simple("a".to_owned()))))),
+            op: zspan!(ast::ArithOp::Add),
+            r: zspan!(ExprType::LVal(Box::new(zspan!(LVal::Simple("b".to_owned())))))
+        }))));
         let fn_decl = zspan!(DeclType::Fn(zspan!(FnDecl {
             id: zspan!("f".to_owned()),
             type_fields: vec![

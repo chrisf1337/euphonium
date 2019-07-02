@@ -182,41 +182,46 @@ ExprTypeOrLetOrAssign: ast::Expr = {
 
 Range: ast::Expr = {
     <l:Expr> ".." <r:Expr> => {
-        let lspan = l.span;
-        let rspan = r.span;
-        ast::Expr::new(ast::ExprType::Range(Box::new(l), Box::new(r)), lspan.to(rspan))
+        let span = l.span.to(r.span);
+        ast::Expr::new(ast::ExprType::Range(Box::new(ast::Spanned::new(
+            ast::Range {
+                start: l,
+                end: r
+            },
+            span))),
+        span)
     },
     Expr,
 };
 
 Expr: ast::Expr = {
     <l:Expr> <op: Spanned<"==">> <r:OpExpr> => {
-        let lspan = l.span;
-        let rspan = r.span;
-        ast::Expr::new(ast::ExprType::Compare(Box::new(l), op.map(|_| ast::CompareOp::Equal), Box::new(r)),
-            lspan.to(rspan))
+        let span = l.span.to(r.span);
+        let op = op.map(|_| ast::CompareOp::Equal);
+        ast::Expr::new(ast::ExprType::Compare(Box::new(ast::Spanned::new(ast::Compare { l, op, r }, span))),
+            span)
     },
     OpExpr,
 };
 
 OpExpr: ast::Expr = {
     <l:OpExpr> <op: Spanned<"+">> <r:Factor> => {
-        let lspan = l.span;
-        let rspan = r.span;
-        ast::Expr::new(ast::ExprType::Arith(Box::new(l), op.map(|_| ast::ArithOp::Add), Box::new(r)),
-            lspan.to(rspan))
+        let span = l.span.to(r.span);
+        let op = op.map(|_| ast::ArithOp::Add);
+        ast::Expr::new(ast::ExprType::Arith(Box::new(ast::Spanned::new(ast::Arith { l, op, r }, span))),
+            span)
     },
     <l:OpExpr> <op: Spanned<"-">> <r:Factor> => {
-        let lspan = l.span;
-        let rspan = r.span;
-        ast::Expr::new(ast::ExprType::Arith(Box::new(l), op.map(|_| ast::ArithOp::Sub), Box::new(r)),
-            lspan.to(rspan))
+        let span = l.span.to(r.span);
+        let op = op.map(|_| ast::ArithOp::Sub);
+        ast::Expr::new(ast::ExprType::Arith(Box::new(ast::Spanned::new(ast::Arith { l, op, r }, span))),
+            span)
     },
     <l:OpExpr> <op: Spanned<"||">> <r:Factor> => {
-        let lspan = l.span;
-        let rspan = r.span;
-        ast::Expr::new(ast::ExprType::Bool(Box::new(l), op.map(|_| ast::BoolOp::Or), Box::new(r)),
-            lspan.to(rspan))
+        let span = l.span.to(r.span);
+        let op = op.map(|_| ast::BoolOp::Or);
+        ast::Expr::new(ast::ExprType::Bool(Box::new(ast::Spanned::new(ast::Bool { l, op, r }, span))),
+            span)
     },
     Factor,
 };
@@ -232,22 +237,22 @@ ExprTypeSeq: ast::ExprType = {
 
 Factor: ast::Expr = {
     <l:Factor> <op: Spanned<"*">> <r:TermOrNeg> => {
-        let lspan = l.span;
-        let rspan = r.span;
-        ast::Expr::new(ast::ExprType::Arith(Box::new(l), op.map(|_| ast::ArithOp::Mul), Box::new(r)),
-            lspan.to(rspan))
+        let span = l.span.to(r.span);
+        let op = op.map(|_| ast::ArithOp::Mul);
+        ast::Expr::new(ast::ExprType::Arith(Box::new(ast::Spanned::new(ast::Arith { l, op, r }, span))),
+            span)
     },
     <l:Factor> <op: Spanned<"/">> <r:TermOrNeg> => {
-        let lspan = l.span;
-        let rspan = r.span;
-        ast::Expr::new(ast::ExprType::Arith(Box::new(l), op.map(|_| ast::ArithOp::Div), Box::new(r)),
-            lspan.to(rspan))
+        let span = l.span.to(r.span);
+        let op = op.map(|_| ast::ArithOp::Div);
+        ast::Expr::new(ast::ExprType::Arith(Box::new(ast::Spanned::new(ast::Arith { l, op, r }, span))),
+            span)
     },
     <l:Factor> <op: Spanned<"&&">> <r:TermOrNeg> => {
-        let lspan = l.span;
-        let rspan = r.span;
-        ast::Expr::new(ast::ExprType::Bool(Box::new(l), op.map(|_| ast::BoolOp::And), Box::new(r)),
-            lspan.to(rspan))
+        let span = l.span.to(r.span);
+        let op = op.map(|_| ast::BoolOp::And);
+        ast::Expr::new(ast::ExprType::Bool(Box::new(ast::Spanned::new(ast::Bool { l, op, r }, span))),
+            span)
     },
     TermOrNeg,
 };

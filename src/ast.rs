@@ -228,11 +228,11 @@ pub enum ExprType {
     String(String),
     Number(usize),
     Neg(Box<Expr>),
-    Arith(Box<Expr>, Spanned<ArithOp>, Box<Expr>),
+    Arith(Box<Spanned<Arith>>),
     Unit,
     BoolLiteral(bool),
     Not(Box<Expr>),
-    Bool(Box<Expr>, Spanned<BoolOp>, Box<Expr>),
+    Bool(Box<Spanned<Bool>>),
     Continue,
     Break,
     LVal(Box<Spanned<LVal>>),
@@ -242,10 +242,10 @@ pub enum ExprType {
     Assign(Box<Spanned<Assign>>),
     Array(Box<Spanned<Array>>),
     If(Box<Spanned<If>>),
-    Range(Box<Expr>, Box<Expr>),
+    Range(Box<Spanned<Range>>),
     For(Box<Spanned<For>>),
     While(Box<Spanned<While>>),
-    Compare(Box<Expr>, Spanned<CompareOp>, Box<Expr>),
+    Compare(Box<Spanned<Compare>>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -254,11 +254,11 @@ pub enum _ExprType {
     String(String),
     Number(usize),
     Neg(Box<_ExprType>),
-    Arith(Box<_ExprType>, ArithOp, Box<_ExprType>),
+    Arith(Box<_Arith>),
     Unit,
     BoolLiteral(bool),
     Not(Box<_ExprType>),
-    Bool(Box<_ExprType>, BoolOp, Box<_ExprType>),
+    Bool(Box<_Bool>),
     Continue,
     Break,
     LVal(Box<_LVal>),
@@ -268,10 +268,10 @@ pub enum _ExprType {
     Assign(Box<_Assign>),
     Array(Box<_Array>),
     If(Box<_If>),
-    Range(Box<_ExprType>, Box<_ExprType>),
+    Range(Box<_Range>),
     For(Box<_For>),
     While(Box<_While>),
-    Compare(Box<_ExprType>, CompareOp, Box<_ExprType>),
+    Compare(Box<_Compare>),
 }
 
 impl From<ExprType> for _ExprType {
@@ -283,11 +283,11 @@ impl From<ExprType> for _ExprType {
             ExprType::String(s) => _ExprType::String(s),
             ExprType::Number(n) => _ExprType::Number(n),
             ExprType::Neg(expr) => _ExprType::Neg(Box::new(expr.t.into())),
-            ExprType::Arith(l, op, r) => _ExprType::Arith(Box::new(l.t.into()), op.t, Box::new(r.t.into())),
+            ExprType::Arith(expr) => _ExprType::Arith(Box::new(expr.t.into())),
             ExprType::Unit => _ExprType::Unit,
             ExprType::BoolLiteral(b) => _ExprType::BoolLiteral(b),
             ExprType::Not(expr) => _ExprType::Not(Box::new(expr.t.into())),
-            ExprType::Bool(l, op, r) => _ExprType::Bool(Box::new(l.t.into()), op.t, Box::new(r.t.into())),
+            ExprType::Bool(expr) => _ExprType::Bool(Box::new(expr.t.into())),
             ExprType::Continue => _ExprType::Continue,
             ExprType::Break => _ExprType::Break,
             ExprType::LVal(expr) => _ExprType::LVal(Box::new(expr.t.into())),
@@ -297,10 +297,10 @@ impl From<ExprType> for _ExprType {
             ExprType::Assign(expr) => _ExprType::Assign(Box::new(expr.t.into())),
             ExprType::Array(expr) => _ExprType::Array(Box::new(expr.t.into())),
             ExprType::If(expr) => _ExprType::If(Box::new(expr.t.into())),
-            ExprType::Range(from, to) => _ExprType::Range(Box::new(from.t.into()), Box::new(to.t.into())),
+            ExprType::Range(expr) => _ExprType::Range(Box::new(expr.t.into())),
             ExprType::For(expr) => _ExprType::For(Box::new(expr.t.into())),
             ExprType::While(expr) => _ExprType::While(Box::new(expr.t.into())),
-            ExprType::Compare(l, op, r) => _ExprType::Compare(Box::new(l.t.into()), op.t, Box::new(r.t.into())),
+            ExprType::Compare(expr) => _ExprType::Compare(Box::new(expr.t.into())),
         }
     }
 }
@@ -314,15 +314,108 @@ pub enum ArithOp {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Arith {
+    pub l: Expr,
+    pub op: Spanned<ArithOp>,
+    pub r: Expr
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct _Arith {
+    pub l: _ExprType,
+    pub op: ArithOp,
+    pub r: _ExprType
+}
+
+impl From<Arith> for _Arith {
+    fn from(expr: Arith) -> Self {
+        _Arith {
+            l: expr.l.t.into(),
+            op: expr.op.t,
+            r: expr.r.t.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BoolOp {
     And,
     Or,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Bool {
+    pub l: Expr,
+    pub op: Spanned<BoolOp>,
+    pub r: Expr
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct _Bool {
+    pub l: _ExprType,
+    pub op: BoolOp,
+    pub r: _ExprType
+}
+
+impl From<Bool> for _Bool {
+    fn from(expr: Bool) -> Self {
+        _Bool {
+            l: expr.l.t.into(),
+            op: expr.op.t,
+            r: expr.r.t.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CompareOp {
     Equal,
     NotEqual,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Compare {
+    pub l: Expr,
+    pub op: Spanned<CompareOp>,
+    pub r: Expr
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct _Compare {
+    pub l: _ExprType,
+    pub op: CompareOp,
+    pub r: _ExprType
+}
+
+impl From<Compare> for _Compare {
+    fn from(expr: Compare) -> Self {
+        _Compare {
+            l: expr.l.t.into(),
+            op: expr.op.t,
+            r: expr.r.t.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Range {
+    pub start: Expr,
+    pub end: Expr
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct _Range {
+    pub start: _ExprType,
+    pub end: _ExprType
+}
+
+impl From<Range> for _Range {
+    fn from(range: Range) -> _Range {
+        _Range {
+            start: range.start.t.into(),
+            end: range.end.t.into(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
