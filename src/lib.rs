@@ -1,4 +1,4 @@
-#![allow(clippy::all)]
+#![warn(clippy::all)]
 
 #[macro_use]
 mod utils;
@@ -11,7 +11,7 @@ pub mod typecheck;
 
 use lalrpop_util::lalrpop_mod;
 
-lalrpop_mod!(pub parser);
+lalrpop_mod!(#[allow(clippy::all)] pub parser);
 
 #[cfg(test)]
 mod tests {

@@ -1,6 +1,6 @@
 use crate::ast::{
-    self, Assign, Decl, DeclType, Expr, ExprType, FieldAssign, FnCall, FnDecl, LVal, Let, Pattern, Record, Spanned,
-    TypeDecl,
+    self, ArithOp, Array, Assign, Decl, DeclType, Expr, ExprType, FieldAssign, FnCall, FnDecl, LVal, Let, Pattern,
+    Record, Spanned, TypeDecl,
 };
 use codespan::{ByteIndex, ByteSpan};
 use codespan_reporting::{Diagnostic, Label};
@@ -38,6 +38,8 @@ pub enum TypecheckErrType {
     DuplicateField(String),
     DuplicateParam(String),
     MutatingImmutable(String),
+    NonConstantArithExpr(ExprType),
+    NegativeArrayLen(i64),
 }
 
 impl TypecheckErrType {
@@ -70,6 +72,8 @@ impl TypecheckErrType {
             DuplicateField(field) => format!("duplicate record field declaration for {}", field),
             DuplicateParam(param) => format!("duplicate function param declaration for {}", param),
             MutatingImmutable(var) => format!("{} was declared as immutable", var),
+            NonConstantArithExpr(expr) => format!("{:?} is not a constant arithmetic expression", expr),
+            NegativeArrayLen(..) => "array length cannot be negative".to_owned(),
         };
         Diagnostic::new_error(&msg)
     }
@@ -163,7 +167,7 @@ impl From<ast::Type> for Type {
                 }
                 Type::Record(type_fields_hm)
             }
-            ast::Type::Array(ty, len) => Type::Array(Rc::new(ty.t.into()), len.t.into()),
+            ast::Type::Array(ty, len) => Type::Array(Rc::new(ty.t.into()), len.t),
             ast::Type::Unit => Type::Unit,
         }
     }
@@ -680,6 +684,7 @@ impl Env {
             ExprType::FnCall(fn_call) => self.translate_fn_call(fn_call),
             ExprType::Record(record) => self.translate_record(record),
             ExprType::Assign(assign) => self.translate_assign(assign),
+            ExprType::Array(array) => self.translate_array(array),
             _ => unimplemented!(),
         }
     }
@@ -771,24 +776,21 @@ impl Env {
                 )]);
             }
         }
-        match &pattern.t {
-            Pattern::String(var_name) => {
-                // Prefer the annotated type if provided
-                let ty = if let Some(ty) = ast_ty {
-                    Rc::new(ty.t.clone().into())
-                } else {
-                    expr_type
-                };
-                self.insert_var(
-                    var_name.clone(),
-                    VarProperties {
-                        ty,
-                        immutable: immutable.t,
-                    },
-                    let_expr.span,
-                )
-            }
-            _ => (),
+        if let Pattern::String(var_name) = &pattern.t {
+            // Prefer the annotated type if provided
+            let ty = if let Some(ty) = ast_ty {
+                Rc::new(ty.t.clone().into())
+            } else {
+                expr_type
+            };
+            self.insert_var(
+                var_name.clone(),
+                VarProperties {
+                    ty,
+                    immutable: immutable.t,
+                },
+                let_expr.span,
+            )
         }
         Ok(Rc::new(Type::Unit))
     }
@@ -867,7 +869,7 @@ impl Env {
                         .keys()
                         .collect::<HashSet<&String>>()
                         .difference(&field_assigns_hm.keys().collect())
-                        .map(|&k| k)
+                        .cloned()
                         .collect();
                     if !missing_fields.is_empty() {
                         let mut missing_fields: Vec<String> = missing_fields.into_iter().cloned().collect();
@@ -882,7 +884,7 @@ impl Env {
                         .keys()
                         .collect::<HashSet<&String>>()
                         .difference(&field_types.keys().collect())
-                        .map(|&k| k)
+                        .cloned()
                         .collect();
                     if !invalid_fields.is_empty() {
                         let mut invalid_fields: Vec<String> = invalid_fields.into_iter().cloned().collect();
@@ -1080,12 +1082,45 @@ impl Env {
 
         Ok(Rc::new(Type::Unit))
     }
+
+    fn eval_arith_const_expr(Spanned { t: expr, span }: &Expr) -> Result<i64> {
+        match expr {
+            ExprType::Number(num) => Ok(*num as i64),
+            ExprType::Neg(expr) => Ok(-Self::eval_arith_const_expr(expr)?),
+            ExprType::Arith(arith_expr) => {
+                let l = Self::eval_arith_const_expr(&arith_expr.l)?;
+                let r = Self::eval_arith_const_expr(&arith_expr.r)?;
+                match arith_expr.op.t {
+                    ArithOp::Add => Ok(l + r),
+                    ArithOp::Sub => Ok(l - r),
+                    ArithOp::Mul => Ok(l * r),
+                    ArithOp::Div => Ok(l / r),
+                }
+            }
+            _ => Err(vec![TypecheckErr::new_err(
+                TypecheckErrType::NonConstantArithExpr(expr.clone()),
+                *span,
+            )]),
+        }
+    }
+
+    fn translate_array(&self, Spanned { t: array, .. }: &Spanned<Array>) -> Result<Rc<Type>> {
+        let elem_type = self.translate_expr(&array.initial_value)?;
+        let len = Self::eval_arith_const_expr(&array.len)?;
+        if len < 0 {
+            return Err(vec![TypecheckErr::new_err(
+                TypecheckErrType::NegativeArrayLen(len),
+                array.len.span,
+            )]);
+        }
+        Ok(Rc::new(Type::Array(elem_type, len as usize)))
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::{self, BoolOp, TypeField, Arith, Bool};
+    use crate::ast::{self, Arith, Bool, BoolOp, TypeField};
     use codespan::ByteOffset;
     use maplit::hashmap;
     use pretty_assertions::assert_eq;
@@ -1510,7 +1545,7 @@ mod tests {
     #[test]
     fn test_translate_first_pass() {
         let mut env = Env::default();
-        let result = env.first_pass(&vec![
+        let result = env.first_pass(&[
             Decl::new(
                 DeclType::Type(zspan!(TypeDecl {
                     id: zspan!("a".to_owned()),
@@ -2052,6 +2087,72 @@ mod tests {
                 expr: zspan!(ExprType::Number(0))
             })),
             Ok(Rc::new(Type::Unit))
+        );
+    }
+
+    #[test]
+    fn test_translate_array() {
+        let env = Env::default();
+        let array_expr = zspan!(Array {
+            initial_value: zspan!(ExprType::Number(0)),
+            len: zspan!(ExprType::Number(3))
+        });
+
+        assert_eq!(
+            env.translate_array(&array_expr),
+            Ok(Rc::new(Type::Array(Rc::new(Type::Int), 3)))
+        );
+    }
+
+    #[test]
+    fn test_translate_array_const_expr_len() {
+        let env = Env::default();
+        let array_expr = zspan!(Array {
+            initial_value: zspan!(ExprType::Number(0)),
+            len: zspan!(ExprType::Arith(Box::new(zspan!(Arith {
+                l: zspan!(ExprType::Number(1)),
+                op: zspan!(ArithOp::Add),
+                r: zspan!(ExprType::Number(2)),
+            }))))
+        });
+
+        assert_eq!(
+            env.translate_array(&array_expr),
+            Ok(Rc::new(Type::Array(Rc::new(Type::Int), 3)))
+        );
+    }
+
+    #[test]
+    fn test_translate_array_negative_len_err() {
+        let env = Env::default();
+        let array_expr = zspan!(Array {
+            initial_value: zspan!(ExprType::Number(0)),
+            len: zspan!(ExprType::Neg(Box::new(zspan!(ExprType::Number(3)))))
+        });
+
+        assert_eq!(
+            env.translate_array(&array_expr).unwrap_err()[0].t.ty,
+            TypecheckErrType::NegativeArrayLen(-3)
+        );
+    }
+
+    #[test]
+    fn test_translate_array_non_constant_expr_err() {
+        let env = Env::default();
+
+        let fn_call = ExprType::FnCall(Box::new(zspan!(FnCall {
+            id: zspan!("f".to_owned()),
+            args: vec![]
+        })));
+
+        let array_expr = zspan!(Array {
+            initial_value: zspan!(ExprType::Number(0)),
+            len: zspan!(fn_call.clone())
+        });
+
+        assert_eq!(
+            env.translate_array(&array_expr).unwrap_err()[0].t.ty,
+            TypecheckErrType::NonConstantArithExpr(fn_call)
         );
     }
 }

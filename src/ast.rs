@@ -305,7 +305,7 @@ impl From<ExprType> for _ExprType {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ArithOp {
     Add,
     Sub,
@@ -337,7 +337,7 @@ impl From<Arith> for _Arith {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BoolOp {
     And,
     Or,
@@ -367,7 +367,7 @@ impl From<Bool> for _Bool {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CompareOp {
     Equal,
     NotEqual,
