@@ -41,8 +41,11 @@ impl Sourcemap {
         let lexer = lexer::Lexer::new(&file);
         let mut errors = vec![];
         let filemap = self.codemap.add_filemap(filename, file);
-        match parser::ProgramParser::new().parse(ByteOffset(RawOffset::from(filemap.span().start().0)), &mut errors, lexer)
-        {
+        match parser::ProgramParser::new().parse(
+            ByteOffset(RawOffset::from(filemap.span().start().0)),
+            &mut errors,
+            lexer,
+        ) {
             Ok(decls) => {
                 if errors.is_empty() {
                     Ok(decls)

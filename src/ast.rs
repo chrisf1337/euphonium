@@ -246,6 +246,7 @@ pub enum ExprType {
     For(Box<Spanned<For>>),
     While(Box<Spanned<While>>),
     Compare(Box<Spanned<Compare>>),
+    Enum(Box<Spanned<Enum>>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -272,6 +273,7 @@ pub enum _ExprType {
     For(Box<_For>),
     While(Box<_While>),
     Compare(Box<_Compare>),
+    Enum(Box<_Enum>),
 }
 
 impl From<ExprType> for _ExprType {
@@ -301,6 +303,7 @@ impl From<ExprType> for _ExprType {
             ExprType::For(expr) => _ExprType::For(Box::new(expr.t.into())),
             ExprType::While(expr) => _ExprType::While(Box::new(expr.t.into())),
             ExprType::Compare(expr) => _ExprType::Compare(Box::new(expr.t.into())),
+            ExprType::Enum(expr) => _ExprType::Enum(Box::new(expr.t.into())),
         }
     }
 }
@@ -317,14 +320,14 @@ pub enum ArithOp {
 pub struct Arith {
     pub l: Expr,
     pub op: Spanned<ArithOp>,
-    pub r: Expr
+    pub r: Expr,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct _Arith {
     pub l: _ExprType,
     pub op: ArithOp,
-    pub r: _ExprType
+    pub r: _ExprType,
 }
 
 impl From<Arith> for _Arith {
@@ -347,14 +350,14 @@ pub enum BoolOp {
 pub struct Bool {
     pub l: Expr,
     pub op: Spanned<BoolOp>,
-    pub r: Expr
+    pub r: Expr,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct _Bool {
     pub l: _ExprType,
     pub op: BoolOp,
-    pub r: _ExprType
+    pub r: _ExprType,
 }
 
 impl From<Bool> for _Bool {
@@ -377,14 +380,14 @@ pub enum CompareOp {
 pub struct Compare {
     pub l: Expr,
     pub op: Spanned<CompareOp>,
-    pub r: Expr
+    pub r: Expr,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct _Compare {
     pub l: _ExprType,
     pub op: CompareOp,
-    pub r: _ExprType
+    pub r: _ExprType,
 }
 
 impl From<Compare> for _Compare {
@@ -400,13 +403,13 @@ impl From<Compare> for _Compare {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Range {
     pub start: Expr,
-    pub end: Expr
+    pub end: Expr,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct _Range {
     pub start: _ExprType,
-    pub end: _ExprType
+    pub end: _ExprType,
 }
 
 impl From<Range> for _Range {
@@ -649,6 +652,32 @@ impl From<While> for _While {
         Self {
             cond: expr.cond.t.into(),
             body: expr.body.t.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Enum {
+    pub enum_id: Spanned<String>,
+    pub case_id: Spanned<String>,
+    pub args: Option<Spanned<Vec<Expr>>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct _Enum {
+    pub enum_id: String,
+    pub case_id: String,
+    pub args: Option<Vec<_ExprType>>,
+}
+
+impl From<Enum> for _Enum {
+    fn from(expr: Enum) -> Self {
+        Self {
+            enum_id: expr.enum_id.t,
+            case_id: expr.case_id.t,
+            args: expr
+                .args
+                .map(|exprs| exprs.t.into_iter().map(|expr| expr.t.into()).collect()),
         }
     }
 }

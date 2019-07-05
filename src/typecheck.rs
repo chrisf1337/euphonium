@@ -1,5 +1,5 @@
 use crate::ast::{
-    self, ArithOp, Array, Assign, Decl, DeclType, Expr, ExprType, FieldAssign, FnCall, FnDecl, LVal, Let, Pattern,
+    self, ArithOp, Array, Assign, Decl, DeclType, Expr, ExprType, FieldAssign, FnCall, FnDecl, If, LVal, Let, Pattern,
     Record, Spanned, TypeDecl,
 };
 use codespan::{ByteIndex, ByteSpan};
@@ -276,6 +276,25 @@ impl Env {
         self.type_def_spans.insert(name, def_span);
     }
 
+    /// Like `resolve_type`, but only follows type aliases. Used in `validate_type` to ensure that
+    /// type aliases are not cyclic.
+    fn resolve_type_alias(&self, ty: &Rc<Type>, def_span: ByteSpan) -> Result<Rc<Type>> {
+        match ty.as_ref() {
+            Type::Alias(alias) => {
+                if let Some(resolved_type) = self.types.get(alias) {
+                    let span = self.type_def_spans[alias];
+                    self.resolve_type_alias(resolved_type, span)
+                } else {
+                    Err(vec![TypecheckErr::new_err(
+                        TypecheckErrType::UndefinedType(alias.clone()),
+                        def_span,
+                    )])
+                }
+            }
+            _ => Ok(ty.clone()),
+        }
+    }
+
     fn resolve_type(&self, ty: &Rc<Type>, def_span: ByteSpan) -> Result<Rc<Type>> {
         match ty.as_ref() {
             Type::Alias(alias) => {
@@ -289,6 +308,30 @@ impl Env {
                     )])
                 }
             }
+            Type::Record(fields) => {
+                let mut resolved_fields: HashMap<String, Rc<Type>> = HashMap::new();
+                let mut errors = vec![];
+                for (id, ty) in fields {
+                    match self.resolve_type(ty, def_span) {
+                        Ok(ty) => {
+                            resolved_fields.insert(id.clone(), ty.clone());
+                        }
+                        Err(errs) => errors.extend(errs),
+                    }
+                }
+
+                if !errors.is_empty() {
+                    Err(errors)
+                } else {
+                    Ok(Rc::new(Type::Record(resolved_fields)))
+                }
+            }
+            Type::Array(elem_type, len) => Ok(Rc::new(Type::Array(self.resolve_type(elem_type, def_span)?, *len))),
+            // Type::Enum(cases) => {
+            //     for case in cases {
+
+            //     }
+            // }
             _ => Ok(ty.clone()),
         }
     }
@@ -318,7 +361,7 @@ impl Env {
     fn validate_type(&self, ty: &Rc<Type>, def_span: ByteSpan) -> Result<()> {
         match ty.as_ref() {
             Type::String | Type::Bool | Type::Unit | Type::Int => Ok(()),
-            Type::Alias(_) => self.resolve_type(ty, def_span).map(|_| ()),
+            Type::Alias(_) => self.resolve_type_alias(ty, def_span).map(|_| ()),
             Type::Record(record) => {
                 let mut errors = vec![];
                 for ty in record.values() {
@@ -1000,7 +1043,7 @@ impl Env {
                         .with_source(Spanned::new(format!("{} was defined here", var.clone()), def_span))]);
                     }
 
-                    let resolved_expected_ty = self.resolve_type(&var_properties.ty, assign.lval.span)?.clone();
+                    let resolved_expected_ty = self.resolve_type(&var_properties.ty, assign.lval.span)?;
                     let resolved_actual_ty =
                         self.resolve_type(&self.translate_expr(&assign.expr)?, assign.expr.span)?;
                     if resolved_expected_ty != resolved_actual_ty {
@@ -1114,6 +1157,34 @@ impl Env {
             )]);
         }
         Ok(Rc::new(Type::Array(elem_type, len as usize)))
+    }
+
+    fn translate_if(&self, Spanned { t: expr, span }: &Spanned<If>) -> Result<Rc<Type>> {
+        assert_ty!(self, &expr.cond, Rc::new(Type::Bool))?;
+        let then_expr_type = self.translate_expr(&expr.then_expr)?;
+        if let Some(else_expr) = &expr.else_expr {
+            let else_expr_type = self.translate_expr(else_expr)?;
+            if self.resolve_type(&then_expr_type, expr.then_expr.span)?
+                == self.resolve_type(&else_expr_type, else_expr.span)?
+            {
+                // Arbitrarily pick the then branch
+                Ok(then_expr_type)
+            } else {
+                Err(vec![TypecheckErr::new_err(
+                    TypecheckErrType::TypeMismatch(then_expr_type.clone(), else_expr_type.clone()),
+                    *span,
+                )
+                .with_source(Spanned::new(
+                    format!(
+                        "then branch has type {:?}, but else branch has type {:?}",
+                        then_expr_type, else_expr_type
+                    ),
+                    *span,
+                ))])
+            }
+        } else {
+            Ok(then_expr_type)
+        }
     }
 }
 

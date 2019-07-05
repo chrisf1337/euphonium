@@ -21,7 +21,7 @@ mod tests {
 
     #[test]
     fn test_tydecls() {
-        let lexer = lexer::Lexer::new(include_str!("../test/test_tydecls.euph"));
+        let lexer = lexer::Lexer::new(include_str!("../test-euph-files/test_tydecls.euph"));
         let mut errors = vec![];
         let parse_result = parser::ProgramParser::new()
             .parse(ByteOffset(0), &mut errors, lexer)
@@ -69,7 +69,7 @@ mod tests {
 
     #[test]
     fn test_exprs() {
-        let lexer = lexer::Lexer::new(include_str!("../test/test_exprs.euph"));
+        let lexer = lexer::Lexer::new(include_str!("../test-euph-files/test_exprs.euph"));
         let mut errors = vec![];
         let parse_result = parser::ProgramParser::new()
             .parse(ByteOffset(0), &mut errors, lexer)
@@ -163,7 +163,7 @@ mod tests {
 
     #[test]
     fn test_parser() {
-        let lexer = lexer::Lexer::new(include_str!("../test/test1.euph"));
+        let lexer = lexer::Lexer::new(include_str!("../test-euph-files/test1.euph"));
         let mut errors = vec![];
         let parse_result = dbg!(parser::ProgramParser::new().parse(ByteOffset(0), &mut errors, lexer))
             .map(|decls| decls.into_iter().map(Spanned::unwrap).collect::<Vec<_DeclType>>());
@@ -216,6 +216,41 @@ mod tests {
                     })),
                 }),
             ])
+        );
+    }
+
+    #[test]
+    fn test_enum_exprs() {
+        let lexer = lexer::Lexer::new(include_str!("../test-euph-files/test_enum_exprs.euph"));
+        let mut errors = vec![];
+        let parse_result = parser::ProgramParser::new()
+            .parse(ByteOffset(0), &mut errors, lexer)
+            .map(|decls| decls.into_iter().map(Spanned::unwrap).collect::<Vec<_DeclType>>());
+        assert_eq!(errors, vec![]);
+        assert_eq!(
+            parse_result,
+            Ok(vec![_DeclType::Fn(_FnDecl {
+                id: "f".to_owned(),
+                type_fields: vec![],
+                return_type: None,
+                body: _ExprType::Seq(
+                    vec![_ExprType::Enum(Box::new(_Enum {
+                        enum_id: "A".to_owned(),
+                        case_id: "B".to_owned(),
+                        args: Some(vec![
+                            _ExprType::Number(1),
+                            _ExprType::Record(Box::new(_Record {
+                                id: None,
+                                field_assigns: vec![_FieldAssign {
+                                    id: "a".to_owned(),
+                                    expr: _ExprType::Number(1)
+                                }]
+                            }))
+                        ]),
+                    })),],
+                    false
+                )
+            }),])
         );
     }
 

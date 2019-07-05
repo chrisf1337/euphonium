@@ -27,6 +27,7 @@ extern {
         "[" => lexer::Tok::LBracket,
         "]" => lexer::Tok::RBracket,
         ":" => lexer::Tok::Colon,
+        "::" => lexer::Tok::DoubleColon,
         ";" => lexer::Tok::Semicolon,
         "," => lexer::Tok::Comma,
         "->" => lexer::Tok::ThinArrow,
@@ -77,8 +78,7 @@ EnumParam: ast::Spanned<ast::EnumParam> = {
 };
 
 EnumParams: Vec<ast::Spanned<ast::EnumParam>> = {
-    "(" <args: (<EnumParam> ",")+> ")" => args,
-    "(" <args: (<EnumParam> ",")*> <last:EnumParam> ")" => {
+    "(" <args: (<EnumParam> ",")*> <last:EnumParam> (","?) ")" => {
         let mut args = args;
         args.push(last);
         args
@@ -172,7 +172,7 @@ DeclType: ast::DeclType = {
 };
 
 ExprTypeOrLetOrAssign: ast::Expr = {
-    Range,
+    Expr,
     Spanned<_Let> => {
         let span = <>.span;
         <>.map(|l| ast::ExprType::Let(Box::new(ast::Spanned::new(l, span))))
@@ -180,8 +180,8 @@ ExprTypeOrLetOrAssign: ast::Expr = {
     <l:@L> <expr:Assign> <r:@R> => ast::Expr::new(ast::ExprType::Assign(Box::new(expr)), span!(l, r, offset)),
 }
 
-Range: ast::Expr = {
-    <l:Expr> ".." <r:Expr> => {
+Expr: ast::Expr = {
+    <l:CompareExpr> ".." <r:CompareExpr> => {
         let span = l.span.to(r.span);
         ast::Expr::new(ast::ExprType::Range(Box::new(ast::Spanned::new(
             ast::Range {
@@ -191,11 +191,11 @@ Range: ast::Expr = {
             span))),
         span)
     },
-    Expr,
+    CompareExpr,
 };
 
-Expr: ast::Expr = {
-    <l:Expr> <op: Spanned<"==">> <r:OpExpr> => {
+CompareExpr: ast::Expr = {
+    <l:CompareExpr> <op: Spanned<"==">> <r:OpExpr> => {
         let span = l.span.to(r.span);
         let op = op.map(|_| ast::CompareOp::Equal);
         ast::Expr::new(ast::ExprType::Compare(Box::new(ast::Spanned::new(ast::Compare { l, op, r }, span))),
@@ -286,6 +286,7 @@ Term: ast::Expr = {
     Spanned<For> => <>.map(|e| ast::ExprType::For(Box::new(e))),
     Spanned<While> => <>.map(|e| ast::ExprType::While(Box::new(e))),
     Spanned<ExprTypeSeq>,
+    Spanned<Enum> => <>.map(|e| ast::ExprType::Enum(Box::new(e))),
 };
 
 LVal = Spanned<_LVal>;
@@ -351,7 +352,7 @@ _If: ast::If = {
 For = Spanned<_For>;
 
 _For: ast::For = {
-    "for" <index:Spanned<"identifier">> "in" <range:Range> <body:Spanned<ExprTypeSeq>> =>
+    "for" <index:Spanned<"identifier">> "in" <range:Expr> <body:Spanned<ExprTypeSeq>> =>
         ast::For { index, range, body }
 };
 
@@ -359,6 +360,26 @@ While = Spanned<_While>;
 
 _While: ast::While = {
     "while" <cond:Expr> <body:Spanned<ExprTypeSeq>> => ast::While { cond, body }
+};
+
+Enum = Spanned<_Enum>;
+
+_Enum: ast::Enum = {
+    <enum_id:Spanned<"identifier">> "::" <case_id:Spanned<"identifier">> <args:Spanned<EnumArgs>?> => {
+        ast::Enum {
+            enum_id,
+            case_id,
+            args,
+        }
+    }
+};
+
+EnumArgs: Vec<ast::Expr> = {
+    "(" <exprs:(<Expr> ",")*> <last_expr:Expr> (","?) ")" => {
+        let mut exprs = exprs;
+        exprs.push(last_expr);
+        exprs
+    },
 };
 
 pub Program: Vec<ast::Decl> = <Decl*>;

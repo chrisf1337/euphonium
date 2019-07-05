@@ -45,6 +45,7 @@ pub enum Tok {
     LBracket,
     RBracket,
     Colon,
+    DoubleColon,
     Semicolon,
     Comma,
     Ampersand,
@@ -94,6 +95,7 @@ impl std::fmt::Display for Tok {
             Tok::LBracket => write!(f, "["),
             Tok::RBracket => write!(f, "]"),
             Tok::Colon => write!(f, ":"),
+            Tok::DoubleColon => write!(f, "::"),
             Tok::Semicolon => write!(f, ";"),
             Tok::Comma => write!(f, ","),
             Tok::Ampersand => write!(f, "&"),
@@ -246,7 +248,19 @@ impl Lexer {
             '}' => Some(Tok::RBrace),
             '[' => Some(Tok::LBracket),
             ']' => Some(Tok::RBracket),
-            ':' => Some(Tok::Colon),
+            ':' => {
+                if let Some(char_info) = self.peek_char(0) {
+                    match char_info.ch {
+                        ':' => {
+                            self.lex_char();
+                            Some(Tok::DoubleColon)
+                        }
+                        _ => Some(Tok::Colon),
+                    }
+                } else {
+                    Some(Tok::Colon)
+                }
+            }
             ';' => Some(Tok::Semicolon),
             ',' => Some(Tok::Comma),
             '+' => Some(Tok::Plus),
