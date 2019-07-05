@@ -62,23 +62,8 @@ Spanned<T>: ast::Spanned<T> = {
 
 Identifier: String = "identifier";
 
-EnumParam: ast::Spanned<ast::EnumParam> = {
-    Spanned<"identifier"> => {
-        let span = <>.span;
-        ast::Spanned::new(ast::EnumParam::Simple(<>), span)
-    },
-    <l:@L> "{" <ty_fields:(<Spanned<TyField>> ",")*> "}" <r:@R> => ast::Spanned::new(ast::EnumParam::Record(ty_fields),
-        span!(l, r, offset)),
-    <l:@L> "{" <ty_fields:(<Spanned<TyField>> ",")*> <last:Spanned<TyField>> "}" <r:@R> => {
-        let mut ty_fields = ty_fields;
-        ty_fields.push(last);
-        ast::Spanned::new(ast::EnumParam::Record(ty_fields),
-            span!(l, r, offset))
-    },
-};
-
-EnumParams: Vec<ast::Spanned<ast::EnumParam>> = {
-    "(" <args: (<EnumParam> ",")*> <last:EnumParam> (","?) ")" => {
+EnumParams: Vec<ast::Spanned<ast::Type>> = {
+    "(" <args: (<Ty> ",")*> <last:Ty> (","?) ")" => {
         let mut args = args;
         args.push(last);
         args
@@ -93,29 +78,39 @@ EnumCase: ast::EnumCase = {
 };
 
 Ty: ast::Spanned<ast::Type> = {
-    <l:@L> <cases: (<Spanned<EnumCase>> "|")*> <last:Spanned<EnumCase>> <r:@R> => {
-        if cases.is_empty() {
-            if last.t.params.is_empty() {
-                ast::Spanned::new(ast::Type::Type(last.t.id), span!(l, r, offset))
-            } else {
-                ast::Spanned::new(ast::Type::Enum(vec![last]), span!(l, r, offset))
-            }
-        } else {
-            let mut cases = cases;
-            cases.push(last);
-            ast::Spanned::new(ast::Type::Enum(cases), span!(l, r, offset))
-        }
-    },
-    <l:@L> "{" <ty_fields:(<Spanned<TyField>> ",")*> "}" <r:@R> =>
-        ast::Spanned::new(ast::Type::Record(ty_fields), span!(l, r, offset)),
-    <l:@L> "{" <ty_fields:(<Spanned<TyField>> ",")*> <last:Spanned<TyField>> "}" <r:@R> => {
-        let mut ty_fields = ty_fields;
-        ty_fields.push(last);
-        ast::Spanned::new(ast::Type::Record(ty_fields), span!(l, r, offset))
+    Spanned<"identifier"> => {
+        let span = <>.span;
+        <>.map(|id| ast::Type::Type(ast::Spanned::new(id, span)))
     },
     <l:@L> "[" <ty:Ty> ";" <len:Spanned<"number">> "]" <r:@R> =>
         ast::Spanned::new(ast::Type::Array(Box::new(ty), len), span!(l, r, offset)),
     <l:@L> "(" ")" <r:@R> => ast::Spanned::new(ast::Type::Unit, span!(l, r, offset)),
+};
+
+TypeDeclType: ast::Spanned<ast::TypeDeclType> = {
+    <l:@L> <cases: (<Spanned<EnumCase>> "|")*> <last:Spanned<EnumCase>> <r:@R> => {
+        if cases.is_empty() {
+            if last.t.params.is_empty() {
+                ast::Spanned::new(ast::TypeDeclType::Type(last.t.id), span!(l, r, offset))
+            } else {
+                ast::Spanned::new(ast::TypeDeclType::Enum(vec![last]), span!(l, r, offset))
+            }
+        } else {
+            let mut cases = cases;
+            cases.push(last);
+            ast::Spanned::new(ast::TypeDeclType::Enum(cases), span!(l, r, offset))
+        }
+    },
+    <l:@L> "{" <ty_fields:(<Spanned<TyField>> ",")*> "}" <r:@R> =>
+        ast::Spanned::new(ast::TypeDeclType::Record(ty_fields), span!(l, r, offset)),
+    <l:@L> "{" <ty_fields:(<Spanned<TyField>> ",")*> <last:Spanned<TyField>> "}" <r:@R> => {
+        let mut ty_fields = ty_fields;
+        ty_fields.push(last);
+        ast::Spanned::new(ast::TypeDeclType::Record(ty_fields), span!(l, r, offset))
+    },
+    <l:@L> "[" <ty:Ty> ";" <len:Spanned<"number">> "]" <r:@R> =>
+        ast::Spanned::new(ast::TypeDeclType::Array(Box::new(ty), len), span!(l, r, offset)),
+    <l:@L> "(" ")" <r:@R> => ast::Spanned::new(ast::TypeDeclType::Unit, span!(l, r, offset)),
 };
 
 TyField: ast::TypeField = {
@@ -123,7 +118,7 @@ TyField: ast::TypeField = {
 };
 
 TypeDecl: ast::TypeDecl =
-    "type" <id:Spanned<"identifier">> "=" <ty:Ty> =>
+    "type" <id:Spanned<"identifier">> "=" <ty:TypeDeclType> =>
         ast::TypeDecl { id, ty };
 
 _Let: ast::Let = {
@@ -311,8 +306,8 @@ _FnCall: ast::FnCall = {
 Record = Spanned<_Record>;
 
 _Record: ast::Record = {
-    <id:Spanned<"identifier">?> "%{" <field_assigns:(<Spanned<FieldAssign>> ",")*> "}" => ast::Record { <> },
-    <id:Spanned<"identifier">?> "%{" <field_assigns:(<Spanned<FieldAssign>> ",")*> <last:Spanned<FieldAssign>> "}" => {
+    <id:Spanned<"identifier">> "%{" <field_assigns:(<Spanned<FieldAssign>> ",")*> "}" => ast::Record { <> },
+    <id:Spanned<"identifier">> "%{" <field_assigns:(<Spanned<FieldAssign>> ",")*> <last:Spanned<FieldAssign>> "}" => {
         let mut field_assigns = field_assigns;
         field_assigns.push(last);
         ast::Record {

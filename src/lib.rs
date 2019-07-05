@@ -32,30 +32,18 @@ mod tests {
             Ok(vec![
                 _DeclType::Type(_TypeDecl {
                     type_id: "a".to_owned(),
-                    ty: _Type::Type("int".to_owned())
+                    ty: _TypeDeclType::Type("int".to_owned())
                 }),
                 _DeclType::Type(_TypeDecl {
                     type_id: "b".to_owned(),
-                    ty: _Type::Array(
-                        Box::new(_Type::Record(vec![
-                            _TypeField {
-                                id: "a".to_owned(),
-                                ty: _Type::Type("int".to_owned())
-                            },
-                            _TypeField {
-                                id: "b".to_owned(),
-                                ty: _Type::Type("int".to_owned())
-                            }
-                        ])),
-                        3
-                    )
+                    ty: _TypeDeclType::Array(Box::new(_Type::Type("a".to_owned())), 3)
                 }),
                 _DeclType::Type(_TypeDecl {
                     type_id: "Optionint".to_owned(),
-                    ty: _Type::Enum(vec![
+                    ty: _TypeDeclType::Enum(vec![
                         _EnumCase {
                             id: "Some".to_owned(),
-                            params: vec![_EnumParam::Simple("int".to_owned())]
+                            params: vec![_Type::Type("int".to_owned())]
                         },
                         _EnumCase {
                             id: "None".to_owned(),
@@ -116,7 +104,7 @@ mod tests {
                             args: vec![_ExprType::Number(1), _ExprType::Number(2)]
                         })),
                         _ExprType::Record(Box::new(_Record {
-                            id: Some("record".to_owned()),
+                            id: "record".to_owned(),
                             field_assigns: vec![
                                 _FieldAssign {
                                     id: "a".to_owned(),
@@ -240,7 +228,7 @@ mod tests {
                         args: Some(vec![
                             _ExprType::Number(1),
                             _ExprType::Record(Box::new(_Record {
-                                id: None,
+                                id: "a".to_owned(),
                                 field_assigns: vec![_FieldAssign {
                                     id: "a".to_owned(),
                                     expr: _ExprType::Number(1)

@@ -1,3 +1,3 @@
 type a = int;
-type b = [{ a: int, b: int }; 3];
+type b = [a; 3];
 type Optionint = Some(int) | None;

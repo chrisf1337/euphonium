@@ -31,13 +31,13 @@ impl From<DeclType> for _DeclType {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypeDecl {
     pub id: Spanned<String>,
-    pub ty: Spanned<Type>,
+    pub ty: Spanned<TypeDeclType>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct _TypeDecl {
     pub type_id: String,
-    pub ty: _Type,
+    pub ty: _TypeDeclType,
 }
 
 impl From<TypeDecl> for _TypeDecl {
@@ -50,7 +50,8 @@ impl From<TypeDecl> for _TypeDecl {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Type {
+/// All representable forms that can be on the right side of `type a = ...`.
+pub enum TypeDeclType {
     Type(Spanned<String>),
     Enum(Vec<Spanned<EnumCase>>),
     /// { a: int, b: int }
@@ -60,7 +61,7 @@ pub enum Type {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum _Type {
+pub enum _TypeDeclType {
     Type(String),
     Enum(Vec<_EnumCase>),
     /// { a: int, b: int }
@@ -69,12 +70,40 @@ pub enum _Type {
     Unit,
 }
 
+impl From<TypeDeclType> for _TypeDeclType {
+    fn from(ty: TypeDeclType) -> Self {
+        match ty {
+            TypeDeclType::Type(ty) => _TypeDeclType::Type(ty.t),
+            TypeDeclType::Enum(cases) => _TypeDeclType::Enum(cases.into_iter().map(|c| c.t.into()).collect()),
+            TypeDeclType::Record(type_fields) => {
+                _TypeDeclType::Record(type_fields.into_iter().map(|tf| tf.t.into()).collect())
+            }
+            TypeDeclType::Array(ty, len) => _TypeDeclType::Array(Box::new(ty.t.into()), len.t),
+            TypeDeclType::Unit => _TypeDeclType::Unit,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+/// All forms that are valid as type ascriptions in let expressions, function declarations, type
+/// declarations, etc. This is `TypeDeclType` minus records and enums.
+pub enum Type {
+    Type(Spanned<String>),
+    Array(Box<Spanned<Type>>, Spanned<usize>),
+    Unit,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum _Type {
+    Type(String),
+    Array(Box<_Type>, usize),
+    Unit,
+}
+
 impl From<Type> for _Type {
     fn from(ty: Type) -> Self {
         match ty {
             Type::Type(ty) => _Type::Type(ty.t),
-            Type::Enum(cases) => _Type::Enum(cases.into_iter().map(|c| c.t.into()).collect()),
-            Type::Record(type_fields) => _Type::Record(type_fields.into_iter().map(|tf| tf.t.into()).collect()),
             Type::Array(ty, len) => _Type::Array(Box::new(ty.t.into()), len.t),
             Type::Unit => _Type::Unit,
         }
@@ -84,43 +113,20 @@ impl From<Type> for _Type {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EnumCase {
     pub id: Spanned<String>,
-    pub params: Vec<Spanned<EnumParam>>,
+    pub params: Vec<Spanned<Type>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct _EnumCase {
     pub id: String,
-    pub params: Vec<_EnumParam>,
+    pub params: Vec<_Type>,
 }
 
 impl From<EnumCase> for _EnumCase {
     fn from(e: EnumCase) -> _EnumCase {
         Self {
             id: e.id.t,
-            params: e.params.into_iter().map(|p| _EnumParam::from(p.t)).collect(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum EnumParam {
-    Simple(Spanned<String>),
-    Record(Vec<Spanned<TypeField>>),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum _EnumParam {
-    Simple(String),
-    Record(Vec<_TypeField>),
-}
-
-impl From<EnumParam> for _EnumParam {
-    fn from(ep: EnumParam) -> Self {
-        match ep {
-            EnumParam::Simple(s) => _EnumParam::Simple(s.t),
-            EnumParam::Record(type_fields) => {
-                _EnumParam::Record(type_fields.into_iter().map(|tf| tf.t.into()).collect())
-            }
+            params: e.params.into_iter().map(Spanned::unwrap).collect(),
         }
     }
 }
@@ -505,20 +511,20 @@ impl From<FnCall> for _FnCall {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Record {
-    pub id: Option<Spanned<String>>,
+    pub id: Spanned<String>,
     pub field_assigns: Vec<Spanned<FieldAssign>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct _Record {
-    pub id: Option<String>,
+    pub id: String,
     pub field_assigns: Vec<_FieldAssign>,
 }
 
 impl From<Record> for _Record {
     fn from(record: Record) -> Self {
         Self {
-            id: record.id.map(|id| id.t),
+            id: record.id.t,
             field_assigns: record.field_assigns.into_iter().map(|assign| assign.t.into()).collect(),
         }
     }
