@@ -117,7 +117,7 @@ pub enum Type {
     Array(Rc<Type>, usize),
     Unit,
     Alias(String),
-    Enum(Vec<EnumCase>),
+    Enum(String, Vec<EnumCase>),
     Fn(Vec<Rc<Type>>, Rc<Type>),
 }
 
@@ -141,7 +141,9 @@ impl Type {
                     Type::Alias(ty.t)
                 }
             }
-            TypeDeclType::Enum(cases) => Type::Enum(cases.into_iter().map(|c| c.t.into()).collect()),
+            TypeDeclType::Enum(cases) => {
+                Type::Enum(type_decl.id.t.clone(), cases.into_iter().map(|c| c.t.into()).collect())
+            }
             TypeDeclType::Record(type_fields) => {
                 let mut type_fields_hm = HashMap::new();
                 for TypeField { id, ty } in type_fields.into_iter().map(|tf| tf.t.into()) {
@@ -273,6 +275,12 @@ impl Env {
         self.type_def_spans.insert(name, def_span);
     }
 
+    /// Used to check if two types refer to the same "base type." Follows aliases and aliases in
+    /// arrays.
+    ///
+    /// Does not follow aliases in records or enums because they can be recursive. This means that constructing `Type`s
+    /// by hand instead of retrieving them from `types` in `Env` will result in failed equality
+    /// checks, even if the aliases that they contain point to the same base type.
     fn resolve_type(&self, ty: &Rc<Type>, def_span: ByteSpan) -> Result<Rc<Type>> {
         match ty.as_ref() {
             Type::Alias(alias) => {
@@ -332,12 +340,12 @@ impl Env {
                 }
             }
             Type::Array(ty, _) => self.validate_type(ty, def_span),
-            Type::Enum(cases) => {
+            Type::Enum(_, cases) => {
                 let mut errors = vec![];
                 for case in cases {
                     for param in &case.params {
                         // Don't allow nested enum decls
-                        if let Type::Enum(_) = param.as_ref() {
+                        if let Type::Enum(..) = param.as_ref() {
                             errors.push(TypecheckErr::new_err(TypecheckErrType::IllegalNestedEnumDecl, def_span));
                             continue;
                         }
