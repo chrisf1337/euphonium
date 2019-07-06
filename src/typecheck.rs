@@ -1,6 +1,6 @@
 use crate::ast::{
-    self, ArithOp, Array, Assign, Decl, DeclType, Expr, ExprType, FieldAssign, FnCall, FnDecl, If, LVal, Let, Pattern,
-    Range, Record, Spanned, TypeDecl, TypeDeclType,
+    self, ArithOp, Array, Assign, Decl, DeclType, Expr, ExprType, FieldAssign, FnCall, FnDecl, For, If, LVal, Let,
+    Pattern, Range, Record, Spanned, TypeDecl, TypeDeclType,
 };
 use codespan::{ByteIndex, ByteSpan};
 use codespan_reporting::{Diagnostic, Label};
@@ -219,7 +219,8 @@ pub struct LValProperties {
 }
 
 #[derive(Debug, Clone)]
-pub struct Env {
+pub struct Env<'a> {
+    pub parent: Option<&'a Env<'a>>,
     pub vars: HashMap<String, VarProperties>,
     pub types: HashMap<String, Rc<Type>>,
     pub var_def_spans: HashMap<String, ByteSpan>,
@@ -229,7 +230,7 @@ pub struct Env {
     pub fn_param_decl_spans: HashMap<String, HashMap<String, ByteSpan>>,
 }
 
-impl Default for Env {
+impl<'a> Default for Env<'a> {
     fn default() -> Self {
         let mut types = HashMap::new();
         types.insert("int".to_owned(), Rc::new(Type::Int));
@@ -238,6 +239,7 @@ impl Default for Env {
         type_def_spans.insert("int".to_owned(), ByteSpan::new(ByteIndex::none(), ByteIndex::none()));
         type_def_spans.insert("string".to_owned(), ByteSpan::new(ByteIndex::none(), ByteIndex::none()));
         Env {
+            parent: None,
             vars: HashMap::new(),
             types,
             var_def_spans: HashMap::new(),
@@ -265,7 +267,26 @@ macro_rules! assert_ty {
     }};
 }
 
-impl Env {
+impl<'a> Env<'a> {
+    fn new() -> Self {
+        Env {
+            parent: None,
+            vars: HashMap::new(),
+            types: HashMap::new(),
+            var_def_spans: HashMap::new(),
+            type_def_spans: HashMap::new(),
+
+            record_field_decl_spans: HashMap::new(),
+            fn_param_decl_spans: HashMap::new(),
+        }
+    }
+
+    fn new_child(&'a self) -> Env<'a> {
+        let mut child = Env::new();
+        child.parent = Some(self);
+        child
+    }
+
     fn insert_var(&mut self, name: String, var_props: VarProperties, def_span: ByteSpan) {
         self.vars.insert(name.clone(), var_props);
         self.var_def_spans.insert(name, def_span);
@@ -274,6 +295,36 @@ impl Env {
     fn insert_type(&mut self, name: String, ty: Type, def_span: ByteSpan) {
         self.types.insert(name.clone(), Rc::new(ty));
         self.type_def_spans.insert(name, def_span);
+    }
+
+    fn get_var(&self, name: &str) -> Option<&VarProperties> {
+        if let Some(var) = self.vars.get(name) {
+            Some(var)
+        } else if let Some(parent) = self.parent {
+            parent.get_var(name)
+        } else {
+            None
+        }
+    }
+
+    fn get_type(&self, name: &str) -> Option<&Rc<Type>> {
+        if let Some(ty) = self.types.get(name) {
+            Some(ty)
+        } else if let Some(parent) = self.parent {
+            parent.get_type(name)
+        } else {
+            None
+        }
+    }
+
+    fn contains_type(&self, name: &str) -> bool {
+        if self.types.contains_key(name) {
+            true
+        } else if let Some(parent) = self.parent {
+            parent.contains_type(name)
+        } else {
+            false
+        }
     }
 
     /// Used to check if two types refer to the same "base type." Follows aliases and aliases in
@@ -285,7 +336,7 @@ impl Env {
     fn resolve_type(&self, ty: &Rc<Type>, def_span: ByteSpan) -> Result<Rc<Type>> {
         match ty.as_ref() {
             Type::Alias(alias) => {
-                if let Some(resolved_type) = self.types.get(alias) {
+                if let Some(resolved_type) = self.get_type(alias) {
                     let span = self.type_def_spans[alias];
                     self.resolve_type(resolved_type, span)
                 } else {
@@ -415,15 +466,15 @@ impl Env {
         }
     }
 
-    fn check_for_duplicates<'a, I, T: 'a, Key: Hash + Eq, KeyFn, ErrGen>(
+    fn check_for_duplicates<'b, I, T: 'b, Key: Hash + Eq, KeyFn, ErrGen>(
         iter: I,
         key_fn: KeyFn,
         err_gen: ErrGen,
     ) -> Result<HashMap<Key, ByteSpan>>
     where
-        I: IntoIterator<Item = &'a Spanned<T>>,
-        KeyFn: Fn(&'a Spanned<T>) -> Key,
-        ErrGen: Fn(&'a Spanned<T>, ByteSpan) -> TypecheckErr,
+        I: IntoIterator<Item = &'b Spanned<T>>,
+        KeyFn: Fn(&'b Spanned<T>) -> Key,
+        ErrGen: Fn(&'b Spanned<T>, ByteSpan) -> TypecheckErr,
     {
         // t -> def span
         let mut checked_elems: HashMap<Key, ByteSpan> = HashMap::new();
@@ -489,8 +540,7 @@ impl Env {
         let mut errors = vec![];
         for Decl { t: decl, .. } in decls {
             if let DeclType::Fn(fn_decl) = decl {
-                let mut new_env = self.clone();
-                match new_env.translate_fn_decl_body(fn_decl) {
+                match self.translate_fn_decl_body(fn_decl) {
                     Ok(()) => (),
                     Err(errs) => errors.extend(errs),
                 }
@@ -558,21 +608,23 @@ impl Env {
             Type::Unit
         };
 
-        self.vars.insert(
+        self.insert_var(
             fn_decl.id.t.clone(),
             VarProperties {
                 ty: Rc::new(Type::Fn(param_types, Rc::new(return_type))),
                 immutable: true,
             },
+            fn_decl.span,
         );
-        self.var_def_spans.insert(fn_decl.id.t.clone(), fn_decl.span);
         Ok(())
     }
 
-    fn translate_fn_decl_body(&mut self, fn_decl: &Spanned<FnDecl>) -> Result<()> {
-        let mut new_env = self.clone();
+    /// Creates a child env to typecheck the function body.
+    fn translate_fn_decl_body(&self, fn_decl: &Spanned<FnDecl>) -> Result<()> {
+        let mut new_env = self.new_child();
 
-        if let Type::Fn(param_types, return_type) = self.vars[&fn_decl.id.t].ty.as_ref() {
+        let fn_type = new_env.get_var(&fn_decl.id.t).unwrap().ty.clone();
+        if let Type::Fn(param_types, return_type) = fn_type.as_ref() {
             for ((param_id, span), param_type) in fn_decl
                 .type_fields
                 .iter()
@@ -614,7 +666,7 @@ impl Env {
     fn translate_type_decl(&mut self, decl: &Spanned<TypeDecl>) -> Result<()> {
         let id = decl.id.t.clone();
 
-        if self.types.contains_key(&id) {
+        if self.contains_type(&id) {
             return Err(vec![TypecheckErr::new_err(
                 TypecheckErrType::DuplicateType(id.clone()),
                 decl.span,
@@ -653,7 +705,7 @@ impl Env {
         match &expr.t {
             ExprType::Seq(exprs, returns) => {
                 // New scope
-                let mut new_env = self.clone();
+                let mut new_env = self.new_child();
                 for expr in &exprs[..exprs.len() - 1] {
                     let _ = new_env.translate_expr_mut(expr)?;
                 }
@@ -689,6 +741,7 @@ impl Env {
             ExprType::Array(array) => self.translate_array(array),
             ExprType::If(if_expr) => self.translate_if(if_expr),
             ExprType::Range(range) => self.translate_range(range),
+            ExprType::For(for_expr) => self.translate_for(for_expr),
             _ => unimplemented!(),
         }
     }
@@ -703,7 +756,7 @@ impl Env {
     fn translate_lval(&self, lval: &Spanned<LVal>) -> Result<LValProperties> {
         match &lval.t {
             LVal::Simple(var) => {
-                if let Some(var_properties) = self.vars.get(var) {
+                if let Some(var_properties) = self.get_var(var) {
                     Ok(LValProperties {
                         ty: var_properties.ty.clone(),
                         immutable: if var_properties.immutable {
@@ -806,7 +859,7 @@ impl Env {
             span,
         }: &Spanned<FnCall>,
     ) -> Result<Rc<Type>> {
-        if let Some(fn_type) = self.vars.get(&id.t).map(|x| x.ty.clone()) {
+        if let Some(fn_type) = self.get_var(&id.t).map(|x| x.ty.clone()) {
             match self.resolve_type(&fn_type, id.span)?.as_ref() {
                 Type::Fn(param_types, return_type) => {
                     if args.len() != param_types.len() {
@@ -859,7 +912,7 @@ impl Env {
             span,
         }: &Spanned<Record>,
     ) -> Result<Rc<Type>> {
-        if let Some(ty) = self.types.get(&record_id.t) {
+        if let Some(ty) = self.get_type(&record_id.t) {
             if let Type::Record(_, field_types) = ty.as_ref() {
                 let mut field_assigns_hm = HashMap::new();
                 for field_assign in field_assigns {
@@ -963,7 +1016,7 @@ impl Env {
     fn translate_assign(&self, Spanned { t: assign, span }: &Spanned<Assign>) -> Result<Rc<Type>> {
         match &assign.lval.t {
             LVal::Simple(var) => {
-                if let Some(var_properties) = self.vars.get(var) {
+                if let Some(var_properties) = self.get_var(var) {
                     if var_properties.immutable {
                         let def_span = self.var_def_spans[var];
                         return Err(vec![TypecheckErr::new_err(
@@ -1127,6 +1180,10 @@ impl Env {
         assert_ty!(self, &expr.start, Rc::new(Type::Int))?;
         assert_ty!(self, &expr.end, Rc::new(Type::Int))?;
         Ok(Rc::new(Type::Iterator(Rc::new(Type::Int))))
+    }
+
+    fn translate_for(&self, Spanned { t: expr, span }: &Spanned<For>) -> Result<Rc<Type>> {
+        Ok(Rc::new(Type::Unit))
     }
 }
 
