@@ -686,6 +686,7 @@ impl Env {
             ExprType::Record(record) => self.translate_record(record),
             ExprType::Assign(assign) => self.translate_assign(assign),
             ExprType::Array(array) => self.translate_array(array),
+            ExprType::If(if_expr) => self.translate_if(if_expr),
             _ => unimplemented!(),
         }
     }
@@ -1110,7 +1111,13 @@ impl Env {
                 ))])
             }
         } else {
-            Ok(then_expr_type)
+            if then_expr_type != Rc::new(Type::Unit) {
+                return Err(vec![TypecheckErr::new_err(
+                    TypecheckErrType::TypeMismatch(Rc::new(Type::Unit), then_expr_type),
+                    expr.then_expr.span,
+                )]);
+            }
+            Ok(Rc::new(Type::Unit))
         }
     }
 }
@@ -2134,12 +2141,10 @@ mod tests {
     #[test]
     fn test_translate_array_non_constant_expr_err() {
         let env = Env::default();
-
         let fn_call = ExprType::FnCall(Box::new(zspan!(FnCall {
             id: zspan!("f".to_owned()),
             args: vec![]
         })));
-
         let array_expr = zspan!(Array {
             initial_value: zspan!(ExprType::Number(0)),
             len: zspan!(fn_call.clone())
@@ -2148,6 +2153,60 @@ mod tests {
         assert_eq!(
             env.translate_array(&array_expr).unwrap_err()[0].t.ty,
             TypecheckErrType::NonConstantArithExpr(fn_call)
+        );
+    }
+
+    #[test]
+    fn test_translate_if_then() {
+        let env = Env::default();
+        let if_expr = zspan!(If {
+            cond: zspan!(ExprType::BoolLiteral(true)),
+            then_expr: zspan!(ExprType::Unit),
+            else_expr: None,
+        });
+
+        assert_eq!(env.translate_if(&if_expr), Ok(Rc::new(Type::Unit)));
+    }
+
+    #[test]
+    fn test_translate_if_then_type_mismatch() {
+        let env = Env::default();
+        let if_expr = zspan!(If {
+            cond: zspan!(ExprType::BoolLiteral(true)),
+            then_expr: zspan!(ExprType::Number(0)),
+            else_expr: None,
+        });
+
+        assert_eq!(
+            env.translate_if(&if_expr).unwrap_err()[0].t.ty,
+            TypecheckErrType::TypeMismatch(Rc::new(Type::Unit), Rc::new(Type::Int))
+        );
+    }
+
+    #[test]
+    fn test_translate_if_then_else() {
+        let env = Env::default();
+        let if_expr = zspan!(If {
+            cond: zspan!(ExprType::BoolLiteral(true)),
+            then_expr: zspan!(ExprType::Number(0)),
+            else_expr: Some(zspan!(ExprType::Number(1))),
+        });
+
+        assert_eq!(env.translate_if(&if_expr), Ok(Rc::new(Type::Int)));
+    }
+
+    #[test]
+    fn test_translate_if_then_else_type_mismatch() {
+        let env = Env::default();
+        let if_expr = zspan!(If {
+            cond: zspan!(ExprType::BoolLiteral(true)),
+            then_expr: zspan!(ExprType::Number(0)),
+            else_expr: Some(zspan!(ExprType::String("s".to_owned()))),
+        });
+
+        assert_eq!(
+            env.translate_if(&if_expr).unwrap_err()[0].t.ty,
+            TypecheckErrType::TypeMismatch(Rc::new(Type::Int), Rc::new(Type::String))
         );
     }
 }
