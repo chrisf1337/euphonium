@@ -1,6 +1,6 @@
 use crate::ast::{
     self, ArithOp, Array, Assign, Decl, DeclType, Expr, ExprType, FieldAssign, FnCall, FnDecl, If, LVal, Let, Pattern,
-    Record, Spanned, TypeDecl, TypeDeclType,
+    Range, Record, Spanned, TypeDecl, TypeDeclType,
 };
 use codespan::{ByteIndex, ByteSpan};
 use codespan_reporting::{Diagnostic, Label};
@@ -119,6 +119,7 @@ pub enum Type {
     Alias(String),
     Enum(String, Vec<EnumCase>),
     Fn(Vec<Rc<Type>>, Rc<Type>),
+    Iterator(Rc<Type>),
 }
 
 impl Type {
@@ -323,7 +324,7 @@ impl Env {
     /// Call after translating type decls and checking for cycles.
     fn validate_type(&self, ty: &Rc<Type>, def_span: ByteSpan) -> Result<()> {
         match ty.as_ref() {
-            Type::String | Type::Bool | Type::Unit | Type::Int => Ok(()),
+            Type::String | Type::Bool | Type::Unit | Type::Int | Type::Iterator(_) => Ok(()),
             Type::Alias(_) => self.resolve_type(ty, def_span).map(|_| ()),
             Type::Record(_, record) => {
                 let mut errors = vec![];
@@ -687,6 +688,7 @@ impl Env {
             ExprType::Assign(assign) => self.translate_assign(assign),
             ExprType::Array(array) => self.translate_array(array),
             ExprType::If(if_expr) => self.translate_if(if_expr),
+            ExprType::Range(range) => self.translate_range(range),
             _ => unimplemented!(),
         }
     }
@@ -1119,6 +1121,12 @@ impl Env {
             }
             Ok(Rc::new(Type::Unit))
         }
+    }
+
+    fn translate_range(&self, Spanned { t: expr, .. }: &Spanned<Range>) -> Result<Rc<Type>> {
+        assert_ty!(self, &expr.start, Rc::new(Type::Int))?;
+        assert_ty!(self, &expr.end, Rc::new(Type::Int))?;
+        Ok(Rc::new(Type::Iterator(Rc::new(Type::Int))))
     }
 }
 
@@ -2206,6 +2214,34 @@ mod tests {
 
         assert_eq!(
             env.translate_if(&if_expr).unwrap_err()[0].t.ty,
+            TypecheckErrType::TypeMismatch(Rc::new(Type::Int), Rc::new(Type::String))
+        );
+    }
+
+    #[test]
+    fn test_translate_range() {
+        let env = Env::default();
+        let range = zspan!(Range {
+            start: zspan!(ExprType::Number(0)),
+            end: zspan!(ExprType::Number(1)),
+        });
+
+        assert_eq!(
+            env.translate_range(&range),
+            Ok(Rc::new(Type::Iterator(Rc::new(Type::Int))))
+        );
+    }
+
+    #[test]
+    fn test_translate_range_type_mismatch() {
+        let env = Env::default();
+        let range = zspan!(Range {
+            start: zspan!(ExprType::Number(0)),
+            end: zspan!(ExprType::String("a".to_owned())),
+        });
+
+        assert_eq!(
+            env.translate_range(&range).unwrap_err()[0].t.ty,
             TypecheckErrType::TypeMismatch(Rc::new(Type::Int), Rc::new(Type::String))
         );
     }
