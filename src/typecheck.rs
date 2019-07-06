@@ -317,6 +317,36 @@ impl<'a> Env<'a> {
         }
     }
 
+    fn get_var_def_span(&self, id: &str) -> Option<ByteSpan> {
+        if let Some(span) = self.var_def_spans.get(id) {
+            Some(*span)
+        } else if let Some(parent) = self.parent {
+            parent.get_var_def_span(id)
+        } else {
+            None
+        }
+    }
+
+    fn get_type_def_span(&self, id: &str) -> Option<ByteSpan> {
+        if let Some(span) = self.type_def_spans.get(id) {
+            Some(*span)
+        } else if let Some(parent) = self.parent {
+            parent.get_type_def_span(id)
+        } else {
+            None
+        }
+    }
+
+    fn get_record_field_decl_spans(&self, id: &str) -> Option<&HashMap<String, ByteSpan>> {
+        if let Some(spans) = self.record_field_decl_spans.get(id) {
+            Some(spans)
+        } else if let Some(parent) = self.parent {
+            parent.get_record_field_decl_spans(id)
+        } else {
+            None
+        }
+    }
+
     fn contains_type(&self, name: &str) -> bool {
         if self.types.contains_key(name) {
             true
@@ -337,7 +367,7 @@ impl<'a> Env<'a> {
         match ty.as_ref() {
             Type::Alias(alias) => {
                 if let Some(resolved_type) = self.get_type(alias) {
-                    let span = self.type_def_spans[alias];
+                    let span = self.get_type_def_span(alias).unwrap();
                     self.resolve_type(resolved_type, span)
                 } else {
                     Err(vec![TypecheckErr::new_err(
@@ -355,7 +385,7 @@ impl<'a> Env<'a> {
         if let Some(alias) = self.types.get(ty) {
             if let Some(alias_str) = alias.alias() {
                 if path.contains(&alias_str) {
-                    let span = self.type_def_spans[ty];
+                    let span = self.get_type_def_span(ty).unwrap();
                     return Err(vec![TypecheckErr::new_err(
                         TypecheckErrType::TypeDeclCycle(ty.to_string(), alias.clone()),
                         span,
@@ -440,7 +470,7 @@ impl<'a> Env<'a> {
     fn check_for_invalid_types(&self) -> Result<()> {
         let mut errors = vec![];
         for (id, ty) in &self.types {
-            match self.validate_type(ty, self.type_def_spans[id]) {
+            match self.validate_type(ty, self.get_type_def_span(id).unwrap()) {
                 Ok(()) => (),
                 Err(errs) => errors.extend(errs),
             }
@@ -448,12 +478,12 @@ impl<'a> Env<'a> {
         for (id, var) in &self.vars {
             if let Type::Fn(param_types, return_type) = var.ty.as_ref() {
                 for ty in param_types {
-                    match self.validate_type(ty, self.var_def_spans[id]) {
+                    match self.validate_type(ty, self.get_var_def_span(id).unwrap()) {
                         Ok(()) => (),
                         Err(errs) => errors.extend(errs),
                     }
                 }
-                match self.validate_type(return_type, self.var_def_spans[id]) {
+                match self.validate_type(return_type, self.get_var_def_span(id).unwrap()) {
                     Ok(()) => (),
                     Err(errs) => errors.extend(errs),
                 }
@@ -567,7 +597,7 @@ impl<'a> Env<'a> {
     fn translate_fn_decl_sig(&mut self, fn_decl: &Spanned<FnDecl>) -> Result<()> {
         // Check if there already exists another function with the same name
         if self.vars.contains_key(&fn_decl.id.t) {
-            let span = self.var_def_spans[&fn_decl.id.t];
+            let span = self.get_var_def_span(&fn_decl.id.t).unwrap();
             return Err(vec![TypecheckErr::new_err(
                 TypecheckErrType::DuplicateFn(fn_decl.id.t.clone()),
                 fn_decl.id.span,
@@ -673,7 +703,7 @@ impl<'a> Env<'a> {
             )
             .with_source(Spanned::new(
                 format!("{} was defined here", id.clone()),
-                self.type_def_spans[&id],
+                self.get_type_def_span(&id).unwrap(),
             ))]);
         }
 
@@ -988,7 +1018,7 @@ impl<'a> Env<'a> {
                             )
                             .with_source(Spanned::new(
                                 format!("{} was declared here", field_id.t),
-                                self.record_field_decl_spans[&record_id.t][&field_id.t],
+                                self.get_record_field_decl_spans(&record_id.t).unwrap()[&field_id.t],
                             )),
                         );
                     }
@@ -1018,7 +1048,7 @@ impl<'a> Env<'a> {
             LVal::Simple(var) => {
                 if let Some(var_properties) = self.get_var(var) {
                     if var_properties.immutable {
-                        let def_span = self.var_def_spans[var];
+                        let def_span = self.get_var_def_span(var).unwrap();
                         return Err(vec![TypecheckErr::new_err(
                             TypecheckErrType::MutatingImmutable(var.clone()),
                             assign.lval.span,
@@ -1046,7 +1076,7 @@ impl<'a> Env<'a> {
                     )
                     .with_source(Spanned::new(
                         format!("{} was defined here", base_var),
-                        self.var_def_spans[base_var],
+                        self.get_var_def_span(base_var).unwrap(),
                     ))]);
                 }
                 let lval_type = self.resolve_type(&lval_properties.ty, lval.span)?;
@@ -1083,7 +1113,7 @@ impl<'a> Env<'a> {
                     )
                     .with_source(Spanned::new(
                         format!("{} was defined here", base_var),
-                        self.var_def_spans[base_var],
+                        self.get_var_def_span(base_var).unwrap(),
                     ))]);
                 }
                 let lval_type = self.resolve_type(&lval_properties.ty, lval.span)?;
@@ -1182,7 +1212,18 @@ impl<'a> Env<'a> {
         Ok(Rc::new(Type::Iterator(Rc::new(Type::Int))))
     }
 
-    fn translate_for(&self, Spanned { t: expr, span }: &Spanned<For>) -> Result<Rc<Type>> {
+    fn translate_for(&self, Spanned { t: expr, .. }: &Spanned<For>) -> Result<Rc<Type>> {
+        assert_ty!(self, &expr.range, Rc::new(Type::Iterator(Rc::new(Type::Int))))?;
+        let mut child_env = self.new_child();
+        child_env.insert_var(
+            expr.index.t.clone(),
+            VarProperties {
+                ty: Rc::new(Type::Int),
+                immutable: false,
+            },
+            expr.index.span,
+        );
+        assert_ty!(child_env, &expr.body, Rc::new(Type::Unit))?;
         Ok(Rc::new(Type::Unit))
     }
 }
@@ -1214,6 +1255,26 @@ mod tests {
                 .ty,
             TypecheckErrType::UndefinedType("e".to_owned()),
         );
+    }
+
+    #[test]
+    fn test_child_env() {
+        let mut env = Env::default();
+        let var_properties = VarProperties {
+            ty: Rc::new(Type::Int),
+            immutable: true,
+        };
+        env.insert_var("a".to_owned(), var_properties.clone(), zspan!());
+        let mut child_env = env.new_child();
+        child_env.insert_type("i".to_owned(), Type::Alias("int".to_owned()), zspan!());
+
+        assert!(child_env.contains_type("int"));
+        assert!(child_env.contains_type("i"));
+        assert_eq!(
+            child_env.resolve_type(child_env.get_type("i").unwrap(), zspan!()),
+            Ok(Rc::new(Type::Int))
+        );
+        assert_eq!(child_env.get_var("a"), Some(&var_properties));
     }
 
     #[test]
@@ -2300,6 +2361,63 @@ mod tests {
         assert_eq!(
             env.translate_range(&range).unwrap_err()[0].t.ty,
             TypecheckErrType::TypeMismatch(Rc::new(Type::Int), Rc::new(Type::String))
+        );
+    }
+
+    #[test]
+    fn test_translate_for() {
+        let env = Env::default();
+        let for_expr = zspan!(For {
+            index: zspan!("i".to_owned()),
+            range: zspan!(ExprType::Range(Box::new(zspan!(Range {
+                start: zspan!(ExprType::Number(0)),
+                end: zspan!(ExprType::Number(1)),
+            })))),
+            body: zspan!(ExprType::Seq(
+                vec![zspan!(ExprType::LVal(Box::new(zspan!(LVal::Simple("i".to_owned())))))],
+                false
+            ))
+        });
+
+        assert_eq!(env.translate_for(&for_expr), Ok(Rc::new(Type::Unit)));
+    }
+
+    #[test]
+    fn test_translate_for_range_type_mismatch() {
+        let env = Env::default();
+        let for_expr = zspan!(For {
+            index: zspan!("i".to_owned()),
+            range: zspan!(ExprType::Number(0)),
+            body: zspan!(ExprType::Seq(
+                vec![zspan!(ExprType::LVal(Box::new(zspan!(LVal::Simple("i".to_owned())))))],
+                false
+            ))
+        });
+
+        assert_eq!(
+            env.translate_for(&for_expr).unwrap_err()[0].t.ty,
+            TypecheckErrType::TypeMismatch(Rc::new(Type::Iterator(Rc::new(Type::Int))), Rc::new(Type::Int))
+        );
+    }
+
+    #[test]
+    fn test_translate_for_body_type_mismatch() {
+        let env = Env::default();
+        let for_expr = zspan!(For {
+            index: zspan!("i".to_owned()),
+            range: zspan!(ExprType::Range(Box::new(zspan!(Range {
+                start: zspan!(ExprType::Number(0)),
+                end: zspan!(ExprType::Number(1)),
+            })))),
+            body: zspan!(ExprType::Seq(
+                vec![zspan!(ExprType::LVal(Box::new(zspan!(LVal::Simple("i".to_owned())))))],
+                true
+            ))
+        });
+
+        assert_eq!(
+            env.translate_for(&for_expr).unwrap_err()[0].t.ty,
+            TypecheckErrType::TypeMismatch(Rc::new(Type::Unit), Rc::new(Type::Int))
         );
     }
 }

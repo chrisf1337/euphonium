@@ -621,6 +621,7 @@ impl From<If> for _If {
 pub struct For {
     pub index: Spanned<String>,
     pub range: Expr,
+    /// ExprType::Seq
     pub body: Expr,
 }
 
