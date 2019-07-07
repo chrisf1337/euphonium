@@ -1,6 +1,6 @@
 use crate::ast::{
     self, Arith, ArithOp, Array, Assign, Bool, Compare, Decl, DeclType, Enum, Expr, ExprType, FieldAssign, FnCall,
-    FnDecl, For, If, LVal, Let, Pattern, Range, Record, Spanned, TypeDecl, TypeDeclType, While,
+    FnDecl, For, If, LVal, Let, Pattern, Range, Record, Spanned, TypeDecl, TypeDeclType, While, Closure
 };
 use codespan::{ByteIndex, ByteSpan};
 use codespan_reporting::{Diagnostic, Label};
@@ -820,6 +820,7 @@ impl<'a> Env<'a> {
             ExprType::While(while_expr) => self.translate_while(while_expr),
             ExprType::Compare(compare) => self.translate_compare(compare),
             ExprType::Enum(enum_expr) => self.translate_enum(enum_expr),
+            ExprType::Closure(closure) => self.translate_closure(closure),
         }
     }
 
@@ -1365,6 +1366,10 @@ impl<'a> Env<'a> {
                 expr.enum_id.span,
             )])
         }
+    }
+
+    fn translate_closure(&self, Spanned { t: expr, span }: &Spanned<Closure>) -> Result<Rc<Type>> {
+        unimplemented!()
     }
 }
 

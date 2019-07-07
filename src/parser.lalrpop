@@ -166,6 +166,11 @@ DeclType: ast::DeclType = {
     },
 };
 
+ClosureOrExpr: ast::Expr = {
+    Spanned<Closure> => <>.map(|e| ast::ExprType::Closure(Box::new(e))),
+    ExprTypeOrLetOrAssign,
+};
+
 ExprTypeOrLetOrAssign: ast::Expr = {
     Expr,
     Spanned<_Let> => {
@@ -223,7 +228,7 @@ OpExpr: ast::Expr = {
 
 ExprTypeSeq: ast::ExprType = {
     "{" <l:@L> <r:@R> "}" => ast::ExprType::Seq(vec![ast::Expr::new(ast::ExprType::Unit, span!(l, r, offset))], true),
-    "{" <exprs:(<ExprTypeOrLetOrAssign> ";")*> <last:ExprTypeOrLetOrAssign> <last_semi:";"?> "}" => {
+    "{" <exprs:(<ClosureOrExpr> ";")*> <last:ClosureOrExpr> <last_semi:";"?> "}" => {
         let mut exprs = exprs;
         exprs.push(last);
         ast::ExprType::Seq(exprs, last_semi.is_none())
@@ -374,6 +379,27 @@ EnumArgs: Vec<ast::Expr> = {
         let mut exprs = exprs;
         exprs.push(last_expr);
         exprs
+    },
+};
+
+Closure = Spanned<_Closure>;
+
+_Closure: ast::Closure = {
+    "||" <body:ExprTypeOrLetOrAssign> => ast::Closure {
+        params: vec![],
+        body,
+    },
+    "|" <type_fields:(<Spanned<TyField>> ",")+> "|" <body:ExprTypeOrLetOrAssign> => ast::Closure {
+        params: type_fields,
+        body,
+    },
+    "|" <type_fields:(<Spanned<TyField>> ",")*> <last_type_field:Spanned<TyField>> "|" <body:ExprTypeOrLetOrAssign> => {
+        let mut type_fields = type_fields;
+        type_fields.push(last_type_field);
+        ast::Closure {
+            params: type_fields,
+            body,
+        }
     },
 };
 

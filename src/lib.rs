@@ -141,6 +141,17 @@ mod tests {
                         _ExprType::Range(Box::new(_Range {
                             start: _ExprType::Seq(vec![_ExprType::Number(1)], true),
                             end: _ExprType::Number(2)
+                        })),
+                        _ExprType::Closure(Box::new(_Closure {
+                            params: vec![],
+                            body: _ExprType::Seq(vec![_ExprType::Number(1)], true),
+                        })),
+                        _ExprType::Closure(Box::new(_Closure {
+                            params: vec![_TypeField {
+                                id: "a".to_owned(),
+                                ty: _Type::Type("int".to_owned())
+                            }],
+                            body: _ExprType::LVal(Box::new(_LVal::Simple("a".to_owned()))),
                         }))
                     ],
                     false

@@ -253,6 +253,7 @@ pub enum ExprType {
     While(Box<Spanned<While>>),
     Compare(Box<Spanned<Compare>>),
     Enum(Box<Spanned<Enum>>),
+    Closure(Box<Spanned<Closure>>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -280,6 +281,7 @@ pub enum _ExprType {
     While(Box<_While>),
     Compare(Box<_Compare>),
     Enum(Box<_Enum>),
+    Closure(Box<_Closure>),
 }
 
 impl From<ExprType> for _ExprType {
@@ -310,6 +312,7 @@ impl From<ExprType> for _ExprType {
             ExprType::While(expr) => _ExprType::While(Box::new(expr.t.into())),
             ExprType::Compare(expr) => _ExprType::Compare(Box::new(expr.t.into())),
             ExprType::Enum(expr) => _ExprType::Enum(Box::new(expr.t.into())),
+            ExprType::Closure(expr) => _ExprType::Closure(Box::new(expr.t.into())),
         }
     }
 }
@@ -683,6 +686,27 @@ impl From<Enum> for _Enum {
             enum_id: expr.enum_id.t,
             case_id: expr.case_id.t,
             args: expr.args.t.into_iter().map(|expr| expr.t.into()).collect(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Closure {
+    pub params: Vec<Spanned<TypeField>>,
+    pub body: Expr,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct _Closure {
+    pub params: Vec<_TypeField>,
+    pub body: _ExprType,
+}
+
+impl From<Closure> for _Closure {
+    fn from(expr: Closure) -> Self {
+        Self {
+            params: expr.params.into_iter().map(|param| param.t.into()).collect(),
+            body: expr.body.t.into()
         }
     }
 }
