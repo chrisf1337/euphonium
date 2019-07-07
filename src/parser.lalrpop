@@ -360,11 +360,11 @@ _While: ast::While = {
 Enum = Spanned<_Enum>;
 
 _Enum: ast::Enum = {
-    <enum_id:Spanned<"identifier">> "::" <case_id:Spanned<"identifier">> <args:Spanned<EnumArgs>?> => {
+    <enum_id:Spanned<"identifier">> "::" <case_id:Spanned<"identifier">> <args:Spanned<EnumArgs?>> => {
         ast::Enum {
             enum_id,
             case_id,
-            args,
+            args: args.map(|args| args.unwrap_or(vec![])),
         }
     }
 };

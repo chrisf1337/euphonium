@@ -225,7 +225,7 @@ mod tests {
                     vec![_ExprType::Enum(Box::new(_Enum {
                         enum_id: "A".to_owned(),
                         case_id: "B".to_owned(),
-                        args: Some(vec![
+                        args: vec![
                             _ExprType::Number(1),
                             _ExprType::Record(Box::new(_Record {
                                 id: "a".to_owned(),
@@ -234,8 +234,8 @@ mod tests {
                                     expr: _ExprType::Number(1)
                                 }]
                             }))
-                        ]),
-                    })),],
+                        ],
+                    }))],
                     false
                 )
             }),])

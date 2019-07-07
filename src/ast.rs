@@ -667,14 +667,14 @@ impl From<While> for _While {
 pub struct Enum {
     pub enum_id: Spanned<String>,
     pub case_id: Spanned<String>,
-    pub args: Option<Spanned<Vec<Expr>>>,
+    pub args: Spanned<Vec<Expr>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct _Enum {
     pub enum_id: String,
     pub case_id: String,
-    pub args: Option<Vec<_ExprType>>,
+    pub args: Vec<_ExprType>,
 }
 
 impl From<Enum> for _Enum {
@@ -682,9 +682,7 @@ impl From<Enum> for _Enum {
         Self {
             enum_id: expr.enum_id.t,
             case_id: expr.case_id.t,
-            args: expr
-                .args
-                .map(|exprs| exprs.t.into_iter().map(|expr| expr.t.into()).collect()),
+            args: expr.args.t.into_iter().map(|expr| expr.t.into()).collect(),
         }
     }
 }

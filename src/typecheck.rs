@@ -1,6 +1,6 @@
 use crate::ast::{
-    self, Arith, ArithOp, Array, Assign, Bool, Compare, Decl, DeclType, Expr, ExprType, FieldAssign, FnCall, FnDecl,
-    For, If, LVal, Let, Pattern, Range, Record, Spanned, TypeDecl, TypeDeclType, While,
+    self, Arith, ArithOp, Array, Assign, Bool, Compare, Decl, DeclType, Enum, Expr, ExprType, FieldAssign, FnCall,
+    FnDecl, For, If, LVal, Let, Pattern, Range, Record, Spanned, TypeDecl, TypeDeclType, While,
 };
 use codespan::{ByteIndex, ByteSpan};
 use codespan_reporting::{Diagnostic, Label};
@@ -23,6 +23,8 @@ pub enum TypecheckErrType {
     NotAFn(String),
     NotARecord(Rc<Type>),
     NotAnArray(Rc<Type>),
+    NotAnEnum(Rc<Type>),
+    NotAnEnumCase(String),
     UndefinedVar(String),
     UndefinedFn(String),
     UndefinedField(String),
@@ -36,6 +38,7 @@ pub enum TypecheckErrType {
     DuplicateFn(String),
     DuplicateType(String),
     DuplicateField(String),
+    DuplicateEnumCase(String),
     DuplicateParam(String),
     MutatingImmutable(String),
     NonConstantArithExpr(ExprType),
@@ -54,11 +57,13 @@ impl TypecheckErrType {
                 format!("arity mismatch\nexpected: {:?}\n  actual: {:?}", expected, actual)
             }
             NotAFn(fun) => {
-                let ty = env.vars.get(fun).unwrap();
+                let ty = env.get_var(fun).unwrap();
                 format!("not a function: {} (has type {:?})", fun, ty)
             }
             NotARecord(ty) => format!("not a record: (has type {:?})", ty.as_ref()),
             NotAnArray(ty) => format!("not an array: (has type {:?})", ty.as_ref()),
+            NotAnEnum(ty) => format!("not an enum: (has type {:?})", ty.as_ref()),
+            NotAnEnumCase(case_id) => format!("not an enum case: {}", case_id),
             UndefinedVar(var) => format!("undefined variable: {}", var),
             UndefinedFn(fun) => format!("undefined function: {}", fun),
             UndefinedField(field) => format!("undefined field: {}", field),
@@ -71,6 +76,7 @@ impl TypecheckErrType {
             DuplicateFn(fun) => format!("duplicate function declaration for {}", fun),
             DuplicateType(ty) => format!("duplicate type declaration for {}", ty),
             DuplicateField(field) => format!("duplicate record field declaration for {}", field),
+            DuplicateEnumCase(enum_case) => format!("duplicate enum case declaration for {}", enum_case),
             DuplicateParam(param) => format!("duplicate function param declaration for {}", param),
             MutatingImmutable(var) => format!("{} was declared as immutable", var),
             NonConstantArithExpr(expr) => format!("{:?} is not a constant arithmetic expression", expr),
@@ -117,7 +123,7 @@ pub enum Type {
     Array(Rc<Type>, usize),
     Unit,
     Alias(String),
-    Enum(String, Vec<EnumCase>),
+    Enum(String, HashMap<String, EnumCase>),
     Fn(Vec<Rc<Type>>, Rc<Type>),
     Iterator(Rc<Type>),
 }
@@ -142,9 +148,13 @@ impl Type {
                     Type::Alias(ty.t)
                 }
             }
-            TypeDeclType::Enum(cases) => {
-                Type::Enum(type_decl.id.t.clone(), cases.into_iter().map(|c| c.t.into()).collect())
-            }
+            TypeDeclType::Enum(cases) => Type::Enum(
+                type_decl.id.t.clone(),
+                cases
+                    .into_iter()
+                    .map(|c| (c.t.id.t.clone().into(), c.t.into()))
+                    .collect(),
+            ),
             TypeDeclType::Record(type_fields) => {
                 let mut type_fields_hm = HashMap::new();
                 for TypeField { id, ty } in type_fields.into_iter().map(|tf| tf.t.into()) {
@@ -227,7 +237,8 @@ pub struct Env<'a> {
     pub type_def_spans: HashMap<String, ByteSpan>,
 
     pub record_field_decl_spans: HashMap<String, HashMap<String, ByteSpan>>,
-    pub fn_param_decl_spans: HashMap<String, HashMap<String, ByteSpan>>,
+    pub fn_param_decl_spans: HashMap<String, Vec<ByteSpan>>,
+    pub enum_case_param_decl_spans: HashMap<String, HashMap<String, Vec<ByteSpan>>>,
 }
 
 impl<'a> Default for Env<'a> {
@@ -247,6 +258,7 @@ impl<'a> Default for Env<'a> {
 
             record_field_decl_spans: HashMap::new(),
             fn_param_decl_spans: HashMap::new(),
+            enum_case_param_decl_spans: HashMap::new(),
         }
     }
 }
@@ -278,6 +290,7 @@ impl<'a> Env<'a> {
 
             record_field_decl_spans: HashMap::new(),
             fn_param_decl_spans: HashMap::new(),
+            enum_case_param_decl_spans: HashMap::new(),
         }
     }
 
@@ -342,6 +355,26 @@ impl<'a> Env<'a> {
             Some(spans)
         } else if let Some(parent) = self.parent {
             parent.get_record_field_decl_spans(id)
+        } else {
+            None
+        }
+    }
+
+    fn get_fn_param_decl_spans(&self, id: &str) -> Option<&[ByteSpan]> {
+        if let Some(spans) = self.fn_param_decl_spans.get(id) {
+            Some(spans)
+        } else if let Some(parent) = self.parent {
+            parent.get_fn_param_decl_spans(id)
+        } else {
+            None
+        }
+    }
+
+    fn get_enum_case_param_decl_spans(&self, id: &str) -> Option<&HashMap<String, Vec<ByteSpan>>> {
+        if let Some(spans) = self.enum_case_param_decl_spans.get(id) {
+            Some(spans)
+        } else if let Some(parent) = self.parent {
+            parent.get_enum_case_param_decl_spans(id)
         } else {
             None
         }
@@ -424,7 +457,7 @@ impl<'a> Env<'a> {
             Type::Array(ty, _) => self.validate_type(ty, def_span),
             Type::Enum(_, cases) => {
                 let mut errors = vec![];
-                for case in cases {
+                for case in cases.values() {
                     for param in &case.params {
                         // Don't allow nested enum decls
                         if let Type::Enum(..) = param.as_ref() {
@@ -622,8 +655,8 @@ impl<'a> Env<'a> {
                 ))
             },
         )?
-        .into_iter()
-        .map(|(k, v)| (k.clone(), v))
+        .values()
+        .cloned()
         .collect();
         self.fn_param_decl_spans.insert(fn_decl.id.t.clone(), param_decl_spans);
 
@@ -708,23 +741,43 @@ impl<'a> Env<'a> {
         }
 
         let ty = Type::from_type_decl(decl.t.clone());
-        if let TypeDeclType::Record(ref record_fields) = decl.ty.t {
-            let field_def_spans: HashMap<String, ByteSpan> = Self::check_for_duplicates(
-                record_fields,
-                |field| &field.t.id.t,
-                |field, span| {
-                    TypecheckErr::new_err(TypecheckErrType::DuplicateField(field.t.id.t.clone()), field.span)
-                        .with_source(Spanned::new(
-                            format!("{} aws declared here", field.t.id.t.clone()),
-                            span,
-                        ))
-                },
-            )?
-            .into_iter()
-            .map(|(k, v)| (k.clone(), v))
-            .collect();
+        match &decl.ty.t {
+            TypeDeclType::Record(record_fields) => {
+                let field_def_spans: HashMap<String, ByteSpan> = Self::check_for_duplicates(
+                    record_fields,
+                    |field| &field.id.t,
+                    |field, span| {
+                        let field_id = field.id.t.clone();
+                        TypecheckErr::new_err(TypecheckErrType::DuplicateField(field_id.clone()), field.span)
+                            .with_source(Spanned::new(format!("{} was declared here", field_id), span))
+                    },
+                )?
+                .into_iter()
+                .map(|(k, v)| (k.clone(), v))
+                .collect();
 
-            self.record_field_decl_spans.insert(id.clone(), field_def_spans);
+                self.record_field_decl_spans.insert(id.clone(), field_def_spans);
+            }
+            TypeDeclType::Enum(cases) => {
+                Self::check_for_duplicates(
+                    cases,
+                    |case| &case.id.t,
+                    |case, span| {
+                        let case_id = case.id.t.clone();
+                        TypecheckErr::new_err(TypecheckErrType::DuplicateEnumCase(case_id.clone()), case.span)
+                            .with_source(Spanned::new(format!("{} was declared here", case_id), span))
+                    },
+                )?;
+
+                let decl_spans = self
+                    .enum_case_param_decl_spans
+                    .entry(decl.id.t.clone())
+                    .or_insert(HashMap::new());
+                for case in cases {
+                    decl_spans.insert(case.id.t.clone(), case.params.iter().map(|param| param.span).collect());
+                }
+            }
+            _ => (),
         }
         self.insert_type(id, ty, decl.span);
 
@@ -766,7 +819,7 @@ impl<'a> Env<'a> {
             ExprType::For(for_expr) => self.translate_for(for_expr),
             ExprType::While(while_expr) => self.translate_while(while_expr),
             ExprType::Compare(compare) => self.translate_compare(compare),
-            _ => unimplemented!(),
+            ExprType::Enum(enum_expr) => self.translate_enum(enum_expr),
         }
     }
 
@@ -893,22 +946,30 @@ impl<'a> Env<'a> {
                         )]);
                     }
 
-                    let mut errs = vec![];
-                    for (arg, param_type) in args.iter().zip(param_types.iter()) {
+                    let mut errors = vec![];
+                    for (index, (arg, param_type)) in args.iter().zip(param_types.iter()).enumerate() {
                         match self.translate_expr(arg) {
                             Ok(ty) => {
                                 // param_type should already be well-defined because we have already
                                 // checked for invalid types
                                 if self.resolve_type(&ty, arg.span)? != self.resolve_type(param_type, zspan!()).unwrap()
                                 {
-                                    errs.push(TypecheckErr::new_err(
+                                    let mut err = TypecheckErr::new_err(
                                         TypecheckErrType::TypeMismatch(param_type.clone(), ty.clone()),
                                         arg.span,
-                                    ));
+                                    );
+                                    if let Some(decl_spans) = self.get_fn_param_decl_spans(id) {
+                                        err.source = Some(Spanned::new("declared here".to_owned(), decl_spans[index]));
+                                    }
+                                    errors.push(err);
                                 }
                             }
-                            Err(src_errs) => errs.extend(src_errs),
+                            Err(errs) => errors.extend(errs),
                         }
+                    }
+
+                    if !errors.is_empty() {
+                        return Err(errors);
                     }
 
                     Ok(return_type.clone())
@@ -1244,6 +1305,67 @@ impl<'a> Env<'a> {
         assert_ty!(self, &expr.r, Rc::new(Type::Bool))?;
         Ok(Rc::new(Type::Bool))
     }
+
+    fn translate_enum(&self, Spanned { t: expr, .. }: &Spanned<Enum>) -> Result<Rc<Type>> {
+        if let Some(ty) = self.get_type(&expr.enum_id) {
+            if let Type::Enum(_, enum_cases) = ty.as_ref() {
+                if let Some(EnumCase { params, .. }) = enum_cases.get(&expr.case_id.t) {
+                    if params.len() != expr.args.len() {
+                        return Err(vec![TypecheckErr::new_err(
+                            TypecheckErrType::ArityMismatch(params.len(), expr.args.len()),
+                            expr.args.span,
+                        )]);
+                    }
+
+                    let mut errors = vec![];
+                    for (index, (arg, param_type)) in expr.args.iter().zip(params.iter()).enumerate() {
+                        match self.translate_expr(arg) {
+                            Ok(ty) => {
+                                // param_type should already be well-defined because we have already
+                                // checked for invalid types
+                                if self.resolve_type(&ty, arg.span)? != self.resolve_type(param_type, zspan!()).unwrap()
+                                {
+                                    let mut err = TypecheckErr::new_err(
+                                        TypecheckErrType::TypeMismatch(param_type.clone(), ty.clone()),
+                                        arg.span,
+                                    );
+                                    if let Some(decl_spans) = self.get_enum_case_param_decl_spans(&expr.enum_id) {
+                                        err.source = Some(Spanned::new(
+                                            "declared here".to_owned(),
+                                            decl_spans[&expr.case_id.t][index],
+                                        ));
+                                    }
+                                    errors.push(err);
+                                }
+                            }
+                            Err(errs) => errors.extend(errs),
+                        }
+                    }
+
+                    if !errors.is_empty() {
+                        return Err(errors);
+                    }
+
+                    Ok(ty.clone())
+                } else {
+                    Err(vec![TypecheckErr::new_err(
+                        TypecheckErrType::NotAnEnumCase(expr.case_id.t.clone()),
+                        expr.case_id.span,
+                    )])
+                }
+            } else {
+                Err(vec![TypecheckErr::new_err(
+                    TypecheckErrType::NotAnEnum(ty.clone()),
+                    expr.enum_id.span,
+                )])
+            }
+        } else {
+            Err(vec![TypecheckErr::new_err(
+                TypecheckErrType::UndefinedType(expr.enum_id.t.clone()),
+                expr.enum_id.span,
+            )])
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1522,11 +1644,22 @@ mod tests {
         env.insert_var(
             "f".to_owned(),
             VarProperties {
-                ty: Rc::new(Type::Fn(vec![], Rc::new(Type::Int))),
+                ty: Rc::new(Type::Fn(vec![Rc::new(Type::Int)], Rc::new(Type::Int))),
                 immutable: true,
             },
             zspan!(),
         );
+        env.fn_param_decl_spans.insert("f".to_owned(), vec![zspan!()]);
+
+        let fn_call = zspan!(FnCall {
+            id: zspan!("f".to_owned()),
+            args: vec![zspan!(ExprType::String("a".to_owned()))],
+        });
+
+        assert_eq!(
+            env.translate_fn_call(&fn_call).unwrap_err()[0].t.ty,
+            TypecheckErrType::TypeMismatch(Rc::new(Type::Int), Rc::new(Type::String))
+        )
     }
 
     #[test]
@@ -2501,6 +2634,64 @@ mod tests {
         assert_eq!(
             env.translate_compare(&compare).unwrap_err()[0].t.ty,
             TypecheckErrType::TypeMismatch(Rc::new(Type::Bool), Rc::new(Type::Int))
+        );
+    }
+
+    #[test]
+    fn test_translate_enum_arity_mismatch() {
+        let mut env = Env::default();
+        env.insert_type(
+            "e".to_owned(),
+            Type::Enum(
+                "e".to_owned(),
+                hashmap! {
+                    "c".to_owned() => EnumCase {
+                        id: "c".to_owned(),
+                        params: vec![Rc::new(Type::Int)]
+                    }
+                },
+            ),
+            zspan!(),
+        );
+
+        let enum_expr = zspan!(Enum {
+            enum_id: zspan!("e".to_owned()),
+            case_id: zspan!("c".to_owned()),
+            args: zspan!(vec![])
+        });
+
+        assert_eq!(
+            env.translate_enum(&enum_expr).unwrap_err()[0].t.ty,
+            TypecheckErrType::ArityMismatch(1, 0)
+        );
+    }
+
+    #[test]
+    fn test_translate_enum_type_mismatch() {
+        let mut env = Env::default();
+        env.insert_type(
+            "e".to_owned(),
+            Type::Enum(
+                "e".to_owned(),
+                hashmap! {
+                    "c".to_owned() => EnumCase {
+                        id: "c".to_owned(),
+                        params: vec![Rc::new(Type::Int)]
+                    }
+                },
+            ),
+            zspan!(),
+        );
+
+        let enum_expr = zspan!(Enum {
+            enum_id: zspan!("e".to_owned()),
+            case_id: zspan!("c".to_owned()),
+            args: zspan!(vec![zspan!(ExprType::String("a".to_owned()))])
+        });
+
+        assert_eq!(
+            env.translate_enum(&enum_expr).unwrap_err()[0].t.ty,
+            TypecheckErrType::TypeMismatch(Rc::new(Type::Int), Rc::new(Type::String))
         );
     }
 }
