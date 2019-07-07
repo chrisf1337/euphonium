@@ -692,20 +692,20 @@ impl From<Enum> for _Enum {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Closure {
-    pub params: Vec<Spanned<TypeField>>,
+    pub type_fields: Vec<Spanned<TypeField>>,
     pub body: Expr,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct _Closure {
-    pub params: Vec<_TypeField>,
+    pub type_fields: Vec<_TypeField>,
     pub body: _ExprType,
 }
 
 impl From<Closure> for _Closure {
     fn from(expr: Closure) -> Self {
         Self {
-            params: expr.params.into_iter().map(|param| param.t.into()).collect(),
+            type_fields: expr.type_fields.into_iter().map(|param| param.t.into()).collect(),
             body: expr.body.t.into(),
         }
     }

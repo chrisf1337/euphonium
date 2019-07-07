@@ -938,47 +938,45 @@ impl<'a> Env<'a> {
         }: &Spanned<FnCall>,
     ) -> Result<Rc<Type>> {
         if let Some(fn_type) = self.get_var(&id.t).map(|x| x.ty.clone()) {
-            match self.resolve_type(&fn_type, id.span)?.as_ref() {
-                Type::Fn(param_types, return_type) => {
-                    if args.len() != param_types.len() {
-                        return Err(vec![TypecheckErr::new_err(
-                            TypecheckErrType::ArityMismatch(param_types.len(), args.len()),
-                            *span,
-                        )]);
-                    }
-
-                    let mut errors = vec![];
-                    for (index, (arg, param_type)) in args.iter().zip(param_types.iter()).enumerate() {
-                        match self.translate_expr(arg) {
-                            Ok(ty) => {
-                                // param_type should already be well-defined because we have already
-                                // checked for invalid types
-                                if self.resolve_type(&ty, arg.span)? != self.resolve_type(param_type, zspan!()).unwrap()
-                                {
-                                    let mut err = TypecheckErr::new_err(
-                                        TypecheckErrType::TypeMismatch(param_type.clone(), ty.clone()),
-                                        arg.span,
-                                    );
-                                    if let Some(decl_spans) = self.get_fn_param_decl_spans(id) {
-                                        err.source = Some(Spanned::new("declared here".to_owned(), decl_spans[index]));
-                                    }
-                                    errors.push(err);
-                                }
-                            }
-                            Err(errs) => errors.extend(errs),
-                        }
-                    }
-
-                    if !errors.is_empty() {
-                        return Err(errors);
-                    }
-
-                    Ok(return_type.clone())
+            if let Type::Fn(param_types, return_type) = self.resolve_type(&fn_type, id.span)?.as_ref() {
+                if args.len() != param_types.len() {
+                    return Err(vec![TypecheckErr::new_err(
+                        TypecheckErrType::ArityMismatch(param_types.len(), args.len()),
+                        *span,
+                    )]);
                 }
-                _ => Err(vec![TypecheckErr::new_err(
+
+                let mut errors = vec![];
+                for (index, (arg, param_type)) in args.iter().zip(param_types.iter()).enumerate() {
+                    match self.translate_expr(arg) {
+                        Ok(ty) => {
+                            // param_type should already be well-defined because we have already
+                            // checked for invalid types
+                            if self.resolve_type(&ty, arg.span)? != self.resolve_type(param_type, zspan!()).unwrap() {
+                                let mut err = TypecheckErr::new_err(
+                                    TypecheckErrType::TypeMismatch(param_type.clone(), ty.clone()),
+                                    arg.span,
+                                );
+                                if let Some(decl_spans) = self.get_fn_param_decl_spans(id) {
+                                    err.source = Some(Spanned::new("declared here".to_owned(), decl_spans[index]));
+                                }
+                                errors.push(err);
+                            }
+                        }
+                        Err(errs) => errors.extend(errs),
+                    }
+                }
+
+                if !errors.is_empty() {
+                    return Err(errors);
+                }
+
+                Ok(return_type.clone())
+            } else {
+                Err(vec![TypecheckErr::new_err(
                     TypecheckErrType::NotAFn(id.t.clone()),
                     id.span,
-                )]),
+                )])
             }
         } else {
             Err(vec![TypecheckErr::new_err(
@@ -1122,7 +1120,10 @@ impl<'a> Env<'a> {
                         )]);
                     }
                 } else {
-                    return Err(vec![TypecheckErr::new_err(TypecheckErrType::UndefinedVar(var.clone()), assign.lval.span)])
+                    return Err(vec![TypecheckErr::new_err(
+                        TypecheckErrType::UndefinedVar(var.clone()),
+                        assign.lval.span,
+                    )]);
                 }
             }
             LVal::Field(lval, field) => {
@@ -1370,8 +1371,46 @@ impl<'a> Env<'a> {
         }
     }
 
-    fn translate_closure(&self, Spanned { t: expr, span }: &Spanned<Closure>) -> Result<Rc<Type>> {
-        unimplemented!()
+    fn translate_closure(&self, Spanned { t: expr, .. }: &Spanned<Closure>) -> Result<Rc<Type>> {
+        let mut child_env = self.new_child();
+        Self::check_for_duplicates(&expr.type_fields,
+            |type_field| &type_field.id.t,
+            |type_field, span| {
+                TypecheckErr::new_err(
+                    TypecheckErrType::DuplicateParam(type_field.id.t.clone()),
+                    type_field.span,
+                )
+                .with_source(Spanned::new(
+                    format!("{} was declared here", type_field.id.t.clone()),
+                    span,
+                ))
+            })?;
+
+        let mut param_types = vec![];
+        let mut errors = vec![];
+        for type_field in &expr.type_fields {
+            let ty = Rc::new(type_field.ty.t.clone().into());
+            match self.resolve_type(&ty, type_field.ty.span) {
+                Ok(_) => {
+                    param_types.push(ty.clone());
+                    child_env.insert_var(type_field.id.t.clone(), VarProperties {
+                        ty: ty,
+                        immutable: false,
+                    }, type_field.span);
+                }
+                Err(errs) => errors.extend(errs),
+            }
+        }
+
+        let return_type = child_env.translate_expr_mut(&expr.body)?;
+        if let Err(errs) = child_env.resolve_type(&return_type, expr.body.span) {
+            errors.extend(errs);
+        }
+
+        if !errors.is_empty() {
+            return Err(errors);
+        }
+        Ok(Rc::new(Type::Fn(param_types, return_type)))
     }
 }
 
@@ -1461,7 +1500,10 @@ mod tests {
         let env = Env::default();
         let lval = zspan!(LVal::Simple("a".to_owned()));
 
-        assert_eq!(env.translate_lval(&lval).unwrap_err()[0].t.ty, TypecheckErrType::UndefinedVar("a".to_owned()));
+        assert_eq!(
+            env.translate_lval(&lval).unwrap_err()[0].t.ty,
+            TypecheckErrType::UndefinedVar("a".to_owned())
+        );
     }
 
     #[test]
@@ -2151,6 +2193,21 @@ mod tests {
     }
 
     #[test]
+    fn test_translate_seq_captures_value() {
+        let mut env = Env::default();
+        env.insert_var("b".to_owned(), VarProperties {
+            ty: Rc::new(Type::String),
+            immutable: true,
+        }, zspan!());
+        let seq = zspan!(ExprType::Seq(
+            vec![zspan!(ExprType::LVal(Box::new(zspan!(LVal::Simple("b".to_owned())))))],
+            true
+        ));
+
+        assert_eq!(env.translate_expr(&seq), Ok(Rc::new(Type::String)));
+    }
+
+    #[test]
     fn test_illegal_let_expr() {
         let env = Env::default();
         let expr = zspan!(ExprType::Let(Box::new(zspan!(Let {
@@ -2708,5 +2765,54 @@ mod tests {
             env.translate_enum(&enum_expr).unwrap_err()[0].t.ty,
             TypecheckErrType::TypeMismatch(Rc::new(Type::Int), Rc::new(Type::String))
         );
+    }
+
+    #[test]
+    fn test_translate_closure() {
+        let env = Env::default();
+        let closure = zspan!(Closure {
+            type_fields: vec![zspan!(TypeField {
+                id: zspan!("a".to_owned()),
+                ty: zspan!(ast::Type::Type(zspan!("int".to_owned()))),
+            })],
+            body: zspan!(ExprType::LVal(Box::new(zspan!(LVal::Simple("a".to_owned())))))
+        });
+
+        assert_eq!(env.translate_closure(&closure), Ok(Rc::new(Type::Fn(vec![Rc::new(Type::Int)], Rc::new(Type::Int)))));
+    }
+
+    #[test]
+    fn test_translate_closure_captures_value() {
+        let mut env = Env::default();
+        env.insert_var("b".to_owned(), VarProperties {
+            ty: Rc::new(Type::String),
+            immutable: true
+        }, zspan!());
+        let closure = zspan!(Closure {
+            type_fields: vec![zspan!(TypeField {
+                id: zspan!("a".to_owned()),
+                ty: zspan!(ast::Type::Type(zspan!("int".to_owned()))),
+            })],
+            body: zspan!(ExprType::LVal(Box::new(zspan!(LVal::Simple("b".to_owned())))))
+        });
+
+        assert_eq!(env.translate_closure(&closure), Ok(Rc::new(Type::Fn(vec![Rc::new(Type::Int)], Rc::new(Type::String)))));
+    }
+
+    #[test]
+    fn test_translate_closure_duplicate_param() {
+        let env = Env::default();
+        let closure = zspan!(Closure {
+            type_fields: vec![zspan!(TypeField {
+                id: zspan!("a".to_owned()),
+                ty: zspan!(ast::Type::Type(zspan!("int".to_owned()))),
+            }), zspan!(TypeField {
+                id: zspan!("a".to_owned()),
+                ty: zspan!(ast::Type::Type(zspan!("string".to_owned()))),
+            })],
+            body: zspan!(ExprType::LVal(Box::new(zspan!(LVal::Simple("a".to_owned())))))
+        });
+
+        assert_eq!(env.translate_closure(&closure).unwrap_err()[0].t.ty, TypecheckErrType::DuplicateParam("a".to_owned()));
     }
 }

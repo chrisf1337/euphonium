@@ -143,11 +143,11 @@ mod tests {
                             end: _ExprType::Number(2)
                         })),
                         _ExprType::Closure(Box::new(_Closure {
-                            params: vec![],
+                            type_fields: vec![],
                             body: _ExprType::Seq(vec![_ExprType::Number(1)], true),
                         })),
                         _ExprType::Closure(Box::new(_Closure {
-                            params: vec![_TypeField {
+                            type_fields: vec![_TypeField {
                                 id: "a".to_owned(),
                                 ty: _Type::Type("int".to_owned())
                             }],

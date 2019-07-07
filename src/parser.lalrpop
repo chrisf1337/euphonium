@@ -386,18 +386,18 @@ Closure = Spanned<_Closure>;
 
 _Closure: ast::Closure = {
     "||" <body:ExprTypeOrLetOrAssign> => ast::Closure {
-        params: vec![],
+        type_fields: vec![],
         body,
     },
     "|" <type_fields:(<Spanned<TyField>> ",")+> "|" <body:ExprTypeOrLetOrAssign> => ast::Closure {
-        params: type_fields,
+        type_fields,
         body,
     },
     "|" <type_fields:(<Spanned<TyField>> ",")*> <last_type_field:Spanned<TyField>> "|" <body:ExprTypeOrLetOrAssign> => {
         let mut type_fields = type_fields;
         type_fields.push(last_type_field);
         ast::Closure {
-            params: type_fields,
+            type_fields,
             body,
         }
     },
