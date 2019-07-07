@@ -56,7 +56,8 @@ pub enum TypeDeclType {
     Enum(Vec<Spanned<EnumCase>>),
     /// { a: int, b: int }
     Record(Vec<Spanned<TypeField>>),
-    Array(Box<Spanned<Type>>, Spanned<usize>),
+    Array(Spanned<Type>, Spanned<usize>),
+    Fn(Vec<Spanned<Type>>, Spanned<Type>),
     Unit,
 }
 
@@ -66,7 +67,8 @@ pub enum _TypeDeclType {
     Enum(Vec<_EnumCase>),
     /// { a: int, b: int }
     Record(Vec<_TypeField>),
-    Array(Box<_Type>, usize),
+    Array(_Type, usize),
+    Fn(Vec<_Type>, _Type),
     Unit,
 }
 
@@ -78,7 +80,11 @@ impl From<TypeDeclType> for _TypeDeclType {
             TypeDeclType::Record(type_fields) => {
                 _TypeDeclType::Record(type_fields.into_iter().map(|tf| tf.t.into()).collect())
             }
-            TypeDeclType::Array(ty, len) => _TypeDeclType::Array(Box::new(ty.t.into()), len.t),
+            TypeDeclType::Array(ty, len) => _TypeDeclType::Array(ty.t.into(), len.t),
+            TypeDeclType::Fn(param_types, return_type) => _TypeDeclType::Fn(
+                param_types.into_iter().map(|param_type| param_type.t.into()).collect(),
+                return_type.t.into(),
+            ),
             TypeDeclType::Unit => _TypeDeclType::Unit,
         }
     }
@@ -90,6 +96,7 @@ impl From<TypeDeclType> for _TypeDeclType {
 pub enum Type {
     Type(Spanned<String>),
     Array(Box<Spanned<Type>>, Spanned<usize>),
+    Fn(Vec<Spanned<Type>>, Box<Spanned<Type>>),
     Unit,
 }
 
@@ -97,6 +104,7 @@ pub enum Type {
 pub enum _Type {
     Type(String),
     Array(Box<_Type>, usize),
+    Fn(Vec<_Type>, Box<_Type>),
     Unit,
 }
 
@@ -105,6 +113,10 @@ impl From<Type> for _Type {
         match ty {
             Type::Type(ty) => _Type::Type(ty.t),
             Type::Array(ty, len) => _Type::Array(Box::new(ty.t.into()), len.t),
+            Type::Fn(param_types, return_type) => _Type::Fn(
+                param_types.into_iter().map(|param_type| param_type.t.into()).collect(),
+                Box::new(return_type.t.into()),
+            ),
             Type::Unit => _Type::Unit,
         }
     }

@@ -36,7 +36,7 @@ mod tests {
                 }),
                 _DeclType::Type(_TypeDecl {
                     type_id: "b".to_owned(),
-                    ty: _TypeDeclType::Array(Box::new(_Type::Type("a".to_owned())), 3)
+                    ty: _TypeDeclType::Array(_Type::Type("a".to_owned()), 3)
                 }),
                 _DeclType::Type(_TypeDecl {
                     type_id: "Optionint".to_owned(),
@@ -50,7 +50,15 @@ mod tests {
                             params: vec![],
                         }
                     ])
-                })
+                }),
+                _DeclType::Type(_TypeDecl {
+                    type_id: "f".to_owned(),
+                    ty: _TypeDeclType::Fn(vec![_Type::Type("int".to_owned())], _Type::Unit),
+                }),
+                _DeclType::Type(_TypeDecl {
+                    type_id: "g".to_owned(),
+                    ty: _TypeDeclType::Fn(vec![], _Type::Type("int".to_owned())),
+                }),
             ])
         );
     }
@@ -146,13 +154,21 @@ mod tests {
                             type_fields: vec![],
                             body: _ExprType::Seq(vec![_ExprType::Number(1)], true),
                         })),
-                        _ExprType::Closure(Box::new(_Closure {
-                            type_fields: vec![_TypeField {
-                                id: "a".to_owned(),
-                                ty: _Type::Type("int".to_owned())
-                            }],
-                            body: _ExprType::LVal(Box::new(_LVal::Simple("a".to_owned()))),
-                        }))
+                        _ExprType::Let(Box::new(_Let {
+                            pattern: Pattern::String("f".to_owned()),
+                            immutable: true,
+                            ty: Some(_Type::Fn(
+                                vec![_Type::Type("int".to_owned())],
+                                Box::new(_Type::Type("int".to_owned()))
+                            )),
+                            expr: _ExprType::Closure(Box::new(_Closure {
+                                type_fields: vec![_TypeField {
+                                    id: "a".to_owned(),
+                                    ty: _Type::Type("int".to_owned())
+                                }],
+                                body: _ExprType::LVal(Box::new(_LVal::Simple("a".to_owned()))),
+                            }))
+                        })),
                     ],
                     false
                 )

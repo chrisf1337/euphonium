@@ -1,3 +1,5 @@
 type a = int;
 type b = [a; 3];
 type Optionint = Some(int) | None;
+type f = (int) -> ();
+type g = () -> int;

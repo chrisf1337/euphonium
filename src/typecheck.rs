@@ -163,6 +163,13 @@ impl Type {
                 Type::Record(type_decl.id.t.clone(), type_fields_hm)
             }
             TypeDeclType::Array(ty, len) => Type::Array(Rc::new(ty.t.into()), len.t),
+            TypeDeclType::Fn(param_types, return_type) => Type::Fn(
+                param_types
+                    .into_iter()
+                    .map(|param_type| Rc::new(param_type.t.into()))
+                    .collect(),
+                Rc::new(return_type.t.into()),
+            ),
             TypeDeclType::Unit => Type::Unit,
         }
     }
@@ -193,6 +200,13 @@ impl From<ast::Type> for Type {
                 }
             }
             ast::Type::Array(ty, len) => Type::Array(Rc::new(ty.t.into()), len.t),
+            ast::Type::Fn(param_types, return_type) => Type::Fn(
+                param_types
+                    .into_iter()
+                    .map(|param_type| Rc::new(param_type.t.into()))
+                    .collect(),
+                Rc::new(return_type.t.into()),
+            ),
             ast::Type::Unit => Type::Unit,
         }
     }
@@ -1373,7 +1387,8 @@ impl<'a> Env<'a> {
 
     fn translate_closure(&self, Spanned { t: expr, .. }: &Spanned<Closure>) -> Result<Rc<Type>> {
         let mut child_env = self.new_child();
-        Self::check_for_duplicates(&expr.type_fields,
+        Self::check_for_duplicates(
+            &expr.type_fields,
             |type_field| &type_field.id.t,
             |type_field, span| {
                 TypecheckErr::new_err(
@@ -1384,7 +1399,8 @@ impl<'a> Env<'a> {
                     format!("{} was declared here", type_field.id.t.clone()),
                     span,
                 ))
-            })?;
+            },
+        )?;
 
         let mut param_types = vec![];
         let mut errors = vec![];
@@ -1393,10 +1409,14 @@ impl<'a> Env<'a> {
             match self.resolve_type(&ty, type_field.ty.span) {
                 Ok(_) => {
                     param_types.push(ty.clone());
-                    child_env.insert_var(type_field.id.t.clone(), VarProperties {
-                        ty: ty,
-                        immutable: false,
-                    }, type_field.span);
+                    child_env.insert_var(
+                        type_field.id.t.clone(),
+                        VarProperties {
+                            ty: ty,
+                            immutable: false,
+                        },
+                        type_field.span,
+                    );
                 }
                 Err(errs) => errors.extend(errs),
             }
@@ -2195,10 +2215,14 @@ mod tests {
     #[test]
     fn test_translate_seq_captures_value() {
         let mut env = Env::default();
-        env.insert_var("b".to_owned(), VarProperties {
-            ty: Rc::new(Type::String),
-            immutable: true,
-        }, zspan!());
+        env.insert_var(
+            "b".to_owned(),
+            VarProperties {
+                ty: Rc::new(Type::String),
+                immutable: true,
+            },
+            zspan!(),
+        );
         let seq = zspan!(ExprType::Seq(
             vec![zspan!(ExprType::LVal(Box::new(zspan!(LVal::Simple("b".to_owned())))))],
             true
@@ -2778,16 +2802,23 @@ mod tests {
             body: zspan!(ExprType::LVal(Box::new(zspan!(LVal::Simple("a".to_owned())))))
         });
 
-        assert_eq!(env.translate_closure(&closure), Ok(Rc::new(Type::Fn(vec![Rc::new(Type::Int)], Rc::new(Type::Int)))));
+        assert_eq!(
+            env.translate_closure(&closure),
+            Ok(Rc::new(Type::Fn(vec![Rc::new(Type::Int)], Rc::new(Type::Int))))
+        );
     }
 
     #[test]
     fn test_translate_closure_captures_value() {
         let mut env = Env::default();
-        env.insert_var("b".to_owned(), VarProperties {
-            ty: Rc::new(Type::String),
-            immutable: true
-        }, zspan!());
+        env.insert_var(
+            "b".to_owned(),
+            VarProperties {
+                ty: Rc::new(Type::String),
+                immutable: true,
+            },
+            zspan!(),
+        );
         let closure = zspan!(Closure {
             type_fields: vec![zspan!(TypeField {
                 id: zspan!("a".to_owned()),
@@ -2796,23 +2827,32 @@ mod tests {
             body: zspan!(ExprType::LVal(Box::new(zspan!(LVal::Simple("b".to_owned())))))
         });
 
-        assert_eq!(env.translate_closure(&closure), Ok(Rc::new(Type::Fn(vec![Rc::new(Type::Int)], Rc::new(Type::String)))));
+        assert_eq!(
+            env.translate_closure(&closure),
+            Ok(Rc::new(Type::Fn(vec![Rc::new(Type::Int)], Rc::new(Type::String))))
+        );
     }
 
     #[test]
     fn test_translate_closure_duplicate_param() {
         let env = Env::default();
         let closure = zspan!(Closure {
-            type_fields: vec![zspan!(TypeField {
-                id: zspan!("a".to_owned()),
-                ty: zspan!(ast::Type::Type(zspan!("int".to_owned()))),
-            }), zspan!(TypeField {
-                id: zspan!("a".to_owned()),
-                ty: zspan!(ast::Type::Type(zspan!("string".to_owned()))),
-            })],
+            type_fields: vec![
+                zspan!(TypeField {
+                    id: zspan!("a".to_owned()),
+                    ty: zspan!(ast::Type::Type(zspan!("int".to_owned()))),
+                }),
+                zspan!(TypeField {
+                    id: zspan!("a".to_owned()),
+                    ty: zspan!(ast::Type::Type(zspan!("string".to_owned()))),
+                })
+            ],
             body: zspan!(ExprType::LVal(Box::new(zspan!(LVal::Simple("a".to_owned())))))
         });
 
-        assert_eq!(env.translate_closure(&closure).unwrap_err()[0].t.ty, TypecheckErrType::DuplicateParam("a".to_owned()));
+        assert_eq!(
+            env.translate_closure(&closure).unwrap_err()[0].t.ty,
+            TypecheckErrType::DuplicateParam("a".to_owned())
+        );
     }
 }

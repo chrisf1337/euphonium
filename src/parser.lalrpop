@@ -85,6 +85,13 @@ Ty: ast::Spanned<ast::Type> = {
     <l:@L> "[" <ty:Ty> ";" <len:Spanned<"number">> "]" <r:@R> =>
         ast::Spanned::new(ast::Type::Array(Box::new(ty), len), span!(l, r, offset)),
     <l:@L> "(" ")" <r:@R> => ast::Spanned::new(ast::Type::Unit, span!(l, r, offset)),
+    <l:@L> "(" <param_types:(<Ty> ",")*> ")" "->" <return_type:Ty> <r:@R> =>
+        ast::Spanned::new(ast::Type::Fn(param_types, Box::new(return_type)), span!(l, r, offset)),
+    <l:@L> "(" <param_types:(<Ty> ",")*> <last_param_type:Ty> ")" "->" <return_type:Ty> <r:@R> => {
+        let mut param_types = param_types;
+        param_types.push(last_param_type);
+        ast::Spanned::new(ast::Type::Fn(param_types, Box::new(return_type)), span!(l, r, offset))
+    }
 };
 
 TypeDeclType: ast::Spanned<ast::TypeDeclType> = {
@@ -109,8 +116,15 @@ TypeDeclType: ast::Spanned<ast::TypeDeclType> = {
         ast::Spanned::new(ast::TypeDeclType::Record(ty_fields), span!(l, r, offset))
     },
     <l:@L> "[" <ty:Ty> ";" <len:Spanned<"number">> "]" <r:@R> =>
-        ast::Spanned::new(ast::TypeDeclType::Array(Box::new(ty), len), span!(l, r, offset)),
+        ast::Spanned::new(ast::TypeDeclType::Array(ty, len), span!(l, r, offset)),
     <l:@L> "(" ")" <r:@R> => ast::Spanned::new(ast::TypeDeclType::Unit, span!(l, r, offset)),
+    <l:@L> "(" <param_types:(<Ty> ",")*> ")" "->" <return_type:Ty> <r:@R> =>
+        ast::Spanned::new(ast::TypeDeclType::Fn(param_types, return_type), span!(l, r, offset)),
+    <l:@L> "(" <param_types:(<Ty> ",")*> <last_param_type:Ty> ")" "->" <return_type:Ty> <r:@R> => {
+        let mut param_types = param_types;
+        param_types.push(last_param_type);
+        ast::Spanned::new(ast::TypeDeclType::Fn(param_types, return_type), span!(l, r, offset))
+    }
 };
 
 TyField: ast::TypeField = {
