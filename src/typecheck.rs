@@ -1,6 +1,6 @@
 use crate::ast::{
     self, ArithOp, Array, Assign, Decl, DeclType, Expr, ExprType, FieldAssign, FnCall, FnDecl, For, If, LVal, Let,
-    Pattern, Range, Record, Spanned, TypeDecl, TypeDeclType,
+    Pattern, Range, Record, Spanned, TypeDecl, TypeDeclType, While,
 };
 use codespan::{ByteIndex, ByteSpan};
 use codespan_reporting::{Diagnostic, Label};
@@ -772,6 +772,7 @@ impl<'a> Env<'a> {
             ExprType::If(if_expr) => self.translate_if(if_expr),
             ExprType::Range(range) => self.translate_range(range),
             ExprType::For(for_expr) => self.translate_for(for_expr),
+            ExprType::While(while_expr) => self.translate_while(while_expr),
             _ => unimplemented!(),
         }
     }
@@ -1224,6 +1225,12 @@ impl<'a> Env<'a> {
             expr.index.span,
         );
         assert_ty!(child_env, &expr.body, Rc::new(Type::Unit))?;
+        Ok(Rc::new(Type::Unit))
+    }
+
+    fn translate_while(&self, Spanned { t: expr, .. }: &Spanned<While>) -> Result<Rc<Type>> {
+        assert_ty!(self, &expr.cond, Rc::new(Type::Bool))?;
+        assert_ty!(self, &expr.body, Rc::new(Type::Unit))?;
         Ok(Rc::new(Type::Unit))
     }
 }
@@ -2417,6 +2424,44 @@ mod tests {
 
         assert_eq!(
             env.translate_for(&for_expr).unwrap_err()[0].t.ty,
+            TypecheckErrType::TypeMismatch(Rc::new(Type::Unit), Rc::new(Type::Int))
+        );
+    }
+
+    #[test]
+    fn test_translate_while() {
+        let env = Env::default();
+        let while_expr = zspan!(While {
+            cond: zspan!(ExprType::BoolLiteral(true)),
+            body: zspan!(ExprType::Seq(vec![zspan!(ExprType::Unit)], false))
+        });
+
+        assert_eq!(env.translate_while(&while_expr), Ok(Rc::new(Type::Unit)));
+    }
+
+    #[test]
+    fn test_translate_while_cond_type_mismatch() {
+        let env = Env::default();
+        let while_expr = zspan!(While {
+            cond: zspan!(ExprType::Number(0)),
+            body: zspan!(ExprType::Seq(vec![zspan!(ExprType::Unit)], false))
+        });
+        assert_eq!(
+            env.translate_while(&while_expr).unwrap_err()[0].t.ty,
+            TypecheckErrType::TypeMismatch(Rc::new(Type::Bool), Rc::new(Type::Int))
+        );
+    }
+
+    #[test]
+    fn test_translate_while_body_type_mismatch() {
+        let env = Env::default();
+        let while_expr = zspan!(While {
+            cond: zspan!(ExprType::BoolLiteral(true)),
+            body: zspan!(ExprType::Seq(vec![zspan!(ExprType::Number(0))], true))
+        });
+
+        assert_eq!(
+            env.translate_while(&while_expr).unwrap_err()[0].t.ty,
             TypecheckErrType::TypeMismatch(Rc::new(Type::Unit), Rc::new(Type::Int))
         );
     }
