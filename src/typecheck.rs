@@ -1,6 +1,6 @@
 use crate::ast::{
-    self, ArithOp, Array, Assign, Decl, DeclType, Expr, ExprType, FieldAssign, FnCall, FnDecl, For, If, LVal, Let,
-    Pattern, Range, Record, Spanned, TypeDecl, TypeDeclType, While,
+    self, Arith, ArithOp, Array, Assign, Bool, Compare, Decl, DeclType, Expr, ExprType, FieldAssign, FnCall, FnDecl,
+    For, If, LVal, Let, Pattern, Range, Record, Spanned, TypeDecl, TypeDeclType, While,
 };
 use codespan::{ByteIndex, ByteSpan};
 use codespan_reporting::{Diagnostic, Label};
@@ -750,19 +750,11 @@ impl<'a> Env<'a> {
             ExprType::String(_) => Ok(Rc::new(Type::String)),
             ExprType::Number(_) => Ok(Rc::new(Type::Int)),
             ExprType::Neg(expr) => assert_ty!(self, expr, Rc::new(Type::Int)),
-            ExprType::Arith(arith) => {
-                assert_ty!(self, &arith.l, Rc::new(Type::Int))?;
-                assert_ty!(self, &arith.r, Rc::new(Type::Int))?;
-                Ok(Rc::new(Type::Int))
-            }
+            ExprType::Arith(arith) => self.translate_arith(arith),
             ExprType::Unit | ExprType::Continue | ExprType::Break => Ok(Rc::new(Type::Unit)),
             ExprType::BoolLiteral(_) => Ok(Rc::new(Type::Bool)),
             ExprType::Not(expr) => assert_ty!(self, expr, Rc::new(Type::Bool)),
-            ExprType::Bool(bool_expr) => {
-                assert_ty!(self, &bool_expr.l, Rc::new(Type::Bool))?;
-                assert_ty!(self, &bool_expr.r, Rc::new(Type::Bool))?;
-                Ok(Rc::new(Type::Bool))
-            }
+            ExprType::Bool(bool_expr) => self.translate_bool(bool_expr),
             ExprType::LVal(lval) => Ok(self.translate_lval(lval)?.ty),
             ExprType::Let(_) => Err(vec![TypecheckErr::new_err(TypecheckErrType::IllegalLetExpr, expr.span)]),
             ExprType::FnCall(fn_call) => self.translate_fn_call(fn_call),
@@ -773,6 +765,7 @@ impl<'a> Env<'a> {
             ExprType::Range(range) => self.translate_range(range),
             ExprType::For(for_expr) => self.translate_for(for_expr),
             ExprType::While(while_expr) => self.translate_while(while_expr),
+            ExprType::Compare(compare) => self.translate_compare(compare),
             _ => unimplemented!(),
         }
     }
@@ -1233,12 +1226,30 @@ impl<'a> Env<'a> {
         assert_ty!(self, &expr.body, Rc::new(Type::Unit))?;
         Ok(Rc::new(Type::Unit))
     }
+
+    fn translate_arith(&self, Spanned { t: expr, .. }: &Spanned<Arith>) -> Result<Rc<Type>> {
+        assert_ty!(self, &expr.l, Rc::new(Type::Int))?;
+        assert_ty!(self, &expr.r, Rc::new(Type::Int))?;
+        Ok(Rc::new(Type::Int))
+    }
+
+    fn translate_bool(&self, Spanned { t: expr, .. }: &Spanned<Bool>) -> Result<Rc<Type>> {
+        assert_ty!(self, &expr.l, Rc::new(Type::Bool))?;
+        assert_ty!(self, &expr.r, Rc::new(Type::Bool))?;
+        Ok(Rc::new(Type::Bool))
+    }
+
+    fn translate_compare(&self, Spanned { t: expr, .. }: &Spanned<Compare>) -> Result<Rc<Type>> {
+        assert_ty!(self, &expr.l, Rc::new(Type::Bool))?;
+        assert_ty!(self, &expr.r, Rc::new(Type::Bool))?;
+        Ok(Rc::new(Type::Bool))
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::{self, Arith, Bool, BoolOp, TypeField};
+    use crate::ast::{self, BoolOp, CompareOp, TypeField};
     use codespan::ByteOffset;
     use maplit::hashmap;
     use pretty_assertions::assert_eq;
@@ -2463,6 +2474,33 @@ mod tests {
         assert_eq!(
             env.translate_while(&while_expr).unwrap_err()[0].t.ty,
             TypecheckErrType::TypeMismatch(Rc::new(Type::Unit), Rc::new(Type::Int))
+        );
+    }
+
+    #[test]
+    fn test_translate_compare() {
+        let env = Env::default();
+        let compare = zspan!(Compare {
+            l: zspan!(ExprType::BoolLiteral(true)),
+            op: zspan!(CompareOp::Equal),
+            r: zspan!(ExprType::BoolLiteral(true)),
+        });
+
+        assert_eq!(env.translate_compare(&compare), Ok(Rc::new(Type::Bool)));
+    }
+
+    #[test]
+    fn test_translate_compare_type_mismatch() {
+        let env = Env::default();
+        let compare = zspan!(Compare {
+            l: zspan!(ExprType::Number(0)),
+            op: zspan!(CompareOp::Equal),
+            r: zspan!(ExprType::BoolLiteral(true)),
+        });
+
+        assert_eq!(
+            env.translate_compare(&compare).unwrap_err()[0].t.ty,
+            TypecheckErrType::TypeMismatch(Rc::new(Type::Bool), Rc::new(Type::Int))
         );
     }
 }
