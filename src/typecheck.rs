@@ -1,6 +1,6 @@
 use crate::ast::{
-    self, Arith, ArithOp, Array, Assign, Bool, Compare, Decl, DeclType, Enum, Expr, ExprType, FieldAssign, FnCall,
-    FnDecl, For, If, LVal, Let, Pattern, Range, Record, Spanned, TypeDecl, TypeDeclType, While, Closure
+    self, Arith, ArithOp, Array, Assign, Bool, Closure, Compare, Decl, DeclType, Enum, Expr, ExprType, FieldAssign,
+    FnCall, FnDecl, For, If, LVal, Let, Pattern, Range, Record, Spanned, TypeDecl, TypeDeclType, While,
 };
 use codespan::{ByteIndex, ByteSpan};
 use codespan_reporting::{Diagnostic, Label};
@@ -1121,6 +1121,8 @@ impl<'a> Env<'a> {
                             *span,
                         )]);
                     }
+                } else {
+                    return Err(vec![TypecheckErr::new_err(TypecheckErrType::UndefinedVar(var.clone()), assign.lval.span)])
                 }
             }
             LVal::Field(lval, field) => {
@@ -1452,6 +1454,14 @@ mod tests {
                 span!(0, 0, ByteOffset(0))
             )])
         );
+    }
+
+    #[test]
+    fn test_translate_lval_undefined_var() {
+        let env = Env::default();
+        let lval = zspan!(LVal::Simple("a".to_owned()));
+
+        assert_eq!(env.translate_lval(&lval).unwrap_err()[0].t.ty, TypecheckErrType::UndefinedVar("a".to_owned()));
     }
 
     #[test]

@@ -706,7 +706,7 @@ impl From<Closure> for _Closure {
     fn from(expr: Closure) -> Self {
         Self {
             params: expr.params.into_iter().map(|param| param.t.into()).collect(),
-            body: expr.body.t.into()
+            body: expr.body.t.into(),
         }
     }
 }

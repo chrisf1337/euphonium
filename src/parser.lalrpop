@@ -166,13 +166,13 @@ DeclType: ast::DeclType = {
     },
 };
 
-ClosureOrExpr: ast::Expr = {
+Expr: ast::Expr = {
     Spanned<Closure> => <>.map(|e| ast::ExprType::Closure(Box::new(e))),
     ExprTypeOrLetOrAssign,
 };
 
 ExprTypeOrLetOrAssign: ast::Expr = {
-    Expr,
+    RangeExpr,
     Spanned<_Let> => {
         let span = <>.span;
         <>.map(|l| ast::ExprType::Let(Box::new(ast::Spanned::new(l, span))))
@@ -180,7 +180,7 @@ ExprTypeOrLetOrAssign: ast::Expr = {
     <l:@L> <expr:Assign> <r:@R> => ast::Expr::new(ast::ExprType::Assign(Box::new(expr)), span!(l, r, offset)),
 }
 
-Expr: ast::Expr = {
+RangeExpr: ast::Expr = {
     <l:CompareExpr> ".." <r:CompareExpr> => {
         let span = l.span.to(r.span);
         ast::Expr::new(ast::ExprType::Range(Box::new(ast::Spanned::new(
@@ -228,7 +228,7 @@ OpExpr: ast::Expr = {
 
 ExprTypeSeq: ast::ExprType = {
     "{" <l:@L> <r:@R> "}" => ast::ExprType::Seq(vec![ast::Expr::new(ast::ExprType::Unit, span!(l, r, offset))], true),
-    "{" <exprs:(<ClosureOrExpr> ";")*> <last:ClosureOrExpr> <last_semi:";"?> "}" => {
+    "{" <exprs:(<Expr> ";")*> <last:Expr> <last_semi:";"?> "}" => {
         let mut exprs = exprs;
         exprs.push(last);
         ast::ExprType::Seq(exprs, last_semi.is_none())
