@@ -266,6 +266,7 @@ pub enum ExprType {
     Compare(Box<Spanned<Compare>>),
     Enum(Box<Spanned<Enum>>),
     Closure(Box<Spanned<Closure>>),
+    FnDecl(Box<Spanned<FnDecl>>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -294,6 +295,7 @@ pub enum _ExprType {
     Compare(Box<_Compare>),
     Enum(Box<_Enum>),
     Closure(Box<_Closure>),
+    FnDecl(Box<_FnDecl>),
 }
 
 impl From<ExprType> for _ExprType {
@@ -325,6 +327,7 @@ impl From<ExprType> for _ExprType {
             ExprType::Compare(expr) => _ExprType::Compare(Box::new(expr.t.into())),
             ExprType::Enum(expr) => _ExprType::Enum(Box::new(expr.t.into())),
             ExprType::Closure(expr) => _ExprType::Closure(Box::new(expr.t.into())),
+            ExprType::FnDecl(expr) => _ExprType::FnDecl(Box::new(expr.t.into())),
         }
     }
 }

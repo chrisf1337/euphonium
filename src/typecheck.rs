@@ -8,6 +8,7 @@ use std::{
     collections::{HashMap, HashSet},
     hash::Hash,
     rc::Rc,
+    str::FromStr,
 };
 
 pub type Result<T> = std::result::Result<T, Vec<TypecheckErr>>;
@@ -35,6 +36,7 @@ pub enum TypecheckErrType {
     MissingFields(Vec<String>),
     InvalidFields(Vec<String>),
     IllegalLetExpr,
+    IllegalFnDeclExpr,
     DuplicateFn(String),
     DuplicateType(String),
     DuplicateField(String),
@@ -73,6 +75,7 @@ impl TypecheckErrType {
             MissingFields(fields) => format!("missing fields: {}", fields.join(", ")),
             InvalidFields(fields) => format!("invalid fields: {}", fields.join(", ")),
             IllegalLetExpr => "a let expression cannot be used here".to_owned(),
+            IllegalFnDeclExpr => "a function cannot be declared here".to_owned(),
             DuplicateFn(fun) => format!("duplicate function declaration for {}", fun),
             DuplicateType(ty) => format!("duplicate type declaration for {}", ty),
             DuplicateField(field) => format!("duplicate record field declaration for {}", field),
@@ -139,21 +142,10 @@ impl Type {
 
     fn from_type_decl(type_decl: TypeDecl) -> Self {
         match type_decl.ty.t {
-            TypeDeclType::Type(ty) => {
-                if ty.t == "int" {
-                    Type::Int
-                } else if ty.t == "string" {
-                    Type::String
-                } else {
-                    Type::Alias(ty.t)
-                }
-            }
+            TypeDeclType::Type(ty) => Type::from_str(&ty.t).unwrap(),
             TypeDeclType::Enum(cases) => Type::Enum(
                 type_decl.id.t.clone(),
-                cases
-                    .into_iter()
-                    .map(|c| (c.t.id.t.clone().into(), c.t.into()))
-                    .collect(),
+                cases.into_iter().map(|c| (c.t.id.t.clone(), c.t.into())).collect(),
             ),
             TypeDeclType::Record(type_fields) => {
                 let mut type_fields_hm = HashMap::new();
@@ -175,6 +167,19 @@ impl Type {
     }
 }
 
+impl FromStr for Type {
+    type Err = ();
+
+    fn from_str(s: &str) -> std::result::Result<Self, ()> {
+        match s {
+            "int" => Ok(Type::Int),
+            "string" => Ok(Type::String),
+            "bool" => Ok(Type::Bool),
+            _ => Ok(Type::Alias(s.to_owned())),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EnumCase {
     pub id: String,
@@ -190,15 +195,7 @@ pub struct TypeField {
 impl From<ast::Type> for Type {
     fn from(ty: ast::Type) -> Self {
         match ty {
-            ast::Type::Type(ty) => {
-                if ty.t == "int" {
-                    Type::Int
-                } else if ty.t == "string" {
-                    Type::String
-                } else {
-                    Type::Alias(ty.t)
-                }
-            }
+            ast::Type::Type(ty) => Type::from_str(&ty.t).unwrap(),
             ast::Type::Array(ty, len) => Type::Array(Rc::new(ty.t.into()), len.t),
             ast::Type::Fn(param_types, return_type) => Type::Fn(
                 param_types
@@ -632,7 +629,10 @@ impl<'a> Env<'a> {
 
     pub fn translate_decl_first_pass(&mut self, decl: &Decl) -> Result<()> {
         match &decl.t {
-            DeclType::Fn(fn_decl) => self.translate_fn_decl_sig(fn_decl),
+            DeclType::Fn(fn_decl) => {
+                self.translate_fn_decl_sig(fn_decl)?;
+                Ok(())
+            }
             DeclType::Type(type_decl) => {
                 self.translate_type_decl(type_decl)?;
                 self.check_for_type_decl_cycles(&type_decl.id, vec![])
@@ -641,7 +641,7 @@ impl<'a> Env<'a> {
         }
     }
 
-    fn translate_fn_decl_sig(&mut self, fn_decl: &Spanned<FnDecl>) -> Result<()> {
+    fn translate_fn_decl_sig(&mut self, fn_decl: &Spanned<FnDecl>) -> Result<Rc<Type>> {
         // Check if there already exists another function with the same name
         if self.vars.contains_key(&fn_decl.id.t) {
             let span = self.get_var_def_span(&fn_decl.id.t).unwrap();
@@ -685,15 +685,16 @@ impl<'a> Env<'a> {
             Type::Unit
         };
 
+        let ty = Rc::new(Type::Fn(param_types, Rc::new(return_type)));
         self.insert_var(
             fn_decl.id.t.clone(),
             VarProperties {
-                ty: Rc::new(Type::Fn(param_types, Rc::new(return_type))),
+                ty: ty.clone(),
                 immutable: true,
             },
             fn_decl.span,
         );
-        Ok(())
+        Ok(ty)
     }
 
     /// Creates a child env to typecheck the function body.
@@ -718,7 +719,7 @@ impl<'a> Env<'a> {
                 );
             }
 
-            let body_type = new_env.translate_expr_mut(&fn_decl.body)?;
+            let body_type = new_env.translate_expr(&fn_decl.body)?;
             if self.resolve_type(&body_type, fn_decl.body.span)?
                 != self.resolve_type(
                     &return_type,
@@ -786,7 +787,7 @@ impl<'a> Env<'a> {
                 let decl_spans = self
                     .enum_case_param_decl_spans
                     .entry(decl.id.t.clone())
-                    .or_insert(HashMap::new());
+                    .or_insert_with(HashMap::new);
                 for case in cases {
                     decl_spans.insert(case.id.t.clone(), case.params.iter().map(|param| param.span).collect());
                 }
@@ -801,18 +802,46 @@ impl<'a> Env<'a> {
     fn translate_expr(&self, expr: &Expr) -> Result<Rc<Type>> {
         match &expr.t {
             ExprType::Seq(exprs, returns) => {
-                // New scope
-                let mut new_env = self.new_child();
-                for expr in &exprs[..exprs.len() - 1] {
-                    let _ = new_env.translate_expr_mut(expr)?;
+                let (mut new_env, return_type) = {
+                    // New scope
+                    let mut new_env = self.new_child();
+                    for expr in &exprs[..exprs.len() - 1] {
+                        let _ = new_env.translate_expr_mut(expr)?;
+                    }
+                    let last_expr = exprs.last().unwrap();
+                    let return_type = if *returns {
+                        new_env.translate_expr_mut(last_expr)?
+                    } else {
+                        let _ = new_env.translate_expr_mut(last_expr)?;
+                        Rc::new(Type::Unit)
+                    };
+
+                    // Remove all non-fn decl exprs so that in the second pass they'll already be
+                    // defined.
+                    let mut fn_decls: HashMap<String, VarProperties> = HashMap::new();
+                    for (id, var) in &new_env.vars {
+                        if let Type::Fn(..) = var.ty.as_ref() {
+                            fn_decls.insert(id.clone(), var.clone());
+                        }
+                    }
+
+                    new_env.vars = fn_decls;
+                    (new_env, return_type)
+                };
+
+                // The only possible place where inline fn decl exprs can be is inside seq exprs
+                // since that's the only place where translate_expr_mut() is called. We need to
+                // translate all the expressions again in order to make sure that variables are
+                // defined before they get captured.
+                for expr in exprs {
+                    if let ExprType::FnDecl(fn_decl) = &expr.t {
+                        new_env.translate_fn_decl_body(fn_decl)?;
+                    } else {
+                        new_env.translate_expr_mut(expr)?;
+                    }
                 }
-                let last_expr = exprs.last().unwrap();
-                if *returns {
-                    Ok(new_env.translate_expr_mut(last_expr)?)
-                } else {
-                    let _ = new_env.translate_expr_mut(last_expr)?;
-                    Ok(Rc::new(Type::Unit))
-                }
+
+                Ok(return_type)
             }
             ExprType::String(_) => Ok(Rc::new(Type::String)),
             ExprType::Number(_) => Ok(Rc::new(Type::Int)),
@@ -835,12 +864,17 @@ impl<'a> Env<'a> {
             ExprType::Compare(compare) => self.translate_compare(compare),
             ExprType::Enum(enum_expr) => self.translate_enum(enum_expr),
             ExprType::Closure(closure) => self.translate_closure(closure),
+            ExprType::FnDecl(_) => Err(vec![TypecheckErr::new_err(
+                TypecheckErrType::IllegalFnDeclExpr,
+                expr.span,
+            )]),
         }
     }
 
     fn translate_expr_mut(&mut self, expr: &Expr) -> Result<Rc<Type>> {
         match &expr.t {
             ExprType::Let(let_expr) => self.translate_let(let_expr),
+            ExprType::FnDecl(fn_decl) => self.translate_fn_decl_expr(fn_decl),
             _ => self.translate_expr(expr),
         }
     }
@@ -912,7 +946,7 @@ impl<'a> Env<'a> {
             immutable,
             expr,
         } = &let_expr.t;
-        let expr_type = self.translate_expr_mut(expr)?;
+        let expr_type = self.translate_expr(expr)?;
         if let Some(ast_ty) = ast_ty {
             // Type annotation
             let ty = Rc::new(ast_ty.t.clone().into());
@@ -1318,10 +1352,17 @@ impl<'a> Env<'a> {
         Ok(Rc::new(Type::Bool))
     }
 
-    fn translate_compare(&self, Spanned { t: expr, .. }: &Spanned<Compare>) -> Result<Rc<Type>> {
-        assert_ty!(self, &expr.l, Rc::new(Type::Bool))?;
-        assert_ty!(self, &expr.r, Rc::new(Type::Bool))?;
-        Ok(Rc::new(Type::Bool))
+    fn translate_compare(&self, Spanned { t: expr, span }: &Spanned<Compare>) -> Result<Rc<Type>> {
+        let left_type = self.resolve_type(&self.translate_expr(&expr.l)?, expr.l.span)?;
+        let right_type = self.resolve_type(&self.translate_expr(&expr.r)?, expr.r.span)?;
+        if left_type != right_type {
+            Err(vec![TypecheckErr::new_err(
+                TypecheckErrType::TypeMismatch(left_type.clone(), right_type.clone()),
+                *span,
+            )])
+        } else {
+            Ok(Rc::new(Type::Bool))
+        }
     }
 
     fn translate_enum(&self, Spanned { t: expr, .. }: &Spanned<Enum>) -> Result<Rc<Type>> {
@@ -1411,10 +1452,7 @@ impl<'a> Env<'a> {
                     param_types.push(ty.clone());
                     child_env.insert_var(
                         type_field.id.t.clone(),
-                        VarProperties {
-                            ty: ty,
-                            immutable: false,
-                        },
+                        VarProperties { ty, immutable: false },
                         type_field.span,
                     );
                 }
@@ -1422,7 +1460,7 @@ impl<'a> Env<'a> {
             }
         }
 
-        let return_type = child_env.translate_expr_mut(&expr.body)?;
+        let return_type = child_env.translate_expr(&expr.body)?;
         if let Err(errs) = child_env.resolve_type(&return_type, expr.body.span) {
             errors.extend(errs);
         }
@@ -1431,6 +1469,34 @@ impl<'a> Env<'a> {
             return Err(errors);
         }
         Ok(Rc::new(Type::Fn(param_types, return_type)))
+    }
+
+    fn translate_fn_decl_expr(&mut self, fn_decl: &Spanned<FnDecl>) -> Result<Rc<Type>> {
+        // At this point, we have already typechecked all type decls, so we can validate the param
+        // and return types.
+        if let Type::Fn(param_types, return_type) = self.translate_fn_decl_sig(fn_decl)?.as_ref() {
+            let mut errors = vec![];
+            for (param_index, param_type) in param_types.iter().enumerate() {
+                if let Err(errs) = self.validate_type(param_type, fn_decl.type_fields[param_index].span) {
+                    errors.extend(errs);
+                }
+                if let Some(return_type_decl) = &fn_decl.return_type {
+                    if let Err(errs) = self.validate_type(return_type, return_type_decl.span) {
+                        errors.extend(errs);
+                    }
+                }
+            }
+
+            // Defer typechecking function body until all function declaration signatures have been
+            // typechecked. This allows for mutually recursive functions.
+            if !errors.is_empty() {
+                Err(errors)
+            } else {
+                Ok(Rc::new(Type::Unit))
+            }
+        } else {
+            unreachable!("expected function type");
+        }
     }
 }
 
@@ -2729,7 +2795,7 @@ mod tests {
 
         assert_eq!(
             env.translate_compare(&compare).unwrap_err()[0].t.ty,
-            TypecheckErrType::TypeMismatch(Rc::new(Type::Bool), Rc::new(Type::Int))
+            TypecheckErrType::TypeMismatch(Rc::new(Type::Int), Rc::new(Type::Bool))
         );
     }
 
@@ -2853,6 +2919,74 @@ mod tests {
         assert_eq!(
             env.translate_closure(&closure).unwrap_err()[0].t.ty,
             TypecheckErrType::DuplicateParam("a".to_owned())
+        );
+    }
+
+    #[test]
+    fn test_translate_fn_decl_exprs_in_seq_recursive() {
+        let env = Env::default();
+        let fn_decl1 = zspan!(ExprType::FnDecl(Box::new(zspan!(FnDecl {
+            id: zspan!("f".to_owned()),
+            type_fields: vec![zspan!(TypeField {
+                id: zspan!("a".to_owned()),
+                ty: zspan!(ast::Type::Type(zspan!("int".to_owned())))
+            })],
+            return_type: None,
+            body: zspan!(ExprType::FnCall(Box::new(zspan!(FnCall {
+                id: zspan!("g".to_owned()),
+                args: vec![zspan!(ExprType::LVal(Box::new(zspan!(LVal::Simple("a".to_owned())))))]
+            }))))
+        }))));
+        let let_expr = zspan!(ExprType::Let(Box::new(zspan!(Let {
+            pattern: zspan!(Pattern::String("h".to_owned())),
+            immutable: zspan!(true),
+            ty: None,
+            expr: zspan!(ExprType::Number(0)),
+        }))));
+        let fn_decl2 = zspan!(ExprType::FnDecl(Box::new(zspan!(FnDecl {
+            id: zspan!("g".to_owned()),
+            type_fields: vec![zspan!(TypeField {
+                id: zspan!("a".to_owned()),
+                ty: zspan!(ast::Type::Type(zspan!("int".to_owned())))
+            })],
+            return_type: None,
+            body: zspan!(ExprType::FnCall(Box::new(zspan!(FnCall {
+                id: zspan!("f".to_owned()),
+                args: vec![zspan!(ExprType::LVal(Box::new(zspan!(LVal::Simple("h".to_owned())))))]
+            }))))
+        }))));
+
+        assert_eq!(
+            env.translate_expr(&zspan!(ExprType::Seq(vec![fn_decl1, let_expr, fn_decl2], false))),
+            Ok(Rc::new(Type::Unit))
+        );
+    }
+
+    #[test]
+    fn test_translate_fn_decl_exprs_in_seq_captures_correctly() {
+        let env = Env::default();
+        let fn_decl1 = zspan!(ExprType::FnDecl(Box::new(zspan!(FnDecl {
+            id: zspan!("f".to_owned()),
+            type_fields: vec![zspan!(TypeField {
+                id: zspan!("a".to_owned()),
+                ty: zspan!(ast::Type::Type(zspan!("int".to_owned())))
+            })],
+            return_type: None,
+            body: zspan!(ExprType::LVal(Box::new(zspan!(LVal::Simple("h".to_owned())))))
+        }))));
+        let let_expr = zspan!(ExprType::Let(Box::new(zspan!(Let {
+            pattern: zspan!(Pattern::String("h".to_owned())),
+            immutable: zspan!(true),
+            ty: None,
+            expr: zspan!(ExprType::Number(0)),
+        }))));
+
+        assert_eq!(
+            env.translate_expr(&zspan!(ExprType::Seq(vec![fn_decl1, let_expr], false)))
+                .unwrap_err()[0]
+                .t
+                .ty,
+            TypecheckErrType::UndefinedVar("h".to_owned())
         );
     }
 }

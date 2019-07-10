@@ -169,6 +169,12 @@ mod tests {
                                 body: _ExprType::LVal(Box::new(_LVal::Simple("a".to_owned()))),
                             }))
                         })),
+                        _ExprType::FnDecl(Box::new(_FnDecl {
+                            id: "f".to_owned(),
+                            type_fields: vec![],
+                            return_type: None,
+                            body: _ExprType::Number(1),
+                        }))
                     ],
                     false
                 )

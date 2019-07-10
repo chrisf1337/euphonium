@@ -169,6 +169,21 @@ FnDecl: ast::FnDecl = {
     }
 };
 
+FnDeclExpr = Spanned<_FnDeclExpr>;
+
+_FnDeclExpr: ast::FnDecl = {
+    "fn" <id:Spanned<"identifier">> "(" <type_fields:(<Spanned<TyField>> ",")*> ")"
+        <return_type:("->" <Ty>)?> "=" <body:Expr> => {
+        ast::FnDecl { id, type_fields, return_type, body }
+    },
+    "fn" <id:Spanned<"identifier">> "(" <type_fields:(<Spanned<TyField>> ",")*> <last:Spanned<TyField>> ")"
+        <return_type:("->" <Ty>)?> "=" <body:Expr> => {
+        let mut type_fields = type_fields;
+        type_fields.push(last);
+        ast::FnDecl { id, type_fields, return_type, body }
+    }
+};
+
 Decl: ast::Decl = Spanned<DeclType>;
 
 DeclType: ast::DeclType = {
@@ -182,11 +197,12 @@ DeclType: ast::DeclType = {
 
 Expr: ast::Expr = {
     Spanned<Closure> => <>.map(|e| ast::ExprType::Closure(Box::new(e))),
+    Spanned<FnDeclExpr> => <>.map(|e| ast::ExprType::FnDecl(Box::new(e))),
     ExprTypeOrLetOrAssign,
 };
 
 ExprTypeOrLetOrAssign: ast::Expr = {
-    RangeExpr,
+    CompareExpr,
     Spanned<_Let> => {
         let span = <>.span;
         <>.map(|l| ast::ExprType::Let(Box::new(ast::Spanned::new(l, span))))
@@ -194,8 +210,18 @@ ExprTypeOrLetOrAssign: ast::Expr = {
     <l:@L> <expr:Assign> <r:@R> => ast::Expr::new(ast::ExprType::Assign(Box::new(expr)), span!(l, r, offset)),
 }
 
+CompareExpr: ast::Expr = {
+    <l:CompareExpr> <op: Spanned<"==">> <r:RangeExpr> => {
+        let span = l.span.to(r.span);
+        let op = op.map(|_| ast::CompareOp::Equal);
+        ast::Expr::new(ast::ExprType::Compare(Box::new(ast::Spanned::new(ast::Compare { l, op, r }, span))),
+            span)
+    },
+    RangeExpr,
+};
+
 RangeExpr: ast::Expr = {
-    <l:CompareExpr> ".." <r:CompareExpr> => {
+    <l:OpExpr> ".." <r:OpExpr> => {
         let span = l.span.to(r.span);
         ast::Expr::new(ast::ExprType::Range(Box::new(ast::Spanned::new(
             ast::Range {
@@ -204,16 +230,6 @@ RangeExpr: ast::Expr = {
             },
             span))),
         span)
-    },
-    CompareExpr,
-};
-
-CompareExpr: ast::Expr = {
-    <l:CompareExpr> <op: Spanned<"==">> <r:OpExpr> => {
-        let span = l.span.to(r.span);
-        let op = op.map(|_| ast::CompareOp::Equal);
-        ast::Expr::new(ast::ExprType::Compare(Box::new(ast::Spanned::new(ast::Compare { l, op, r }, span))),
-            span)
     },
     OpExpr,
 };
