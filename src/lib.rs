@@ -5,8 +5,11 @@ mod utils;
 
 pub mod ast;
 pub mod error;
+pub mod frame;
 pub mod lexer;
 pub mod sourcemap;
+pub mod tmp;
+pub mod translate;
 pub mod typecheck;
 
 use lalrpop_util::lalrpop_mod;

@@ -8,6 +8,7 @@ use codespan_reporting::{
 use euphonium::{
     error::Error,
     sourcemap::{Sourcemap, SourcemapError},
+    tmp::TmpGenerator,
     typecheck::Env,
 };
 
@@ -68,7 +69,8 @@ fn main() -> Result<(), EuphcErr> {
     }
 
     let mut env = Env::default();
-    match env.translate_decls(&decls) {
+    let mut tmp_generator = TmpGenerator::default();
+    match env.translate_decls(&mut tmp_generator, &decls) {
         Ok(()) => (),
         Err(typecheck_errors) => {
             for err in typecheck_errors {
