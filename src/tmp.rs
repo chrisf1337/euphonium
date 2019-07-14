@@ -1,5 +1,5 @@
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct Tmp(pub String);
+pub struct Tmp(String);
 
 impl std::fmt::Display for Tmp {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {

@@ -106,7 +106,7 @@ pub struct _TypecheckErr {
 }
 
 impl TypecheckErr {
-    pub fn new_err(ty: TypecheckErrType, span: ByteSpan) -> Self {
+    fn new_err(ty: TypecheckErrType, span: ByteSpan) -> Self {
         TypecheckErr::new(_TypecheckErr { ty, source: None }, span)
     }
 
@@ -189,14 +189,14 @@ impl FromStr for Type {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EnumCase {
-    pub id: String,
-    pub params: Vec<Rc<Type>>,
+    id: String,
+    params: Vec<Rc<Type>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TypeField {
-    pub id: String,
-    pub ty: Rc<Type>,
+struct TypeField {
+    id: String,
+    ty: Rc<Type>,
 }
 
 impl From<ast::Type> for Type {
@@ -235,7 +235,7 @@ impl From<ast::EnumCase> for EnumCase {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum EnvEntryType {
+enum EnvEntryType {
     Var(Access),
     Fn(Label),
 }
@@ -251,31 +251,31 @@ impl EnvEntryType {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EnvEntry {
-    pub ty: Rc<Type>,
-    pub immutable: bool,
-    pub entry_type: EnvEntryType,
+struct EnvEntry {
+    ty: Rc<Type>,
+    immutable: bool,
+    entry_type: EnvEntryType,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LValProperties {
-    pub ty: Rc<Type>,
-    pub immutable: Option<String>,
+struct LValProperties {
+    ty: Rc<Type>,
+    immutable: Option<String>,
 }
 
 #[derive(Debug, Clone)]
 pub struct Env<'a> {
-    pub parent: Option<&'a Env<'a>>,
-    pub vars: HashMap<String, EnvEntry>,
-    pub types: HashMap<String, Rc<Type>>,
-    pub var_def_spans: HashMap<String, ByteSpan>,
-    pub type_def_spans: HashMap<String, ByteSpan>,
+    parent: Option<&'a Env<'a>>,
+    vars: HashMap<String, EnvEntry>,
+    types: HashMap<String, Rc<Type>>,
+    var_def_spans: HashMap<String, ByteSpan>,
+    type_def_spans: HashMap<String, ByteSpan>,
 
-    pub record_field_decl_spans: HashMap<String, HashMap<String, ByteSpan>>,
-    pub fn_param_decl_spans: HashMap<String, Vec<ByteSpan>>,
-    pub enum_case_param_decl_spans: HashMap<String, HashMap<String, Vec<ByteSpan>>>,
+    record_field_decl_spans: HashMap<String, HashMap<String, ByteSpan>>,
+    fn_param_decl_spans: HashMap<String, Vec<ByteSpan>>,
+    enum_case_param_decl_spans: HashMap<String, HashMap<String, Vec<ByteSpan>>>,
 
-    pub levels: Rc<RefCell<HashMap<Label, Level>>>,
+    levels: Rc<RefCell<HashMap<Label, Level>>>,
 }
 
 impl<'a> Default for Env<'a> {
@@ -663,7 +663,7 @@ impl<'a> Env<'a> {
         }
     }
 
-    pub fn translate_decl_first_pass(&mut self, tmp_generator: &mut TmpGenerator, decl: &Decl) -> Result<()> {
+    fn translate_decl_first_pass(&mut self, tmp_generator: &mut TmpGenerator, decl: &Decl) -> Result<()> {
         match &decl.t {
             DeclType::Fn(fn_decl) => {
                 self.translate_fn_decl_sig(tmp_generator, &Label::top(), fn_decl)?;
@@ -2341,6 +2341,42 @@ mod tests {
                 .t
                 .ty,
             TypecheckErrType::DuplicateParam("a".to_owned())
+        );
+    }
+
+    #[test]
+    fn test_translate_fn_decl() {
+        let mut tmp_generator = TmpGenerator::default();
+
+        let mut env = Env::default();
+        let fn_decl = zspan!(FnDecl {
+            id: zspan!("f".to_owned()),
+            type_fields: vec![zspan!(TypeField {
+                id: zspan!("a".to_owned()),
+                ty: zspan!(ast::Type::Type(zspan!("int".to_owned()))),
+            }),],
+            return_type: None,
+            body: zspan!(ExprType::Unit)
+        });
+
+        assert_eq!(
+            env.translate_fn_decl_sig(&mut tmp_generator, &Label::top(), &fn_decl),
+            Ok(Rc::new(Type::Fn(vec![Rc::new(Type::Int)], Rc::new(Type::Unit))))
+        );
+        env.translate_fn_decl_body(&mut tmp_generator, &fn_decl)
+            .expect("translate fn decl body");
+
+        let label = env.vars["f"].entry_type.fn_label();
+        let levels = env.levels.borrow();
+        let level = &levels[label];
+
+        assert_eq!(level.parent_label, Some(Label::top()));
+        assert_eq!(
+            level.formals(),
+            vec![Access {
+                level_label: label.clone(),
+                access: frame::Access::InFrame(8)
+            }]
         );
     }
 

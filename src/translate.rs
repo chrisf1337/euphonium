@@ -11,15 +11,19 @@ pub struct Access {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Level {
-    parent_label: Option<Label>,
+    pub parent_label: Option<Label>,
     frame: Frame,
 }
 
 impl Level {
     pub fn new(tmp_generator: &mut TmpGenerator, parent_label: Option<Label>, name: String, formals: &[bool]) -> Self {
+        // Add static link
+        let mut frame_formals = vec![false; formals.len() + 1];
+        frame_formals[0] = true;
+        frame_formals[1..].copy_from_slice(formals);
         Self {
             parent_label,
-            frame: Frame::new(tmp_generator, name, formals),
+            frame: Frame::new(tmp_generator, name, &frame_formals),
         }
     }
 
@@ -35,8 +39,8 @@ impl Level {
     }
 
     pub fn formals(&self) -> Vec<Access> {
-        self.frame
-            .formals
+        // Strip static link
+        self.frame.formals[1..]
             .iter()
             .cloned()
             .map(|formal| Access {
@@ -55,5 +59,20 @@ impl Level {
 
     pub fn label(&self) -> &Label {
         &self.frame.label
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{frame, tmp::TmpGenerator};
+
+    #[test]
+    fn test_add_static_link() {
+        let mut tmp_generator = TmpGenerator::default();
+        let level = Level::new(&mut tmp_generator, Some(Label::top()), "f".to_owned(), &[]);
+
+        assert_eq!(level.frame.formals.len(), 1);
+        assert_eq!(level.frame.formals[0], frame::Access::InFrame(0));
     }
 }
