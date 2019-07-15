@@ -70,7 +70,7 @@ fn main() -> Result<(), EuphcErr> {
 
     let mut env = Env::default();
     let mut tmp_generator = TmpGenerator::default();
-    match env.translate_decls(&mut tmp_generator, &decls) {
+    match env.typecheck_decls(&mut tmp_generator, &decls) {
         Ok(()) => (),
         Err(typecheck_errors) => {
             for err in typecheck_errors {
