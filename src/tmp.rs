@@ -1,5 +1,5 @@
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct Tmp(String);
+pub struct Tmp(pub String);
 
 impl std::fmt::Display for Tmp {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
@@ -35,9 +35,13 @@ impl TmpGenerator {
         Tmp(format!("t{}", tmp_count))
     }
 
-    pub fn new_label(&mut self, s: String) -> Label {
+    pub fn new_label(&mut self, s: &str) -> Label {
         let label_count = self.current_label_count;
         self.current_label_count += 1;
         Label(format!("L{}{}", s, label_count))
+    }
+
+    pub fn new_anonymous_label(&mut self) -> Label {
+        self.new_label("")
     }
 }

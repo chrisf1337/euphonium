@@ -245,7 +245,7 @@ impl EnvEntryType {
         if let EnvEntryType::Fn(label) = self {
             label
         } else {
-            unreachable!("env entry type is not Fn");
+            panic!("env entry type is not Fn");
         }
     }
 }
@@ -729,7 +729,7 @@ impl<'a> Env<'a> {
         let ty = Rc::new(Type::Fn(param_types, Rc::new(return_type)));
         // FIXME: Don't assume all formals escape
         let formals = vec![true; fn_decl.type_fields.len()];
-        let level = Level::new(tmp_generator, Some(level_label.clone()), fn_decl.id.t.clone(), &formals);
+        let level = Level::new(tmp_generator, Some(level_label.clone()), &fn_decl.id.t, &formals);
 
         let label = level.label().clone();
         {
@@ -797,7 +797,7 @@ impl<'a> Env<'a> {
                 )]);
             }
         } else {
-            unreachable!(format!("expected {} to be a function", fn_decl.id.t));
+            panic!(format!("expected {} to be a function", fn_decl.id.t));
         }
 
         Ok(())
@@ -1672,7 +1672,7 @@ impl<'a> Env<'a> {
                 Ok(Rc::new(Type::Unit))
             }
         } else {
-            unreachable!("expected function type");
+            panic!("expected function type");
         }
     }
 }
