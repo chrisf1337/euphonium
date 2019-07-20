@@ -1,3 +1,5 @@
+pub mod u64ext;
+
 macro_rules! zspan {
     ( ) => {
         codespan::ByteSpan::new(codespan::ByteIndex::none(), codespan::ByteIndex::none())

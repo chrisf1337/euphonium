@@ -4,15 +4,16 @@ use crate::{
 };
 use lazy_static::lazy_static;
 
-pub const WORD_SIZE: i32 = 8;
+pub const WORD_SIZE: i64 = 8;
 
 lazy_static! {
     pub static ref FP: Tmp = Tmp("FP".to_owned());
+    pub static ref SP: Tmp = Tmp("SP".to_owned());
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Access {
-    InFrame(i32),
+    InFrame(i64),
     InReg(Tmp),
 }
 
@@ -25,7 +26,7 @@ pub struct Frame {
 
 impl Frame {
     pub fn new(tmp_generator: &mut TmpGenerator, name: &str, formals: &[bool]) -> Self {
-        let mut offset: i32 = 0;
+        let mut offset: i64 = 0;
         let mut accesses = vec![];
         for &formal in formals {
             if formal {
@@ -46,7 +47,7 @@ impl Frame {
     pub fn alloc_local(&mut self, tmp_generator: &mut TmpGenerator, escapes: bool) -> Access {
         if escapes {
             self.n_locals += 1;
-            Access::InFrame(-WORD_SIZE * self.n_locals as i32)
+            Access::InFrame(-WORD_SIZE * self.n_locals as i64)
         } else {
             Access::InReg(tmp_generator.new_tmp())
         }

@@ -1,8 +1,11 @@
 use crate::tmp::{Label, Tmp};
 
+#[cfg(test)]
+pub mod interpreter;
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Expr {
-    Const(i32),
+    Const(i64),
     Label(Label),
     Tmp(Tmp),
     BinOp(Box<Expr>, BinOp, Box<Expr>),

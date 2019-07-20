@@ -3,7 +3,7 @@ use crate::{
     ir,
     tmp::{Label, TmpGenerator},
 };
-use std::{collections::HashMap, fmt};
+use std::{collections::HashMap, fmt, rc::Rc};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Access {
@@ -64,13 +64,14 @@ impl Level {
     }
 }
 
+#[derive(Clone)]
 pub enum Expr {
     Expr(ir::Expr),
     Stmt(ir::Stmt),
     /// Given true and false destination labels, the function creates a conditional `ir::Stmt` (i.e.
     /// either `Jump` or `CJump`) that evaluates some conditionals and then jumps to one of the
     /// destinations.
-    Cond(Box<dyn Fn(Label, Label) -> ir::Stmt>),
+    Cond(Rc<dyn Fn(Label, Label) -> ir::Stmt>),
 }
 
 impl fmt::Debug for Expr {
@@ -78,7 +79,7 @@ impl fmt::Debug for Expr {
         match self {
             Expr::Expr(expr) => f.debug_tuple("Expr").field(expr).finish(),
             Expr::Stmt(stmt) => f.debug_tuple("Stmt").field(stmt).finish(),
-            Expr::Cond(cond) => write!(f, "Cond(closure)"),
+            Expr::Cond(_) => write!(f, "Cond(closure)"),
         }
     }
 }
@@ -152,12 +153,12 @@ impl Expr {
         }
     }
 
-    pub fn unwrap_cond(self) -> Box<dyn Fn(Label, Label) -> ir::Stmt> {
+    pub fn unwrap_cond(self) -> Rc<dyn Fn(Label, Label) -> ir::Stmt> {
         match self {
-            Expr::Expr(ir::Expr::Const(0)) => Box::new(|_, f| ir::Stmt::Jump(ir::Expr::Label(f.clone()), vec![f])),
-            Expr::Expr(ir::Expr::Const(1)) => Box::new(|t, _| ir::Stmt::Jump(ir::Expr::Label(t.clone()), vec![t])),
+            Expr::Expr(ir::Expr::Const(0)) => Rc::new(|_, f| ir::Stmt::Jump(ir::Expr::Label(f.clone()), vec![f])),
+            Expr::Expr(ir::Expr::Const(1)) => Rc::new(|t, _| ir::Stmt::Jump(ir::Expr::Label(t.clone()), vec![t])),
             Expr::Expr(expr) => {
-                Box::new(move |t, f| ir::Stmt::CJump(expr.clone(), ir::CompareOp::Eq, ir::Expr::Const(0), f, t))
+                Rc::new(move |t, f| ir::Stmt::CJump(expr.clone(), ir::CompareOp::Eq, ir::Expr::Const(0), f, t))
             }
             Expr::Stmt(_) => unreachable!("cannot call unwrap_cond() on Expr::Stmt"),
             Expr::Cond(gen_stmt) => gen_stmt,
@@ -189,6 +190,19 @@ pub fn translate_simple_var(levels: &HashMap<Label, Level>, access: &Access, lev
         access,
         level_label,
         ir::Expr::Tmp(frame::FP.clone()),
+    ))
+}
+
+/// `array_expr` is a dereferenced pointer to memory on the heap where the first element of the array lives.
+pub fn translate_array_subscript(tmp_generator: &mut TmpGenerator, array_expr: &Expr, index_expr: &Expr) -> Expr {
+    Expr::Expr(ir::Expr::BinOp(
+        Box::new(array_expr.clone().unwrap_expr(tmp_generator)),
+        ir::BinOp::Add,
+        Box::new(ir::Expr::BinOp(
+            Box::new(index_expr.clone().unwrap_expr(tmp_generator)),
+            ir::BinOp::Mul,
+            Box::new(ir::Expr::Const(frame::WORD_SIZE)),
+        )),
     ))
 }
 
