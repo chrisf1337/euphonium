@@ -194,8 +194,8 @@ pub fn translate_simple_var(levels: &HashMap<Label, Level>, access: &Access, lev
 }
 
 /// `array_expr` is a dereferenced pointer to memory on the heap where the first element of the array lives.
-pub fn translate_array_subscript(tmp_generator: &mut TmpGenerator, array_expr: &Expr, index_expr: &Expr) -> Expr {
-    Expr::Expr(ir::Expr::BinOp(
+pub fn translate_pointer_offset(tmp_generator: &mut TmpGenerator, array_expr: &Expr, index_expr: &Expr) -> Expr {
+    Expr::Expr(ir::Expr::Mem(Box::new(ir::Expr::BinOp(
         Box::new(array_expr.clone().unwrap_expr(tmp_generator)),
         ir::BinOp::Add,
         Box::new(ir::Expr::BinOp(
@@ -203,7 +203,7 @@ pub fn translate_array_subscript(tmp_generator: &mut TmpGenerator, array_expr: &
             ir::BinOp::Mul,
             Box::new(ir::Expr::Const(frame::WORD_SIZE)),
         )),
-    ))
+    ))))
 }
 
 #[cfg(test)]

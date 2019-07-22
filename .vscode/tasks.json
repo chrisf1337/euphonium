@@ -34,6 +34,21 @@
             "RUST_BACKTRACE": "1"
           }
         }
+      },
+      {
+        "label": "cargo build --all-targets",
+        "type": "shell",
+        "command": "cargo",
+        "args": ["build", "--all-targets"],
+        "problemMatcher": [
+          "$rustc"
+        ],
+        "group": "build",
+        "options": {
+          "env": {
+            "RUST_BACKTRACE": "1"
+          }
+        }
       }
     ]
 }
