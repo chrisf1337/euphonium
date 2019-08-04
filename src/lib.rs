@@ -131,7 +131,7 @@ mod tests {
                         _ExprType::If(Box::new(_If {
                             cond: _ExprType::Compare(Box::new(_Compare {
                                 l: _ExprType::Number(1),
-                                op: CompareOp::Equal,
+                                op: CompareOp::Eq,
                                 r: _ExprType::Seq(vec![_ExprType::Number(1)], true)
                             })),
                             then_expr: _ExprType::Seq(vec![_ExprType::Number(2)], true),
@@ -178,7 +178,16 @@ mod tests {
                             type_fields: vec![],
                             return_type: None,
                             body: _ExprType::Number(1),
-                        }))
+                        })),
+                        _ExprType::Compare(Box::new(_Compare {
+                            l: _ExprType::Compare(Box::new(_Compare {
+                                l: _ExprType::LVal(Box::new(_LVal::Simple("a".to_owned()))),
+                                op: CompareOp::Ge,
+                                r: _ExprType::LVal(Box::new(_LVal::Simple("b".to_owned()))),
+                            })),
+                            op: CompareOp::Eq,
+                            r: _ExprType::LVal(Box::new(_LVal::Simple("c".to_owned()))),
+                        })),
                     ],
                     false
                 )

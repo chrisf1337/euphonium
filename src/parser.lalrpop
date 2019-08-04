@@ -40,6 +40,10 @@ extern {
         "&&" => lexer::Tok::And,
         "|" => lexer::Tok::Pipe,
         "||" => lexer::Tok::Or,
+        ">" => lexer::Tok::Gt,
+        ">=" => lexer::Tok::Ge,
+        "<" => lexer::Tok::Lt,
+        "<=" => lexer::Tok::Lt,
         "_" => lexer::Tok::Underscore,
         "." => lexer::Tok::Period,
         ".." => lexer::Tok::DoublePeriod,
@@ -213,7 +217,37 @@ ExprTypeOrLetOrAssign: ast::Expr = {
 CompareExpr: ast::Expr = {
     <l:CompareExpr> <op: Spanned<"==">> <r:RangeExpr> => {
         let span = l.span.to(r.span);
-        let op = op.map(|_| ast::CompareOp::Equal);
+        let op = op.map(|_| ast::CompareOp::Eq);
+        ast::Expr::new(ast::ExprType::Compare(Box::new(ast::Spanned::new(ast::Compare { l, op, r }, span))),
+            span)
+    },
+    <l:CompareExpr> <op: Spanned<"!=">> <r:RangeExpr> => {
+        let span = l.span.to(r.span);
+        let op = op.map(|_| ast::CompareOp::Ne);
+        ast::Expr::new(ast::ExprType::Compare(Box::new(ast::Spanned::new(ast::Compare { l, op, r }, span))),
+            span)
+    },
+    <l:CompareExpr> <op: Spanned<">">> <r:RangeExpr> => {
+        let span = l.span.to(r.span);
+        let op = op.map(|_| ast::CompareOp::Gt);
+        ast::Expr::new(ast::ExprType::Compare(Box::new(ast::Spanned::new(ast::Compare { l, op, r }, span))),
+            span)
+    },
+    <l:CompareExpr> <op: Spanned<">=">> <r:RangeExpr> => {
+        let span = l.span.to(r.span);
+        let op = op.map(|_| ast::CompareOp::Ge);
+        ast::Expr::new(ast::ExprType::Compare(Box::new(ast::Spanned::new(ast::Compare { l, op, r }, span))),
+            span)
+    },
+    <l:CompareExpr> <op: Spanned<"<">> <r:RangeExpr> => {
+        let span = l.span.to(r.span);
+        let op = op.map(|_| ast::CompareOp::Lt);
+        ast::Expr::new(ast::ExprType::Compare(Box::new(ast::Spanned::new(ast::Compare { l, op, r }, span))),
+            span)
+    },
+    <l:CompareExpr> <op: Spanned<"<=">> <r:RangeExpr> => {
+        let span = l.span.to(r.span);
+        let op = op.map(|_| ast::CompareOp::Le);
         ast::Expr::new(ast::ExprType::Compare(Box::new(ast::Spanned::new(ast::Compare { l, op, r }, span))),
             span)
     },

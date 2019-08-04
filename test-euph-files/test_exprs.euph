@@ -11,4 +11,5 @@ fn f() = {
     || { 1 };
     let f: (int) -> int = |a: int| a;
     fn f() = 1;
+    a >= b == c;
 };

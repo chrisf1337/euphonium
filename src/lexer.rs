@@ -26,6 +26,8 @@ lazy_static! {
         set.insert('!');
         set.insert('.');
         set.insert('%');
+        set.insert('>');
+        set.insert('<');
         set
     };
 }
@@ -77,6 +79,10 @@ pub enum Tok {
     While,
     Break,
     Continue,
+    Gt,
+    Ge,
+    Lt,
+    Le,
 }
 
 impl std::fmt::Display for Tok {
@@ -127,6 +133,10 @@ impl std::fmt::Display for Tok {
             Tok::While => write!(f, "while"),
             Tok::Break => write!(f, "break"),
             Tok::Continue => write!(f, "continue"),
+            Tok::Gt => write!(f, ">"),
+            Tok::Ge => write!(f, ">="),
+            Tok::Lt => write!(f, "<"),
+            Tok::Le => write!(f, "<="),
         }
     }
 }
@@ -355,6 +365,30 @@ impl Lexer {
                     }
                 } else {
                     Some(Tok::Percent)
+                }
+            }
+            '>' => {
+                if let Some(char_info) = self.peek_char(0) {
+                    if char_info.ch == '=' {
+                        self.lex_char();
+                        Some(Tok::Ge)
+                    } else {
+                        Some(Tok::Gt)
+                    }
+                } else {
+                    Some(Tok::Gt)
+                }
+            }
+            '<' => {
+                if let Some(char_info) = self.peek_char(0) {
+                    if char_info.ch == '=' {
+                        self.lex_char();
+                        Some(Tok::Le)
+                    } else {
+                        Some(Tok::Lt)
+                    }
+                } else {
+                    Some(Tok::Lt)
                 }
             }
             _ => unreachable!(&format!("unhandled symbol: {}", char_info.ch)),

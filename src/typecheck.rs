@@ -3336,7 +3336,7 @@ mod tests {
         let env = Env::default();
         let compare = zspan!(Compare {
             l: zspan!(ExprType::BoolLiteral(true)),
-            op: zspan!(CompareOp::Equal),
+            op: zspan!(CompareOp::Eq),
             r: zspan!(ExprType::BoolLiteral(true)),
         });
 
@@ -3354,7 +3354,7 @@ mod tests {
         let env = Env::default();
         let compare = zspan!(Compare {
             l: zspan!(ExprType::Number(0)),
-            op: zspan!(CompareOp::Equal),
+            op: zspan!(CompareOp::Eq),
             r: zspan!(ExprType::BoolLiteral(true)),
         });
 

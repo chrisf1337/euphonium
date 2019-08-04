@@ -396,8 +396,12 @@ impl From<Bool> for _Bool {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CompareOp {
-    Equal,
-    NotEqual,
+    Eq,
+    Ne,
+    Gt,
+    Ge,
+    Lt,
+    Le,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
