@@ -729,12 +729,12 @@ impl<'a> Env<'a> {
         let ty = Rc::new(Type::Fn(param_types, Rc::new(return_type)));
         // FIXME: Don't assume all formals escape
         let formals = vec![true; fn_decl.type_fields.len()];
-        let level = Level::new(tmp_generator, Some(level_label.clone()), &fn_decl.id.t, &formals);
+        let level = Level::new(tmp_generator, Some(level_label), &fn_decl.id.t, &formals);
 
-        let label = level.label().clone();
+        let label = level.label();
         {
             let mut levels = self.levels.borrow_mut();
-            levels.insert(label.clone(), level);
+            levels.insert(label, level);
         }
 
         self.insert_var(
@@ -761,7 +761,7 @@ impl<'a> Env<'a> {
             let levels = self.levels.borrow();
             let formals = levels[&label].formals();
 
-            (fn_type, formals, label.clone())
+            (fn_type, formals, label)
         };
 
         if let Type::Fn(param_types, return_type) = fn_type.as_ref() {
@@ -775,7 +775,7 @@ impl<'a> Env<'a> {
                     EnvEntry {
                         ty: param_type.clone(),
                         immutable: false,
-                        entry_type: EnvEntryType::Var(formal.clone()),
+                        entry_type: EnvEntryType::Var(*formal),
                     },
                     span,
                 );
@@ -1804,7 +1804,7 @@ mod tests {
                 ty: Rc::new(Type::Record("r".to_owned(), record)),
                 immutable: false,
                 entry_type: EnvEntryType::Var(Access {
-                    level_label: level_label.clone(),
+                    level_label,
                     access: frame::Access::InFrame(-8),
                 }),
             },
@@ -1835,7 +1835,7 @@ mod tests {
                 ty: Rc::new(Type::Record("r".to_owned(), HashMap::new())),
                 immutable: true,
                 entry_type: EnvEntryType::Var(Access {
-                    level_label: level_label.clone(),
+                    level_label,
                     access: frame::Access::InFrame(-8),
                 }),
             },
@@ -1866,7 +1866,7 @@ mod tests {
                 ty: Rc::new(Type::Int),
                 immutable: true,
                 entry_type: EnvEntryType::Var(Access {
-                    level_label: level_label.clone(),
+                    level_label,
                     access: frame::Access::InFrame(-8),
                 }),
             },
@@ -1897,7 +1897,7 @@ mod tests {
                 ty: Rc::new(Type::Array(Rc::new(Type::Int), 3)),
                 immutable: true,
                 entry_type: EnvEntryType::Var(Access {
-                    level_label: level_label.clone(),
+                    level_label,
                     access: frame::Access::InFrame(-8),
                 }),
             },
@@ -1981,6 +1981,7 @@ mod tests {
     fn test_typecheck_fn_call_not_fn_err() {
         let mut tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
+        let label_f = tmp_generator.new_label();
 
         let mut env = Env::default();
         env.insert_var(
@@ -1988,7 +1989,7 @@ mod tests {
             EnvEntry {
                 ty: Rc::new(Type::Int),
                 immutable: true,
-                entry_type: EnvEntryType::Fn(Label(1)),
+                entry_type: EnvEntryType::Fn(label_f),
             },
             ByteSpan::new(ByteIndex::none(), ByteIndex::none()),
         );
@@ -2009,6 +2010,7 @@ mod tests {
     fn test_typecheck_fn_call_arity_mismatch() {
         let mut tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
+        let label_f = tmp_generator.new_label();
 
         let mut env = Env::default();
         env.insert_var(
@@ -2016,7 +2018,7 @@ mod tests {
             EnvEntry {
                 ty: Rc::new(Type::Fn(vec![], Rc::new(Type::Int))),
                 immutable: true,
-                entry_type: EnvEntryType::Fn(Label(1)),
+                entry_type: EnvEntryType::Fn(label_f),
             },
             zspan!(),
         );
@@ -2037,6 +2039,7 @@ mod tests {
     fn test_typecheck_fn_call_arg_type_mismatch() {
         let mut tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
+        let label_f = tmp_generator.new_label();
 
         let mut env = Env::default();
         env.insert_var(
@@ -2044,7 +2047,7 @@ mod tests {
             EnvEntry {
                 ty: Rc::new(Type::Fn(vec![Rc::new(Type::Int)], Rc::new(Type::Int))),
                 immutable: true,
-                entry_type: EnvEntryType::Fn(Label(1)),
+                entry_type: EnvEntryType::Fn(label_f),
             },
             zspan!(),
         );
@@ -2068,6 +2071,7 @@ mod tests {
     fn test_typecheck_fn_call_returns_aliased_type() {
         let mut tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
+        let label_f = tmp_generator.new_label();
 
         let mut env = Env::default();
         env.insert_type("a".to_owned(), Type::Alias("int".to_owned()), zspan!());
@@ -2076,7 +2080,7 @@ mod tests {
             EnvEntry {
                 ty: Rc::new(Type::Fn(vec![], Rc::new(Type::Alias("a".to_owned())))),
                 immutable: true,
-                entry_type: EnvEntryType::Fn(Label(1)),
+                entry_type: EnvEntryType::Fn(label_f),
             },
             zspan!(),
         );
@@ -2232,13 +2236,16 @@ mod tests {
 
     #[test]
     fn test_check_for_invalid_types_in_fn_sig() {
+        let mut tmp_generator = TmpGenerator::default();
+        let label_f = tmp_generator.new_label();
+
         let mut env = Env::default();
         env.insert_var(
             "f".to_owned(),
             EnvEntry {
                 ty: Rc::new(Type::Fn(vec![], Rc::new(Type::Alias("a".to_owned())))),
                 immutable: true,
-                entry_type: EnvEntryType::Fn(Label(1)),
+                entry_type: EnvEntryType::Fn(label_f),
             },
             zspan!(),
         );
@@ -2374,7 +2381,7 @@ mod tests {
         assert_eq!(
             level.formals(),
             vec![Access {
-                level_label: label.clone(),
+                level_label: label,
                 access: frame::Access::InFrame(8)
             }]
         );
@@ -2667,7 +2674,7 @@ mod tests {
                 ty: Rc::new(Type::String),
                 immutable: true,
                 entry_type: EnvEntryType::Var(Access {
-                    level_label: level_label.clone(),
+                    level_label,
                     access: frame::Access::InFrame(-8),
                 }),
             },
@@ -2722,7 +2729,7 @@ mod tests {
                 ty: Rc::new(Type::Int),
                 immutable: true,
                 entry_type: EnvEntryType::Var(Access {
-                    level_label: level_label.clone(),
+                    level_label,
                     access: frame::Access::InFrame(-8),
                 }),
             },
@@ -2767,7 +2774,7 @@ mod tests {
                 ty: Rc::new(record_type),
                 immutable: true,
                 entry_type: EnvEntryType::Var(Access {
-                    level_label: level_label.clone(),
+                    level_label,
                     access: frame::Access::InFrame(-8),
                 }),
             },
@@ -2815,7 +2822,7 @@ mod tests {
                 ty: Rc::new(record_type),
                 immutable: false,
                 entry_type: EnvEntryType::Var(Access {
-                    level_label: level_label.clone(),
+                    level_label,
                     access: frame::Access::InFrame(-8),
                 }),
             },
@@ -2863,7 +2870,7 @@ mod tests {
                 ty: Rc::new(record_type),
                 immutable: false,
                 entry_type: EnvEntryType::Var(Access {
-                    level_label: level_label.clone(),
+                    level_label,
                     access: frame::Access::InFrame(-8),
                 }),
             },
@@ -2899,7 +2906,7 @@ mod tests {
                 ty: Rc::new(array_type),
                 immutable: true,
                 entry_type: EnvEntryType::Var(Access {
-                    level_label: level_label.clone(),
+                    level_label,
                     access: frame::Access::InFrame(-8),
                 }),
             },
@@ -2938,7 +2945,7 @@ mod tests {
                 ty: Rc::new(array_type),
                 immutable: false,
                 entry_type: EnvEntryType::Var(Access {
-                    level_label: level_label.clone(),
+                    level_label,
                     access: frame::Access::InFrame(-8),
                 }),
             },
@@ -2977,7 +2984,7 @@ mod tests {
                 ty: Rc::new(array_type),
                 immutable: false,
                 entry_type: EnvEntryType::Var(Access {
-                    level_label: level_label.clone(),
+                    level_label,
                     access: frame::Access::InFrame(-8),
                 }),
             },
@@ -3469,7 +3476,7 @@ mod tests {
                 ty: Rc::new(Type::String),
                 immutable: true,
                 entry_type: EnvEntryType::Var(Access {
-                    level_label: level_label.clone(),
+                    level_label,
                     access: frame::Access::InFrame(-8),
                 }),
             },

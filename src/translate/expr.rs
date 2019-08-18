@@ -67,11 +67,11 @@ impl Expr {
                 let false_label = tmp_generator.new_label();
                 ir::Expr::Seq(
                     Box::new(ir::Stmt::seq(vec![
-                        ir::Stmt::Move(ir::Expr::Tmp(result.clone()), ir::Expr::Const(1)),
-                        gen_stmt(true_label.clone(), false_label.clone()),
-                        ir::Stmt::Label(false_label.clone()),
-                        ir::Stmt::Move(ir::Expr::Tmp(result.clone()), ir::Expr::Const(0)),
-                        ir::Stmt::Label(true_label.clone()),
+                        ir::Stmt::Move(ir::Expr::Tmp(result), ir::Expr::Const(1)),
+                        gen_stmt(true_label, false_label),
+                        ir::Stmt::Label(false_label),
+                        ir::Stmt::Move(ir::Expr::Tmp(result), ir::Expr::Const(0)),
+                        ir::Stmt::Label(true_label),
                     ])),
                     Box::new(ir::Expr::Tmp(result)),
                 )
@@ -85,18 +85,15 @@ impl Expr {
             Expr::Stmt(stmt) => stmt,
             Expr::Cond(gen_stmt) => {
                 let label = tmp_generator.new_label();
-                ir::Stmt::Seq(
-                    Box::new(gen_stmt(label.clone(), label.clone())),
-                    Box::new(ir::Stmt::Label(label)),
-                )
+                ir::Stmt::Seq(Box::new(gen_stmt(label, label)), Box::new(ir::Stmt::Label(label)))
             }
         }
     }
 
     pub fn unwrap_cond(self) -> Rc<dyn Fn(Label, Label) -> ir::Stmt> {
         match self {
-            Expr::Expr(ir::Expr::Const(0)) => Rc::new(|_, f| ir::Stmt::Jump(ir::Expr::Label(f.clone()), vec![f])),
-            Expr::Expr(ir::Expr::Const(1)) => Rc::new(|t, _| ir::Stmt::Jump(ir::Expr::Label(t.clone()), vec![t])),
+            Expr::Expr(ir::Expr::Const(0)) => Rc::new(|_, f| ir::Stmt::Jump(ir::Expr::Label(f), vec![f])),
+            Expr::Expr(ir::Expr::Const(1)) => Rc::new(|t, _| ir::Stmt::Jump(ir::Expr::Label(t), vec![t])),
             Expr::Expr(expr) => {
                 Rc::new(move |t, f| ir::Stmt::CJump(expr.clone(), ir::CompareOp::Eq, ir::Expr::Const(0), f, t))
             }

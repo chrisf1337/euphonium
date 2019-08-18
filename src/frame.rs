@@ -49,13 +49,13 @@ impl Frame {
         }
     }
 
-    pub fn expr(access: &Access, fp_expr: &ir::Expr) -> ir::Expr {
+    pub fn expr(access: Access, fp_expr: &ir::Expr) -> ir::Expr {
         match access {
-            Access::InReg(tmp) => ir::Expr::Tmp(tmp.clone()),
+            Access::InReg(tmp) => ir::Expr::Tmp(tmp),
             Access::InFrame(offset) => ir::Expr::Mem(Box::new(ir::Expr::BinOp(
                 Box::new(fp_expr.clone()),
                 ir::BinOp::Add,
-                Box::new(ir::Expr::Const(*offset)),
+                Box::new(ir::Expr::Const(offset)),
             ))),
         }
     }

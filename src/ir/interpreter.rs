@@ -187,13 +187,11 @@ impl Interpreter {
 mod tests {
     use super::*;
     use crate::{
-        frame, ir,
+        ir,
         tmp::{Label, TmpGenerator},
         translate::{self, Expr, Translator},
-        utils::u64ext::U64Ext,
     };
     use maplit::hashmap;
-    use std::convert::TryInto;
 
     #[test]
     fn test_read_write() {
@@ -233,11 +231,11 @@ mod tests {
         let mut tmp_generator = TmpGenerator::default();
         let mut interpreter = Interpreter::new(Expr::Stmt(ir::Stmt::Expr(ir::Expr::Const(0))));
         let mut level = Level::new(&mut tmp_generator, Some(Label::top()), "f", &[]);
-        let label = level.label().clone();
+        let label = level.label();
         let (local, addr) = interpreter.alloc_local(&mut tmp_generator, &mut level, true);
         let levels = hashmap! {
             Label::top() => Level::top(),
-            label.clone() => level,
+            label => level,
         };
         let mut translator = Translator::new(&mut tmp_generator);
         let expr = translator.translate_simple_var(&levels, local, label).clone();
@@ -254,11 +252,11 @@ mod tests {
         let mut tmp_generator = TmpGenerator::default();
         let mut interpreter = Interpreter::new(Expr::Stmt(ir::Stmt::Expr(ir::Expr::Const(0))));
         let mut level = Level::new(&mut tmp_generator, Some(Label::top()), "f", &[]);
-        let label = level.label().clone();
+        let label = level.label();
         let (local, addr) = interpreter.alloc_local(&mut tmp_generator, &mut level, true);
         let levels = hashmap! {
             Label::top() => Level::top(),
-            label.clone() => level,
+            label => level,
         };
 
         // Array located at 0x100. Write address into local.

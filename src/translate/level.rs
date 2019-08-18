@@ -40,7 +40,7 @@ impl Level {
             .iter()
             .cloned()
             .map(|formal| Access {
-                level_label: self.frame.label.clone(),
+                level_label: self.frame.label,
                 access: formal,
             })
             .collect()
@@ -48,7 +48,7 @@ impl Level {
 
     pub fn alloc_local(&mut self, tmp_generator: &mut TmpGenerator, escapes: bool) -> Access {
         Access {
-            level_label: self.frame.label.clone(),
+            level_label: self.frame.label,
             access: self.frame.alloc_local(tmp_generator, escapes),
         }
     }
