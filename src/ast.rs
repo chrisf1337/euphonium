@@ -377,6 +377,24 @@ pub struct Bool {
     pub r: Expr,
 }
 
+impl Bool {
+    fn into_if(self) -> If {
+        let lspan = self.l.span;
+        match self.op.t {
+            BoolOp::And => If {
+                cond: self.l,
+                then_expr: self.r,
+                else_expr: Some(Expr::new(ExprType::BoolLiteral(true), lspan)),
+            },
+            BoolOp::Or => If {
+                cond: self.l,
+                then_expr: Expr::new(ExprType::BoolLiteral(true), lspan),
+                else_expr: Some(self.r),
+            },
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct _Bool {
     pub l: _ExprType,

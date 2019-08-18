@@ -1,4 +1,7 @@
-use crate::tmp::{Label, Tmp};
+use crate::{
+    ast,
+    tmp::{Label, Tmp},
+};
 
 #[cfg(test)]
 pub mod interpreter;
@@ -36,6 +39,17 @@ impl Stmt {
             .rev()
             .fold(Box::new(last), |acc, next| Box::new(Stmt::Seq(Box::new(next), acc)))
     }
+
+    pub fn flatten(stmt: Stmt) -> Vec<Stmt> {
+        match stmt {
+            Stmt::Seq(fst, snd) => {
+                let mut v = Stmt::flatten(*fst);
+                v.extend(Stmt::flatten(*snd));
+                v
+            }
+            s => vec![s],
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -52,6 +66,17 @@ pub enum BinOp {
     Xor,
 }
 
+impl From<ast::ArithOp> for BinOp {
+    fn from(op: ast::ArithOp) -> Self {
+        match op {
+            ast::ArithOp::Add => BinOp::Add,
+            ast::ArithOp::Sub => BinOp::Sub,
+            ast::ArithOp::Mul => BinOp::Mul,
+            ast::ArithOp::Div => BinOp::Div,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CompareOp {
     Eq,
@@ -66,6 +91,19 @@ pub enum CompareOp {
     Uge,
 }
 
+impl From<ast::CompareOp> for CompareOp {
+    fn from(op: ast::CompareOp) -> Self {
+        match op {
+            ast::CompareOp::Eq => CompareOp::Eq,
+            ast::CompareOp::Ne => CompareOp::Ne,
+            ast::CompareOp::Gt => CompareOp::Gt,
+            ast::CompareOp::Ge => CompareOp::Ge,
+            ast::CompareOp::Lt => CompareOp::Lt,
+            ast::CompareOp::Le => CompareOp::Le,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -75,9 +113,9 @@ mod tests {
     fn test_seq() {
         let mut tmp_generator = TmpGenerator::default();
 
-        let stmt1 = Stmt::Label(tmp_generator.new_anonymous_label());
-        let stmt2 = Stmt::Label(tmp_generator.new_anonymous_label());
-        let stmt3 = Stmt::Label(tmp_generator.new_anonymous_label());
+        let stmt1 = Stmt::Label(tmp_generator.new_label());
+        let stmt2 = Stmt::Label(tmp_generator.new_label());
+        let stmt3 = Stmt::Label(tmp_generator.new_label());
 
         assert_eq!(Stmt::seq(vec![stmt1.clone()]), stmt1.clone());
         assert_eq!(

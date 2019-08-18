@@ -1,209 +1,188 @@
 use crate::{
+    ast,
     frame::{self, Frame},
     ir,
-    tmp::{Label, TmpGenerator},
+    tmp::{self, Label, TmpGenerator},
 };
-use std::{collections::HashMap, fmt, rc::Rc};
+use std::{collections::HashMap, rc::Rc};
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+mod expr;
+mod level;
+
+pub use expr::*;
+pub use level::*;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Access {
     pub level_label: Label,
     pub access: frame::Access,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Level {
-    pub parent_label: Option<Label>,
-    frame: Frame,
+pub struct Translator<'a> {
+    tmp_generator: &'a mut TmpGenerator,
 }
 
-impl Level {
-    pub fn new(tmp_generator: &mut TmpGenerator, parent_label: Option<Label>, name: &str, formals: &[bool]) -> Self {
-        // Add static link
-        let mut frame_formals = vec![false; formals.len() + 1];
-        frame_formals[0] = true;
-        frame_formals[1..].copy_from_slice(formals);
-        Self {
-            parent_label,
-            frame: Frame::new(tmp_generator, name, &frame_formals),
+impl<'a> Translator<'a> {
+    pub fn new(tmp_generator: &'a mut TmpGenerator) -> Self {
+        Translator { tmp_generator }
+    }
+
+    pub fn translate_expr(&mut self, expr: &ast::Expr) -> Expr {
+        match &expr.t {
+            ast::ExprType::Compare(compare) => self.translate_compare(compare),
+            _ => unimplemented!(),
         }
     }
 
-    pub fn top() -> Self {
-        Level {
-            parent_label: None,
-            frame: Frame {
-                label: Label("top".to_owned()),
-                formals: vec![],
-                n_locals: 0,
-            },
-        }
+    pub fn translate_compare(&mut self, expr: &ast::Compare) -> Expr {
+        let l = self.translate_expr(&expr.l).unwrap_expr(self.tmp_generator);
+        let r = self.translate_expr(&expr.r).unwrap_expr(self.tmp_generator);
+        let op = expr.op.t.into();
+        Expr::Cond(Rc::new(move |true_label, false_label| {
+            ir::Stmt::CJump(l.clone(), op, r.clone(), true_label, false_label)
+        }))
     }
 
-    pub fn formals(&self) -> Vec<Access> {
-        // Strip static link
-        self.frame.formals[1..]
-            .iter()
-            .cloned()
-            .map(|formal| Access {
-                level_label: self.frame.label.clone(),
-                access: formal,
-            })
-            .collect()
-    }
-
-    pub fn alloc_local(&mut self, tmp_generator: &mut TmpGenerator, escapes: bool) -> Access {
-        Access {
-            level_label: self.frame.label.clone(),
-            access: self.frame.alloc_local(tmp_generator, escapes),
-        }
-    }
-
-    pub fn label(&self) -> &Label {
-        &self.frame.label
-    }
-}
-
-#[derive(Clone)]
-pub enum Expr {
-    Expr(ir::Expr),
-    Stmt(ir::Stmt),
-    /// Given true and false destination labels, the function creates a conditional `ir::Stmt` (i.e.
-    /// either `Jump` or `CJump`) that evaluates some conditionals and then jumps to one of the
-    /// destinations.
-    Cond(Rc<dyn Fn(Label, Label) -> ir::Stmt>),
-}
-
-impl fmt::Debug for Expr {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            Expr::Expr(expr) => f.debug_tuple("Expr").field(expr).finish(),
-            Expr::Stmt(stmt) => f.debug_tuple("Stmt").field(stmt).finish(),
-            Expr::Cond(_) => write!(f, "Cond(closure)"),
-        }
-    }
-}
-
-impl PartialEq for Expr {
-    fn eq(&self, other: &Expr) -> bool {
-        match self {
-            Expr::Expr(expr) => {
-                if let Expr::Expr(other_expr) = other {
-                    expr == other_expr
-                } else {
-                    false
-                }
+    pub fn translate_simple_var(&mut self, levels: &HashMap<Label, Level>, access: Access, level_label: Label) -> Expr {
+        fn _translate_simple_var(
+            levels: &HashMap<Label, Level>,
+            access: Access,
+            level_label: Label,
+            acc_expr: ir::Expr,
+        ) -> ir::Expr {
+            if level_label == Label::top() {
+                panic!("simple_var() reached top");
             }
+            if level_label == access.level_label {
+                Frame::expr(&access.access, &acc_expr)
+            } else {
+                let level = &levels[&level_label];
+                let parent_label = level.parent_label.expect("level has no parent");
+                _translate_simple_var(levels, access, parent_label, ir::Expr::Mem(Box::new(acc_expr)))
+            }
+        }
+
+        Expr::Expr(_translate_simple_var(
+            levels,
+            access,
+            level_label,
+            ir::Expr::Tmp(tmp::FP.clone()),
+        ))
+    }
+
+    /// `array_expr` is a dereferenced pointer to memory on the heap where the first element of the array lives.
+    pub fn translate_pointer_offset(&mut self, array_expr: &Expr, index_expr: &Expr) -> Expr {
+        Expr::Expr(ir::Expr::Mem(Box::new(ir::Expr::BinOp(
+            Box::new(array_expr.clone().unwrap_expr(self.tmp_generator)),
+            ir::BinOp::Add,
+            Box::new(ir::Expr::BinOp(
+                Box::new(index_expr.clone().unwrap_expr(self.tmp_generator)),
+                ir::BinOp::Mul,
+                Box::new(ir::Expr::Const(frame::WORD_SIZE)),
+            )),
+        ))))
+    }
+
+    pub fn translate_arith(&mut self, expr: &'a ast::Arith) -> Expr {
+        Expr::Expr(ir::Expr::BinOp(
+            Box::new(self.translate_expr(&expr.l).unwrap_expr(self.tmp_generator)),
+            expr.op.t.into(),
+            Box::new(self.translate_expr(&expr.r).unwrap_expr(self.tmp_generator)),
+        ))
+    }
+
+    pub fn translate_if(&mut self, expr: &'a ast::If) -> Expr {
+        let true_label = self.tmp_generator.new_label();
+        let false_label = self.tmp_generator.new_label();
+        let join_label = self.tmp_generator.new_label();
+        let result = self.tmp_generator.new_tmp();
+        let cond_gen = self.translate_expr(&expr.cond).unwrap_cond();
+
+        let mut injected_labels = None;
+        let mut then_expr_was_cond = false;
+        let mut else_expr_was_cond = false;
+
+        let then_instr = match self.translate_expr(&expr.then_expr) {
             Expr::Stmt(stmt) => {
-                if let Expr::Stmt(other_stmt) = other {
-                    stmt == other_stmt
-                } else {
-                    false
+                // If the then expression is a statement, don't bother unwrapping into an Expr::Expr and just run it
+                // directly.
+                stmt
+            }
+            Expr::Cond(cond_gen) => {
+                let true_label = self.tmp_generator.new_label();
+                let false_label = self.tmp_generator.new_label();
+                let stmt = ir::Stmt::seq(vec![cond_gen(true_label.clone(), false_label.clone())]);
+                injected_labels = Some((true_label, false_label));
+                then_expr_was_cond = true;
+                stmt
+            }
+            expr => ir::Stmt::Move(ir::Expr::Tmp(result.clone()), expr.unwrap_expr(self.tmp_generator)),
+        };
+
+        let else_instr = if let Some(expr) = &expr.else_expr {
+            let else_instr = match self.translate_expr(expr) {
+                Expr::Stmt(stmt) => {
+                    // If the then expression is a statement, don't bother unwrapping into an Expr::Expr and just run it
+                    // directly.
+                    stmt
                 }
-            }
-            Expr::Cond(cond) => {
-                if let Expr::Cond(other_cond) = other {
-                    let l: *const dyn Fn(Label, Label) -> ir::Stmt = cond.as_ref();
-                    let r: *const dyn Fn(Label, Label) -> ir::Stmt = other_cond.as_ref();
-                    l == r
-                } else {
-                    false
+                Expr::Cond(cond_gen) => {
+                    let (true_label, false_label) = injected_labels
+                        .get_or_insert_with(|| (self.tmp_generator.new_label(), self.tmp_generator.new_label()));
+                    let stmt = ir::Stmt::seq(vec![cond_gen(true_label.clone(), false_label.clone())]);
+                    else_expr_was_cond = true;
+                    stmt
                 }
-            }
-        }
-    }
-}
-
-impl Eq for Expr {}
-
-impl Expr {
-    pub fn unwrap_expr(self, tmp_generator: &mut TmpGenerator) -> ir::Expr {
-        match self {
-            Expr::Expr(expr) => expr,
-            Expr::Stmt(stmt) => ir::Expr::Seq(Box::new(stmt), Box::new(ir::Expr::Const(0))),
-            Expr::Cond(gen_stmt) => {
-                let result = tmp_generator.new_tmp();
-                let true_label = tmp_generator.new_anonymous_label();
-                let false_label = tmp_generator.new_anonymous_label();
-                ir::Expr::Seq(
-                    Box::new(ir::Stmt::seq(vec![
-                        ir::Stmt::Move(ir::Expr::Tmp(result.clone()), ir::Expr::Const(1)),
-                        gen_stmt(true_label.clone(), false_label.clone()),
-                        ir::Stmt::Label(false_label.clone()),
-                        ir::Stmt::Move(ir::Expr::Tmp(result.clone()), ir::Expr::Const(0)),
-                        ir::Stmt::Label(true_label.clone()),
-                    ])),
-                    Box::new(ir::Expr::Tmp(result)),
-                )
-            }
-        }
-    }
-
-    pub fn unwrap_stmt(self, tmp_generator: &mut TmpGenerator) -> ir::Stmt {
-        match self {
-            Expr::Expr(expr) => ir::Stmt::Expr(expr),
-            Expr::Stmt(stmt) => stmt,
-            Expr::Cond(gen_stmt) => {
-                let label = tmp_generator.new_anonymous_label();
-                ir::Stmt::Seq(
-                    Box::new(gen_stmt(label.clone(), label.clone())),
-                    Box::new(ir::Stmt::Label(label)),
-                )
-            }
-        }
-    }
-
-    pub fn unwrap_cond(self) -> Rc<dyn Fn(Label, Label) -> ir::Stmt> {
-        match self {
-            Expr::Expr(ir::Expr::Const(0)) => Rc::new(|_, f| ir::Stmt::Jump(ir::Expr::Label(f.clone()), vec![f])),
-            Expr::Expr(ir::Expr::Const(1)) => Rc::new(|t, _| ir::Stmt::Jump(ir::Expr::Label(t.clone()), vec![t])),
-            Expr::Expr(expr) => {
-                Rc::new(move |t, f| ir::Stmt::CJump(expr.clone(), ir::CompareOp::Eq, ir::Expr::Const(0), f, t))
-            }
-            Expr::Stmt(_) => unreachable!("cannot call unwrap_cond() on Expr::Stmt"),
-            Expr::Cond(gen_stmt) => gen_stmt,
-        }
-    }
-}
-
-pub fn translate_simple_var(levels: &HashMap<Label, Level>, access: &Access, level_label: &Label) -> Expr {
-    fn _translate_simple_var(
-        levels: &HashMap<Label, Level>,
-        access: &Access,
-        level_label: &Label,
-        acc_expr: ir::Expr,
-    ) -> ir::Expr {
-        if level_label == &Label::top() {
-            panic!("simple_var() reached top");
-        }
-        if level_label == &access.level_label {
-            Frame::expr(&access.access, &acc_expr)
+                expr => ir::Stmt::Move(ir::Expr::Tmp(result.clone()), expr.unwrap_expr(self.tmp_generator)),
+            };
+            Some(else_instr)
         } else {
-            let level = &levels[level_label];
-            let parent_label = level.parent_label.as_ref().expect("level has no parent");
-            _translate_simple_var(levels, access, parent_label, ir::Expr::Mem(Box::new(acc_expr)))
+            None
+        };
+
+        let cond_stmt = if else_instr.is_some() {
+            cond_gen(true_label.clone(), false_label.clone())
+        } else {
+            // Jump directly to join_label if there's no else branch
+            cond_gen(true_label.clone(), join_label.clone())
+        };
+
+        let mut seq = vec![cond_stmt, ir::Stmt::Label(true_label), then_instr];
+        // then_instr will be a CJump if then_expr was Cond, so only insert a Jump if then_expr wasn't Cond
+        if !then_expr_was_cond {
+            seq.extend_from_slice(&[ir::Stmt::Jump(
+                ir::Expr::Label(join_label.clone()),
+                vec![join_label.clone()],
+            )]);
         }
+        if let Some(else_instr) = else_instr {
+            seq.extend(vec![ir::Stmt::Label(false_label), else_instr]);
+            // Same logic here
+            if !else_expr_was_cond {
+                seq.extend_from_slice(&[ir::Stmt::Jump(
+                    ir::Expr::Label(join_label.clone()),
+                    vec![join_label.clone()],
+                )]);
+            }
+        }
+
+        if then_expr_was_cond || else_expr_was_cond {
+            let (true_label, false_label) = injected_labels.unwrap();
+            seq.extend_from_slice(&[
+                ir::Stmt::Label(true_label),
+                ir::Stmt::Move(ir::Expr::Tmp(result.clone()), ir::Expr::Const(1)),
+                ir::Stmt::Jump(ir::Expr::Label(join_label.clone()), vec![join_label.clone()]),
+                ir::Stmt::Label(false_label),
+                ir::Stmt::Move(ir::Expr::Tmp(result.clone()), ir::Expr::Const(0)),
+                ir::Stmt::Jump(ir::Expr::Label(join_label.clone()), vec![join_label.clone()]),
+            ]);
+        }
+        seq.push(ir::Stmt::Label(join_label));
+        Expr::Expr(ir::Expr::Seq(
+            Box::new(ir::Stmt::seq(seq)),
+            Box::new(ir::Expr::Tmp(result)),
+        ))
     }
-
-    Expr::Expr(_translate_simple_var(
-        levels,
-        access,
-        level_label,
-        ir::Expr::Tmp(frame::FP.clone()),
-    ))
-}
-
-/// `array_expr` is a dereferenced pointer to memory on the heap where the first element of the array lives.
-pub fn translate_pointer_offset(tmp_generator: &mut TmpGenerator, array_expr: &Expr, index_expr: &Expr) -> Expr {
-    Expr::Expr(ir::Expr::Mem(Box::new(ir::Expr::BinOp(
-        Box::new(array_expr.clone().unwrap_expr(tmp_generator)),
-        ir::BinOp::Add,
-        Box::new(ir::Expr::BinOp(
-            Box::new(index_expr.clone().unwrap_expr(tmp_generator)),
-            ir::BinOp::Mul,
-            Box::new(ir::Expr::Const(frame::WORD_SIZE)),
-        )),
-    ))))
 }
 
 #[cfg(test)]
@@ -227,18 +206,19 @@ mod tests {
             let mut tmp_generator = TmpGenerator::default();
             let mut levels = hashmap! {
                 Label::top() => Level::top(),
-                Label("Lf0".to_owned()) => Level {
+                Label(1) => Level {
                     parent_label: Some(Label::top()),
                     frame: Frame::new(&mut tmp_generator, "f", &[]),
                 },
             };
-            let level = levels.get_mut(&Label("Lf0".to_owned())).unwrap();
+            let level = levels.get_mut(&Label(1)).unwrap();
             let local = level.alloc_local(&mut tmp_generator, true);
+            let mut translator = Translator::new(&mut tmp_generator);
 
             assert_eq!(
-                translate_simple_var(&levels, &local, &Label("Lf0".to_owned())),
+                translator.translate_simple_var(&levels, local, Label(1)),
                 Expr::Expr(ir::Expr::Mem(Box::new(ir::Expr::BinOp(
-                    Box::new(ir::Expr::Tmp(frame::FP.clone())),
+                    Box::new(ir::Expr::Tmp(tmp::FP.clone())),
                     ir::BinOp::Add,
                     Box::new(ir::Expr::Const(-frame::WORD_SIZE))
                 ))))
@@ -249,26 +229,36 @@ mod tests {
             let mut tmp_generator = TmpGenerator::default();
             let mut levels = hashmap! {
                 Label::top() => Level::top(),
-                Label("Lf0".to_owned()) => Level {
+                Label(1) => Level {
                     parent_label: Some(Label::top()),
                     frame: Frame::new(&mut tmp_generator, "f", &[])
                 },
-                Label("Lg1".to_owned()) => Level {
-                    parent_label: Some(Label("Lf0".to_owned())),
+                Label(2) => Level {
+                    parent_label: Some(Label(1)),
                     frame: Frame::new(&mut tmp_generator, "g", &[])
                 }
             };
-            let level = levels.get_mut(&Label("Lf0".to_owned())).unwrap();
+            let level = levels.get_mut(&Label(1)).unwrap();
             let local = level.alloc_local(&mut tmp_generator, true);
+            let mut translator = Translator::new(&mut tmp_generator);
 
             assert_eq!(
-                translate_simple_var(&levels, &local, &Label("Lg1".to_owned())),
+                translator.translate_simple_var(&levels, local, Label(2)),
                 Expr::Expr(ir::Expr::Mem(Box::new(ir::Expr::BinOp(
-                    Box::new(ir::Expr::Mem(Box::new(ir::Expr::Tmp(frame::FP.clone())))),
+                    Box::new(ir::Expr::Mem(Box::new(ir::Expr::Tmp(tmp::FP.clone())))),
                     ir::BinOp::Add,
                     Box::new(ir::Expr::Const(-frame::WORD_SIZE))
                 ))))
-            )
+            );
         }
+    }
+
+    #[test]
+    fn test_translate_if() {
+        let if_expr = ast::If {
+            cond: zspan!(ast::ExprType::BoolLiteral(true)),
+            then_expr: zspan!(ast::ExprType::BoolLiteral(true)),
+            else_expr: None,
+        };
     }
 }

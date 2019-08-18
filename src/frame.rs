@@ -2,16 +2,10 @@ use crate::{
     ir,
     tmp::{Label, Tmp, TmpGenerator},
 };
-use lazy_static::lazy_static;
 
 pub const WORD_SIZE: i64 = 8;
 
-lazy_static! {
-    pub static ref FP: Tmp = Tmp("FP".to_owned());
-    pub static ref SP: Tmp = Tmp("SP".to_owned());
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Access {
     InFrame(i64),
     InReg(Tmp),
@@ -19,6 +13,7 @@ pub enum Access {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Frame {
+    pub name: String,
     pub label: Label,
     pub formals: Vec<Access>,
     pub n_locals: usize,
@@ -38,7 +33,8 @@ impl Frame {
         }
 
         Frame {
-            label: tmp_generator.new_label(name),
+            name: name.to_owned(),
+            label: tmp_generator.new_label(),
             formals: accesses,
             n_locals: 0,
         }

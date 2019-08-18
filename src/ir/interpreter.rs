@@ -1,8 +1,9 @@
 use crate::{
     frame, ir,
-    tmp::{Tmp, TmpGenerator},
-    translate::{Access, Level},
+    tmp::{self, Label, Tmp, TmpGenerator},
+    translate::{Access, Expr, Level},
 };
+use maplit::hashmap;
 use std::{
     collections::HashMap,
     env,
@@ -14,26 +15,58 @@ use std::{
 const MEMORY_SIZE: usize = 1024;
 
 pub struct Interpreter {
-    tmps: HashMap<Tmp, i64>,
+    stmts: Vec<ir::Stmt>,
+    tmps: HashMap<Tmp, u64>,
     memory: [u8; MEMORY_SIZE],
-    fp: u64,
-    sp: u64,
+    ip: usize,
+    label_table: HashMap<Label, usize>,
 }
 
 impl Interpreter {
-    pub fn new() -> Interpreter {
-        Interpreter {
-            tmps: HashMap::new(),
-            memory: [0; MEMORY_SIZE],
-            fp: MEMORY_SIZE as u64 - 1,
-            sp: MEMORY_SIZE as u64 - 1,
+    pub fn new(expr: Expr) -> Interpreter {
+        let mut tmp_generator = TmpGenerator::default();
+        let stmts = ir::Stmt::flatten(expr.unwrap_stmt(&mut tmp_generator));
+        let mut label_table = HashMap::new();
+        for (i, stmt) in stmts.iter().enumerate() {
+            if let ir::Stmt::Label(label) = stmt {
+                label_table.insert(label.clone(), i);
+            }
         }
+        let fp = MEMORY_SIZE as u64 - 1;
+        let sp = MEMORY_SIZE as u64 - 1;
+        let tmps = hashmap! {
+            tmp::FP.clone() => fp,
+            tmp::SP.clone() => sp,
+        };
+        Interpreter {
+            stmts,
+            tmps,
+            memory: [0; MEMORY_SIZE],
+            ip: 0,
+            label_table,
+        }
+    }
+
+    pub fn sp(&self) -> u64 {
+        self.tmps[&tmp::SP]
+    }
+
+    pub fn sp_mut(&mut self) -> &mut u64 {
+        self.tmps.get_mut(&tmp::SP).unwrap()
+    }
+
+    pub fn fp(&self) -> u64 {
+        self.tmps[&tmp::FP]
+    }
+
+    pub fn fp_mut(&mut self) -> &mut u64 {
+        self.tmps.get_mut(&tmp::FP).unwrap()
     }
 
     pub fn interpret_expr_rvalue(&self, expr: &ir::Expr) -> i64 {
         match expr {
             ir::Expr::Const(c) => *c,
-            ir::Expr::Tmp(tmp) => self.tmps[tmp],
+            ir::Expr::Tmp(tmp) => unsafe { std::mem::transmute(self.tmps[tmp]) },
             ir::Expr::BinOp(l, op, r) => match op {
                 ir::BinOp::Add => self.interpret_expr_rvalue(l) + self.interpret_expr_rvalue(r),
                 ir::BinOp::Sub => self.interpret_expr_rvalue(l) - self.interpret_expr_rvalue(r),
@@ -45,6 +78,21 @@ impl Interpreter {
                 let index = self.interpret_expr_rvalue(expr) as usize;
                 self.read_i64(index)
             }
+            ir::Expr::Seq(stmt, expr) => unimplemented!(),
+            _ => unimplemented!(),
+        }
+    }
+
+    pub fn interpret_stmt(&self, stmt: &ir::Stmt) {
+        match stmt {
+            ir::Stmt::Move(dst, src) => match dst {
+                ir::Expr::Tmp(tmp) => unimplemented!(),
+                _ => unimplemented!(),
+            },
+            ir::Stmt::CJump(l, op, r, t_label, f_label) => match op {
+                ir::CompareOp::Eq => if self.interpret_expr_rvalue(l) == self.interpret_expr_rvalue(r) {},
+                _ => unimplemented!(),
+            },
             _ => unimplemented!(),
         }
     }
@@ -126,8 +174,8 @@ impl Interpreter {
     ) -> (Access, Option<usize>) {
         let local = level.alloc_local(tmp_generator, escapes);
         let addr = if escapes {
-            self.sp -= frame::WORD_SIZE as u64;
-            Some(self.sp as usize)
+            *self.sp_mut() -= frame::WORD_SIZE as u64;
+            Some(self.sp() as usize)
         } else {
             None
         };
@@ -139,9 +187,9 @@ impl Interpreter {
 mod tests {
     use super::*;
     use crate::{
-        frame,
+        frame, ir,
         tmp::{Label, TmpGenerator},
-        translate::{self, translate_pointer_offset, translate_simple_var, Level},
+        translate::{self, Expr, Translator},
         utils::u64ext::U64Ext,
     };
     use maplit::hashmap;
@@ -149,7 +197,7 @@ mod tests {
 
     #[test]
     fn test_read_write() {
-        let mut interpreter = Interpreter::new();
+        let mut interpreter = Interpreter::new(Expr::Stmt(ir::Stmt::Expr(ir::Expr::Const(0))));
         interpreter.write_u64(0x12345, 0);
         assert_eq!(interpreter.read_u64(0), 0x12345);
 
@@ -165,7 +213,7 @@ mod tests {
 
     #[test]
     fn test_deref() {
-        let mut interpreter = Interpreter::new();
+        let mut interpreter = Interpreter::new(Expr::Stmt(ir::Stmt::Expr(ir::Expr::Const(0))));
         interpreter.write_u64(0x54321, 0x234);
         interpreter.write_u64(0x234, 0x123);
         assert_eq!(
@@ -183,9 +231,7 @@ mod tests {
     #[test]
     fn test_translate_simple_var() {
         let mut tmp_generator = TmpGenerator::default();
-        let mut interpreter = Interpreter::new();
-        interpreter.tmps.insert(frame::FP.clone(), interpreter.fp as i64);
-        interpreter.tmps.insert(frame::SP.clone(), interpreter.sp as i64);
+        let mut interpreter = Interpreter::new(Expr::Stmt(ir::Stmt::Expr(ir::Expr::Const(0))));
         let mut level = Level::new(&mut tmp_generator, Some(Label::top()), "f", &[]);
         let label = level.label().clone();
         let (local, addr) = interpreter.alloc_local(&mut tmp_generator, &mut level, true);
@@ -193,7 +239,8 @@ mod tests {
             Label::top() => Level::top(),
             label.clone() => level,
         };
-        let expr = translate_simple_var(&levels, &local, &label);
+        let mut translator = Translator::new(&mut tmp_generator);
+        let expr = translator.translate_simple_var(&levels, local, label).clone();
         interpreter.write_u64(0x1234, addr.unwrap());
 
         assert_eq!(
@@ -205,9 +252,7 @@ mod tests {
     #[test]
     fn test_translate_pointer_offset() {
         let mut tmp_generator = TmpGenerator::default();
-        let mut interpreter = Interpreter::new();
-        interpreter.tmps.insert(frame::FP.clone(), interpreter.fp as i64);
-        interpreter.tmps.insert(frame::SP.clone(), interpreter.sp as i64);
+        let mut interpreter = Interpreter::new(Expr::Stmt(ir::Stmt::Expr(ir::Expr::Const(0))));
         let mut level = Level::new(&mut tmp_generator, Some(Label::top()), "f", &[]);
         let label = level.label().clone();
         let (local, addr) = interpreter.alloc_local(&mut tmp_generator, &mut level, true);
@@ -220,35 +265,26 @@ mod tests {
         interpreter.write_u64(0x100, addr.unwrap());
         interpreter.write_u64s(&[1, 2, 3], 0x100);
 
-        let array_expr = translate_simple_var(&levels, &local, &label);
+        let (expr1, expr2, expr3) = {
+            let mut translator = Translator::new(&mut tmp_generator);
+            let array_expr = translator.translate_simple_var(&levels, local, label);
+            (
+                translator.translate_pointer_offset(&array_expr, &translate::Expr::Expr(ir::Expr::Const(0))),
+                translator.translate_pointer_offset(&array_expr, &translate::Expr::Expr(ir::Expr::Const(1))),
+                translator.translate_pointer_offset(&array_expr, &translate::Expr::Expr(ir::Expr::Const(2))),
+            )
+        };
 
-        let expr = translate_pointer_offset(
-            &mut tmp_generator,
-            &array_expr,
-            &translate::Expr::Expr(ir::Expr::Const(0)),
-        );
         assert_eq!(
-            interpreter.interpret_expr_rvalue(&expr.unwrap_expr(&mut tmp_generator)),
+            interpreter.interpret_expr_rvalue(&expr1.unwrap_expr(&mut tmp_generator)),
             1
         );
-
-        let expr = translate_pointer_offset(
-            &mut tmp_generator,
-            &array_expr,
-            &translate::Expr::Expr(ir::Expr::Const(1)),
-        );
         assert_eq!(
-            interpreter.interpret_expr_rvalue(&expr.unwrap_expr(&mut tmp_generator)),
+            interpreter.interpret_expr_rvalue(&expr2.unwrap_expr(&mut tmp_generator)),
             2
         );
-
-        let expr = translate_pointer_offset(
-            &mut tmp_generator,
-            &array_expr,
-            &translate::Expr::Expr(ir::Expr::Const(2)),
-        );
         assert_eq!(
-            interpreter.interpret_expr_rvalue(&expr.unwrap_expr(&mut tmp_generator)),
+            interpreter.interpret_expr_rvalue(&expr3.unwrap_expr(&mut tmp_generator)),
             3
         );
     }
