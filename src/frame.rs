@@ -3,7 +3,7 @@ use crate::{
     tmp::{Label, Tmp, TmpGenerator},
 };
 
-pub const WORD_SIZE: i64 = 8;
+pub const WORD_SIZE: i64 = std::mem::size_of::<u64>() as i64;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Access {
