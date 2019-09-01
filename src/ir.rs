@@ -1,6 +1,6 @@
 use crate::{
     ast,
-    tmp::{Label, Tmp},
+    tmp::{Label, Tmp, TmpGenerator},
 };
 
 #[cfg(test)]

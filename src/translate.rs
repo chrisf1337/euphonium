@@ -29,12 +29,11 @@ impl<'a> Translator<'a> {
 
     pub fn translate_expr(&mut self, expr: &ast::Expr) -> Expr {
         match &expr.t {
-            ast::ExprType::Compare(compare) => self.translate_compare(compare),
             _ => unimplemented!(),
         }
     }
 
-    pub fn translate_compare(&mut self, expr: &ast::Compare) -> Expr {
+    pub fn translate_compare(&mut self, expr: &ast::Compare, string_compare: bool) -> Expr {
         let l = self.translate_expr(&expr.l).unwrap_expr(self.tmp_generator);
         let r = self.translate_expr(&expr.r).unwrap_expr(self.tmp_generator);
         let op = expr.op.t.into();

@@ -3,8 +3,9 @@ use crate::{
         self, Arith, ArithOp, Array, Assign, Bool, Closure, Compare, Decl, DeclType, Enum, Expr, ExprType, FieldAssign,
         FnCall, FnDecl, For, If, LVal, Let, Pattern, Range, Record, Spanned, TypeDecl, TypeDeclType, While,
     },
+    ir,
     tmp::{Label, TmpGenerator},
-    translate::{Access, Level},
+    translate::{self, Access, Level},
 };
 use codespan::{ByteIndex, ByteSpan};
 use codespan_reporting;
@@ -14,11 +15,34 @@ use std::{
     cell::RefCell,
     collections::{HashMap, HashSet},
     hash::Hash,
+    ops::{Deref, DerefMut},
     rc::Rc,
     str::FromStr,
 };
 
 pub type Result<T> = std::result::Result<T, Vec<TypecheckErr>>;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TranslateOutput<T> {
+    pub t: T,
+    pub expr: translate::Expr,
+}
+
+impl<T> TranslateOutput<T> {
+    pub fn map<F, U>(self, f: F) -> TranslateOutput<U>
+    where
+        F: FnOnce(T) -> U,
+    {
+        TranslateOutput {
+            t: f(self.t),
+            expr: self.expr,
+        }
+    }
+
+    pub fn unwrap(self) -> T {
+        self.t
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TypecheckErrType {
@@ -449,7 +473,7 @@ impl<'a> Env<'a> {
         expr: &Expr,
         ty: &Rc<Type>,
     ) -> Result<Rc<Type>> {
-        let expr_type = self.typecheck_expr(tmp_generator, level_label, expr)?;
+        let expr_type = self.typecheck_expr(tmp_generator, level_label, expr)?.t;
         let resolved_expr_type = self.resolve_type(&expr_type, expr.span)?;
         if ty != &resolved_expr_type {
             Err(vec![TypecheckErr::new_err(
@@ -781,7 +805,7 @@ impl<'a> Env<'a> {
                 );
             }
 
-            let body_type = new_env.typecheck_expr(tmp_generator, label, &fn_decl.body)?;
+            let body_type = new_env.typecheck_expr(tmp_generator, label, &fn_decl.body)?.t;
             if self.resolve_type(&body_type, fn_decl.body.span)?
                 != self.resolve_type(
                     &return_type,
@@ -861,7 +885,12 @@ impl<'a> Env<'a> {
         Ok(())
     }
 
-    fn typecheck_expr(&self, tmp_generator: &mut TmpGenerator, level_label: Label, expr: &Expr) -> Result<Rc<Type>> {
+    fn typecheck_expr(
+        &self,
+        tmp_generator: &mut TmpGenerator,
+        level_label: Label,
+        expr: &Expr,
+    ) -> Result<TranslateOutput<Rc<Type>>> {
         match &expr.t {
             ExprType::Seq(exprs, returns) => {
                 let (mut new_env, return_type) = {
@@ -872,7 +901,7 @@ impl<'a> Env<'a> {
                     }
                     let last_expr = exprs.last().unwrap();
                     let return_type = if *returns {
-                        new_env.typecheck_expr_mut(tmp_generator, level_label, last_expr)?
+                        new_env.typecheck_expr_mut(tmp_generator, level_label, last_expr)?.t
                     } else {
                         let _ = new_env.typecheck_expr_mut(tmp_generator, level_label, last_expr)?;
                         Rc::new(Type::Unit)
@@ -903,17 +932,46 @@ impl<'a> Env<'a> {
                     }
                 }
 
-                Ok(return_type)
+                Ok(TranslateOutput {
+                    t: return_type,
+                    expr: translate::Expr::Expr(ir::Expr::Const(0)),
+                })
             }
-            ExprType::String(_) => Ok(Rc::new(Type::String)),
-            ExprType::Number(_) => Ok(Rc::new(Type::Int)),
-            ExprType::Neg(expr) => self.assert_ty(tmp_generator, level_label, expr, &Rc::new(Type::Int)),
+            ExprType::String(_) => Ok(TranslateOutput {
+                t: Rc::new(Type::String),
+                expr: translate::Expr::Expr(ir::Expr::Const(0)),
+            }),
+            ExprType::Number(_) => Ok(TranslateOutput {
+                t: Rc::new(Type::Int),
+                expr: translate::Expr::Expr(ir::Expr::Const(0)),
+            }),
+            ExprType::Neg(expr) => {
+                let ty = self.assert_ty(tmp_generator, level_label, expr, &Rc::new(Type::Int))?;
+                Ok(TranslateOutput {
+                    t: ty,
+                    expr: translate::Expr::Expr(ir::Expr::Const(0)),
+                })
+            }
             ExprType::Arith(arith) => self.typecheck_arith(tmp_generator, level_label, arith),
-            ExprType::Unit | ExprType::Continue | ExprType::Break => Ok(Rc::new(Type::Unit)),
-            ExprType::BoolLiteral(_) => Ok(Rc::new(Type::Bool)),
-            ExprType::Not(expr) => self.assert_ty(tmp_generator, level_label, expr, &Rc::new(Type::Bool)),
+            ExprType::Unit | ExprType::Continue | ExprType::Break => Ok(TranslateOutput {
+                t: Rc::new(Type::Unit),
+                expr: translate::Expr::Expr(ir::Expr::Const(0)),
+            }),
+            ExprType::BoolLiteral(_) => Ok(TranslateOutput {
+                t: Rc::new(Type::Bool),
+                expr: translate::Expr::Expr(ir::Expr::Const(0)),
+            }),
+            ExprType::Not(expr) => {
+                let ty = self.assert_ty(tmp_generator, level_label, expr, &Rc::new(Type::Bool))?;
+                Ok(TranslateOutput {
+                    t: ty,
+                    expr: translate::Expr::Expr(ir::Expr::Const(0)),
+                })
+            }
             ExprType::Bool(bool_expr) => self.typecheck_bool(tmp_generator, level_label, bool_expr),
-            ExprType::LVal(lval) => Ok(self.typecheck_lval(tmp_generator, level_label, lval)?.ty),
+            ExprType::LVal(lval) => Ok(self
+                .typecheck_lval(tmp_generator, level_label, lval)?
+                .map(|lval_props| lval_props.ty)),
             ExprType::Let(_) => Err(vec![TypecheckErr::new_err(TypecheckErrType::IllegalLetExpr, expr.span)]),
             ExprType::FnCall(fn_call) => self.typecheck_fn_call(tmp_generator, level_label, fn_call),
             ExprType::Record(record) => self.typecheck_record(tmp_generator, level_label, record),
@@ -938,7 +996,7 @@ impl<'a> Env<'a> {
         tmp_generator: &mut TmpGenerator,
         level_label: Label,
         expr: &Expr,
-    ) -> Result<Rc<Type>> {
+    ) -> Result<TranslateOutput<Rc<Type>>> {
         match &expr.t {
             ExprType::Let(let_expr) => self.typecheck_let(tmp_generator, level_label, let_expr),
             ExprType::FnDecl(fn_decl) => self.typecheck_fn_decl_expr(tmp_generator, level_label, fn_decl),
@@ -951,17 +1009,20 @@ impl<'a> Env<'a> {
         tmp_generator: &mut TmpGenerator,
         level_label: Label,
         lval: &Spanned<LVal>,
-    ) -> Result<LValProperties> {
+    ) -> Result<TranslateOutput<LValProperties>> {
         match &lval.t {
             LVal::Simple(var) => {
                 if let Some(var_properties) = self.get_var(var) {
-                    Ok(LValProperties {
-                        ty: var_properties.ty.clone(),
-                        immutable: if var_properties.immutable {
-                            Some(var.clone())
-                        } else {
-                            None
+                    Ok(TranslateOutput {
+                        t: LValProperties {
+                            ty: var_properties.ty.clone(),
+                            immutable: if var_properties.immutable {
+                                Some(var.clone())
+                            } else {
+                                None
+                            },
                         },
+                        expr: translate::Expr::Expr(ir::Expr::Const(0)),
                     })
                 } else {
                     Err(vec![TypecheckErr::new_err(
@@ -971,13 +1032,16 @@ impl<'a> Env<'a> {
                 }
             }
             LVal::Field(var, field) => {
-                let lval_properties = self.typecheck_lval(tmp_generator, level_label, var)?;
+                let lval_properties = self.typecheck_lval(tmp_generator, level_label, var)?.t;
                 if let Type::Record(_, fields) = self.resolve_type(&lval_properties.ty, var.span)?.as_ref() {
                     if let Some(field_type) = fields.get(&field.t) {
                         // A field is mutable only if the record it belongs to is mutable
-                        return Ok(LValProperties {
-                            ty: field_type.clone(),
-                            immutable: lval_properties.immutable,
+                        return Ok(TranslateOutput {
+                            t: LValProperties {
+                                ty: field_type.clone(),
+                                immutable: lval_properties.immutable,
+                            },
+                            expr: translate::Expr::Expr(ir::Expr::Const(0)),
                         });
                     }
                 }
@@ -987,13 +1051,16 @@ impl<'a> Env<'a> {
                 )])
             }
             LVal::Subscript(var, index) => {
-                let lval_properties = self.typecheck_lval(tmp_generator, level_label, var)?;
-                let index_type = self.typecheck_expr(tmp_generator, level_label, index)?;
+                let lval_properties = self.typecheck_lval(tmp_generator, level_label, var)?.t;
+                let index_type = self.typecheck_expr(tmp_generator, level_label, index)?.t;
                 if let Type::Array(ty, _) = self.resolve_type(&lval_properties.ty, var.span)?.as_ref() {
                     if self.resolve_type(&index_type, index.span)? == Rc::new(Type::Int) {
-                        Ok(LValProperties {
-                            ty: ty.clone(),
-                            immutable: lval_properties.immutable,
+                        Ok(TranslateOutput {
+                            t: LValProperties {
+                                ty: ty.clone(),
+                                immutable: lval_properties.immutable,
+                            },
+                            expr: translate::Expr::Expr(ir::Expr::Const(0)),
                         })
                     } else {
                         Err(vec![TypecheckErr::new_err(
@@ -1016,14 +1083,14 @@ impl<'a> Env<'a> {
         tmp_generator: &mut TmpGenerator,
         level_label: Label,
         let_expr: &Spanned<Let>,
-    ) -> Result<Rc<Type>> {
+    ) -> Result<TranslateOutput<Rc<Type>>> {
         let Let {
             pattern,
             ty: ast_ty,
             immutable,
             expr,
         } = &let_expr.t;
-        let expr_type = self.typecheck_expr(tmp_generator, level_label, expr)?;
+        let expr_type = self.typecheck_expr(tmp_generator, level_label, expr)?.t;
         if let Some(ast_ty) = ast_ty {
             // Type annotation
             let ty = Rc::new(ast_ty.t.clone().into());
@@ -1060,7 +1127,10 @@ impl<'a> Env<'a> {
                 let_expr.span,
             )
         }
-        Ok(Rc::new(Type::Unit))
+        Ok(TranslateOutput {
+            t: Rc::new(Type::Unit),
+            expr: translate::Expr::Expr(ir::Expr::Const(0)),
+        })
     }
 
     fn typecheck_fn_call(
@@ -1071,7 +1141,7 @@ impl<'a> Env<'a> {
             t: FnCall { id, args },
             span,
         }: &Spanned<FnCall>,
-    ) -> Result<Rc<Type>> {
+    ) -> Result<TranslateOutput<Rc<Type>>> {
         if let Some(fn_type) = self.get_var(&id.t).map(|x| x.ty.clone()) {
             if let Type::Fn(param_types, return_type) = self.resolve_type(&fn_type, id.span)?.as_ref() {
                 if args.len() != param_types.len() {
@@ -1084,7 +1154,7 @@ impl<'a> Env<'a> {
                 let mut errors = vec![];
                 for (index, (arg, param_type)) in args.iter().zip(param_types.iter()).enumerate() {
                     match self.typecheck_expr(tmp_generator, level_label, arg) {
-                        Ok(ty) => {
+                        Ok(TranslateOutput { t: ty, .. }) => {
                             // param_type should already be well-defined because we have already
                             // checked for invalid types
                             if self.resolve_type(&ty, arg.span)? != self.resolve_type(param_type, zspan!()).unwrap() {
@@ -1106,7 +1176,10 @@ impl<'a> Env<'a> {
                     return Err(errors);
                 }
 
-                Ok(return_type.clone())
+                Ok(TranslateOutput {
+                    t: return_type.clone(),
+                    expr: translate::Expr::Expr(ir::Expr::Const(0)),
+                })
             } else {
                 Err(vec![TypecheckErr::new_err(
                     TypecheckErrType::NotAFn(id.t.clone()),
@@ -1132,7 +1205,7 @@ impl<'a> Env<'a> {
             },
             span,
         }: &Spanned<Record>,
-    ) -> Result<Rc<Type>> {
+    ) -> Result<TranslateOutput<Rc<Type>>> {
         if let Some(ty) = self.get_type(&record_id.t) {
             if let Type::Record(_, field_types) = ty.as_ref() {
                 let mut field_assigns_hm = HashMap::new();
@@ -1199,7 +1272,7 @@ impl<'a> Env<'a> {
                 {
                     // This should never error because we already checked for invalid types
                     let expected_type = self.resolve_type(&field_types[&field_id.t], zspan!()).unwrap();
-                    let ty = self.typecheck_expr(tmp_generator, level_label, expr)?;
+                    let ty = self.typecheck_expr(tmp_generator, level_label, expr)?.t;
                     let actual_type = self.resolve_type(&ty, expr.span)?;
                     if expected_type != actual_type {
                         errors.push(
@@ -1219,7 +1292,10 @@ impl<'a> Env<'a> {
                     return Err(errors);
                 }
 
-                Ok(ty.clone())
+                Ok(TranslateOutput {
+                    t: ty.clone(),
+                    expr: translate::Expr::Expr(ir::Expr::Const(0)),
+                })
             } else {
                 Err(vec![TypecheckErr::new_err(
                     TypecheckErrType::NotARecord(ty.clone()),
@@ -1239,7 +1315,7 @@ impl<'a> Env<'a> {
         tmp_generator: &mut TmpGenerator,
         level_label: Label,
         Spanned { t: assign, span }: &Spanned<Assign>,
-    ) -> Result<Rc<Type>> {
+    ) -> Result<TranslateOutput<Rc<Type>>> {
         match &assign.lval.t {
             LVal::Simple(var) => {
                 if let Some(var_properties) = self.get_var(var) {
@@ -1254,7 +1330,7 @@ impl<'a> Env<'a> {
 
                     let resolved_expected_ty = self.resolve_type(&var_properties.ty, assign.lval.span)?;
                     let resolved_actual_ty = self.resolve_type(
-                        &self.typecheck_expr(tmp_generator, level_label, &assign.expr)?,
+                        &self.typecheck_expr(tmp_generator, level_label, &assign.expr)?.t,
                         assign.expr.span,
                     )?;
                     if resolved_expected_ty != resolved_actual_ty {
@@ -1271,7 +1347,7 @@ impl<'a> Env<'a> {
                 }
             }
             LVal::Field(lval, field) => {
-                let lval_properties = self.typecheck_lval(tmp_generator, level_label, &lval)?;
+                let lval_properties = self.typecheck_lval(tmp_generator, level_label, &lval)?.t;
                 if let Some(ref base_var) = lval_properties.immutable {
                     return Err(vec![TypecheckErr::new_err(
                         TypecheckErrType::MutatingImmutable(base_var.clone()),
@@ -1287,7 +1363,7 @@ impl<'a> Env<'a> {
                     if let Some(expected_ty) = record_field_types.get(&field.t) {
                         let resolved_expected_ty = self.resolve_type(expected_ty, assign.lval.span)?;
                         let resolved_actual_ty = self.resolve_type(
-                            &self.typecheck_expr(tmp_generator, level_label, &assign.expr)?,
+                            &self.typecheck_expr(tmp_generator, level_label, &assign.expr)?.t,
                             assign.expr.span,
                         )?;
                         if resolved_expected_ty != resolved_actual_ty {
@@ -1310,7 +1386,7 @@ impl<'a> Env<'a> {
                 }
             }
             LVal::Subscript(lval, _) => {
-                let lval_properties = self.typecheck_lval(tmp_generator, level_label, &lval)?;
+                let lval_properties = self.typecheck_lval(tmp_generator, level_label, &lval)?.t;
                 if let Some(ref base_var) = lval_properties.immutable {
                     return Err(vec![TypecheckErr::new_err(
                         TypecheckErrType::MutatingImmutable(base_var.clone()),
@@ -1325,7 +1401,7 @@ impl<'a> Env<'a> {
                 if let Type::Array(elem_type, _) = lval_type.as_ref() {
                     let resolved_expected_ty = self.resolve_type(elem_type, assign.lval.span)?;
                     let resolved_actual_ty = self.resolve_type(
-                        &self.typecheck_expr(tmp_generator, level_label, &assign.expr)?,
+                        &self.typecheck_expr(tmp_generator, level_label, &assign.expr)?.t,
                         assign.expr.span,
                     )?;
                     if resolved_expected_ty != resolved_actual_ty {
@@ -1343,7 +1419,10 @@ impl<'a> Env<'a> {
             }
         }
 
-        Ok(Rc::new(Type::Unit))
+        Ok(TranslateOutput {
+            t: Rc::new(Type::Unit),
+            expr: translate::Expr::Expr(ir::Expr::Const(0)),
+        })
     }
 
     fn eval_arith_const_expr(Spanned { t: expr, span }: &Expr) -> Result<i64> {
@@ -1372,8 +1451,8 @@ impl<'a> Env<'a> {
         tmp_generator: &mut TmpGenerator,
         level_label: Label,
         Spanned { t: array, .. }: &Spanned<Array>,
-    ) -> Result<Rc<Type>> {
-        let elem_type = self.typecheck_expr(tmp_generator, level_label, &array.initial_value)?;
+    ) -> Result<TranslateOutput<Rc<Type>>> {
+        let elem_type = self.typecheck_expr(tmp_generator, level_label, &array.initial_value)?.t;
         let len = Self::eval_arith_const_expr(&array.len)?;
         if len < 0 {
             return Err(vec![TypecheckErr::new_err(
@@ -1381,7 +1460,10 @@ impl<'a> Env<'a> {
                 array.len.span,
             )]);
         }
-        Ok(Rc::new(Type::Array(elem_type, len as usize)))
+        Ok(TranslateOutput {
+            t: Rc::new(Type::Array(elem_type, len as usize)),
+            expr: translate::Expr::Expr(ir::Expr::Const(0)),
+        })
     }
 
     fn typecheck_if(
@@ -1389,16 +1471,19 @@ impl<'a> Env<'a> {
         tmp_generator: &mut TmpGenerator,
         level_label: Label,
         Spanned { t: expr, span }: &Spanned<If>,
-    ) -> Result<Rc<Type>> {
+    ) -> Result<TranslateOutput<Rc<Type>>> {
         self.assert_ty(tmp_generator, level_label, &expr.cond, &Rc::new(Type::Bool))?;
-        let then_expr_type = self.typecheck_expr(tmp_generator, level_label, &expr.then_expr)?;
+        let then_expr_type = self.typecheck_expr(tmp_generator, level_label, &expr.then_expr)?.t;
         if let Some(else_expr) = &expr.else_expr {
-            let else_expr_type = self.typecheck_expr(tmp_generator, level_label, else_expr)?;
+            let else_expr_type = self.typecheck_expr(tmp_generator, level_label, else_expr)?.t;
             if self.resolve_type(&then_expr_type, expr.then_expr.span)?
                 == self.resolve_type(&else_expr_type, else_expr.span)?
             {
                 // Arbitrarily pick the then branch
-                Ok(then_expr_type)
+                Ok(TranslateOutput {
+                    t: then_expr_type,
+                    expr: translate::Expr::Expr(ir::Expr::Const(0)),
+                })
             } else {
                 Err(vec![TypecheckErr::new_err(
                     TypecheckErrType::TypeMismatch(then_expr_type.clone(), else_expr_type.clone()),
@@ -1419,7 +1504,10 @@ impl<'a> Env<'a> {
                     expr.then_expr.span,
                 )]);
             }
-            Ok(Rc::new(Type::Unit))
+            Ok(TranslateOutput {
+                t: Rc::new(Type::Unit),
+                expr: translate::Expr::Expr(ir::Expr::Const(0)),
+            })
         }
     }
 
@@ -1428,10 +1516,13 @@ impl<'a> Env<'a> {
         tmp_generator: &mut TmpGenerator,
         level_label: Label,
         Spanned { t: expr, .. }: &Spanned<Range>,
-    ) -> Result<Rc<Type>> {
+    ) -> Result<TranslateOutput<Rc<Type>>> {
         self.assert_ty(tmp_generator, level_label, &expr.start, &Rc::new(Type::Int))?;
         self.assert_ty(tmp_generator, level_label, &expr.end, &Rc::new(Type::Int))?;
-        Ok(Rc::new(Type::Iterator(Rc::new(Type::Int))))
+        Ok(TranslateOutput {
+            t: Rc::new(Type::Iterator(Rc::new(Type::Int))),
+            expr: translate::Expr::Expr(ir::Expr::Const(0)),
+        })
     }
 
     fn typecheck_for(
@@ -1439,7 +1530,7 @@ impl<'a> Env<'a> {
         tmp_generator: &mut TmpGenerator,
         level_label: Label,
         Spanned { t: expr, .. }: &Spanned<For>,
-    ) -> Result<Rc<Type>> {
+    ) -> Result<TranslateOutput<Rc<Type>>> {
         self.assert_ty(
             tmp_generator,
             level_label,
@@ -1464,7 +1555,10 @@ impl<'a> Env<'a> {
             expr.index.span,
         );
         child_env.assert_ty(tmp_generator, level_label, &expr.body, &Rc::new(Type::Unit))?;
-        Ok(Rc::new(Type::Unit))
+        Ok(TranslateOutput {
+            t: Rc::new(Type::Unit),
+            expr: translate::Expr::Expr(ir::Expr::Const(0)),
+        })
     }
 
     fn typecheck_while(
@@ -1472,10 +1566,13 @@ impl<'a> Env<'a> {
         tmp_generator: &mut TmpGenerator,
         level_label: Label,
         Spanned { t: expr, .. }: &Spanned<While>,
-    ) -> Result<Rc<Type>> {
+    ) -> Result<TranslateOutput<Rc<Type>>> {
         self.assert_ty(tmp_generator, level_label, &expr.cond, &Rc::new(Type::Bool))?;
         self.assert_ty(tmp_generator, level_label, &expr.body, &Rc::new(Type::Unit))?;
-        Ok(Rc::new(Type::Unit))
+        Ok(TranslateOutput {
+            t: Rc::new(Type::Unit),
+            expr: translate::Expr::Expr(ir::Expr::Const(0)),
+        })
     }
 
     fn typecheck_arith(
@@ -1483,10 +1580,13 @@ impl<'a> Env<'a> {
         tmp_generator: &mut TmpGenerator,
         level_label: Label,
         Spanned { t: expr, .. }: &Spanned<Arith>,
-    ) -> Result<Rc<Type>> {
+    ) -> Result<TranslateOutput<Rc<Type>>> {
         self.assert_ty(tmp_generator, level_label, &expr.l, &Rc::new(Type::Int))?;
         self.assert_ty(tmp_generator, level_label, &expr.r, &Rc::new(Type::Int))?;
-        Ok(Rc::new(Type::Int))
+        Ok(TranslateOutput {
+            t: Rc::new(Type::Int),
+            expr: translate::Expr::Expr(ir::Expr::Const(0)),
+        })
     }
 
     fn typecheck_bool(
@@ -1494,10 +1594,13 @@ impl<'a> Env<'a> {
         tmp_generator: &mut TmpGenerator,
         level_label: Label,
         Spanned { t: expr, .. }: &Spanned<Bool>,
-    ) -> Result<Rc<Type>> {
+    ) -> Result<TranslateOutput<Rc<Type>>> {
         self.assert_ty(tmp_generator, level_label, &expr.l, &Rc::new(Type::Bool))?;
         self.assert_ty(tmp_generator, level_label, &expr.r, &Rc::new(Type::Bool))?;
-        Ok(Rc::new(Type::Bool))
+        Ok(TranslateOutput {
+            t: Rc::new(Type::Bool),
+            expr: translate::Expr::Expr(ir::Expr::Const(0)),
+        })
     }
 
     fn typecheck_compare(
@@ -1505,16 +1608,25 @@ impl<'a> Env<'a> {
         tmp_generator: &mut TmpGenerator,
         level_label: Label,
         Spanned { t: expr, span }: &Spanned<Compare>,
-    ) -> Result<Rc<Type>> {
-        let left_type = self.resolve_type(&self.typecheck_expr(tmp_generator, level_label, &expr.l)?, expr.l.span)?;
-        let right_type = self.resolve_type(&self.typecheck_expr(tmp_generator, level_label, &expr.r)?, expr.r.span)?;
+    ) -> Result<TranslateOutput<Rc<Type>>> {
+        let left_type = self.resolve_type(
+            &self.typecheck_expr(tmp_generator, level_label, &expr.l)?.t,
+            expr.l.span,
+        )?;
+        let right_type = self.resolve_type(
+            &self.typecheck_expr(tmp_generator, level_label, &expr.r)?.t,
+            expr.r.span,
+        )?;
         if left_type != right_type {
             Err(vec![TypecheckErr::new_err(
                 TypecheckErrType::TypeMismatch(left_type.clone(), right_type.clone()),
                 *span,
             )])
         } else {
-            Ok(Rc::new(Type::Bool))
+            Ok(TranslateOutput {
+                t: Rc::new(Type::Bool),
+                expr: translate::Expr::Expr(ir::Expr::Const(0)),
+            })
         }
     }
 
@@ -1523,7 +1635,7 @@ impl<'a> Env<'a> {
         tmp_generator: &mut TmpGenerator,
         level_label: Label,
         Spanned { t: expr, .. }: &Spanned<Enum>,
-    ) -> Result<Rc<Type>> {
+    ) -> Result<TranslateOutput<Rc<Type>>> {
         if let Some(ty) = self.get_type(&expr.enum_id) {
             if let Type::Enum(_, enum_cases) = ty.as_ref() {
                 if let Some(EnumCase { params, .. }) = enum_cases.get(&expr.case_id.t) {
@@ -1537,7 +1649,7 @@ impl<'a> Env<'a> {
                     let mut errors = vec![];
                     for (index, (arg, param_type)) in expr.args.iter().zip(params.iter()).enumerate() {
                         match self.typecheck_expr(tmp_generator, level_label, arg) {
-                            Ok(ty) => {
+                            Ok(TranslateOutput { t: ty, .. }) => {
                                 // param_type should already be well-defined because we have already
                                 // checked for invalid types
                                 if self.resolve_type(&ty, arg.span)? != self.resolve_type(param_type, zspan!()).unwrap()
@@ -1563,7 +1675,10 @@ impl<'a> Env<'a> {
                         return Err(errors);
                     }
 
-                    Ok(ty.clone())
+                    Ok(TranslateOutput {
+                        t: ty.clone(),
+                        expr: translate::Expr::Expr(ir::Expr::Const(0)),
+                    })
                 } else {
                     Err(vec![TypecheckErr::new_err(
                         TypecheckErrType::NotAnEnumCase(expr.case_id.t.clone()),
@@ -1589,7 +1704,7 @@ impl<'a> Env<'a> {
         tmp_generator: &mut TmpGenerator,
         level_label: Label,
         Spanned { t: expr, .. }: &Spanned<Closure>,
-    ) -> Result<Rc<Type>> {
+    ) -> Result<TranslateOutput<Rc<Type>>> {
         let child_env = self.new_child();
         Self::check_for_duplicates(
             &expr.type_fields,
@@ -1629,7 +1744,7 @@ impl<'a> Env<'a> {
             }
         }
 
-        let return_type = child_env.typecheck_expr(tmp_generator, level_label, &expr.body)?;
+        let return_type = child_env.typecheck_expr(tmp_generator, level_label, &expr.body)?.t;
         if let Err(errs) = child_env.resolve_type(&return_type, expr.body.span) {
             errors.extend(errs);
         }
@@ -1637,7 +1752,10 @@ impl<'a> Env<'a> {
         if !errors.is_empty() {
             return Err(errors);
         }
-        Ok(Rc::new(Type::Fn(param_types, return_type)))
+        Ok(TranslateOutput {
+            t: Rc::new(Type::Fn(param_types, return_type)),
+            expr: translate::Expr::Expr(ir::Expr::Const(0)),
+        })
     }
 
     fn typecheck_fn_decl_expr(
@@ -1645,7 +1763,7 @@ impl<'a> Env<'a> {
         tmp_generator: &mut TmpGenerator,
         level_label: Label,
         fn_decl: &Spanned<FnDecl>,
-    ) -> Result<Rc<Type>> {
+    ) -> Result<TranslateOutput<Rc<Type>>> {
         // At this point, we have already typechecked all type decls, so we can validate the param
         // and return types.
         if let Type::Fn(param_types, return_type) = self
@@ -1669,7 +1787,10 @@ impl<'a> Env<'a> {
             if !errors.is_empty() {
                 Err(errors)
             } else {
-                Ok(Rc::new(Type::Unit))
+                Ok(TranslateOutput {
+                    t: Rc::new(Type::Unit),
+                    expr: translate::Expr::Expr(ir::Expr::Const(0)),
+                })
             }
         } else {
             panic!("expected function type");
@@ -1744,7 +1865,8 @@ mod tests {
         }))));
         let env = Env::default();
         assert_eq!(
-            env.typecheck_expr(&mut tmp_generator, level_label, &expr),
+            env.typecheck_expr(&mut tmp_generator, level_label, &expr)
+                .map(TranslateOutput::unwrap),
             Ok(Rc::new(Type::Bool))
         );
     }
@@ -1815,7 +1937,8 @@ mod tests {
             zspan!("f".to_owned())
         ));
         assert_eq!(
-            env.typecheck_lval(&mut tmp_generator, level_label, &lval),
+            env.typecheck_lval(&mut tmp_generator, level_label, &lval)
+                .map(TranslateOutput::unwrap),
             Ok(LValProperties {
                 ty: Rc::new(Type::Int),
                 immutable: None,
@@ -1846,7 +1969,8 @@ mod tests {
             zspan!("g".to_owned())
         ));
         assert_eq!(
-            env.typecheck_lval(&mut tmp_generator, level_label, &lval),
+            env.typecheck_lval(&mut tmp_generator, level_label, &lval)
+                .map(TranslateOutput::unwrap),
             Err(vec![TypecheckErr::new_err(
                 TypecheckErrType::UndefinedField("g".to_owned()),
                 span!(0, 0, ByteOffset(0)),
@@ -1877,7 +2001,8 @@ mod tests {
             zspan!("g".to_owned())
         ));
         assert_eq!(
-            env.typecheck_lval(&mut tmp_generator, level_label, &lval),
+            env.typecheck_lval(&mut tmp_generator, level_label, &lval)
+                .map(TranslateOutput::unwrap),
             Err(vec![TypecheckErr::new_err(
                 TypecheckErrType::UndefinedField("g".to_owned()),
                 span!(0, 0, ByteOffset(0))
@@ -1908,7 +2033,8 @@ mod tests {
             zspan!(ExprType::Number(0))
         ));
         assert_eq!(
-            env.typecheck_lval(&mut tmp_generator, level_label, &lval),
+            env.typecheck_lval(&mut tmp_generator, level_label, &lval)
+                .map(TranslateOutput::unwrap),
             Ok(LValProperties {
                 ty: Rc::new(Type::Int),
                 immutable: Some("x".to_owned())
@@ -1929,7 +2055,8 @@ mod tests {
             expr: zspan!(ExprType::Number(0))
         });
         assert_eq!(
-            env.typecheck_let(&mut tmp_generator, level_label, &let_expr),
+            env.typecheck_let(&mut tmp_generator, level_label, &let_expr)
+                .map(TranslateOutput::unwrap),
             Ok(Rc::new(Type::Unit))
         );
         assert_eq!(env.vars["x"].ty, Rc::new(Type::Int));
@@ -2090,6 +2217,7 @@ mod tests {
         });
         assert_eq!(
             env.typecheck_fn_call(&mut tmp_generator, level_label, &fn_call)
+                .unwrap()
                 .unwrap(),
             Rc::new(Type::Alias("a".to_owned()))
         );
@@ -2162,7 +2290,9 @@ mod tests {
         env.typecheck_let(&mut tmp_generator, level_label, &var_def)
             .expect("typecheck var def");
         assert_eq!(
-            env.typecheck_expr_mut(&mut tmp_generator, level_label, &expr).unwrap(),
+            env.typecheck_expr_mut(&mut tmp_generator, level_label, &expr)
+                .unwrap()
+                .unwrap(),
             Rc::new(Type::Alias("i".to_owned()))
         );
     }
@@ -2531,7 +2661,9 @@ mod tests {
         });
 
         assert_eq!(
-            env.typecheck_record(&mut tmp_generator, level_label, &record).unwrap(),
+            env.typecheck_record(&mut tmp_generator, level_label, &record)
+                .unwrap()
+                .unwrap(),
             Rc::new(record_type)
         );
     }
@@ -2686,7 +2818,8 @@ mod tests {
         ));
 
         assert_eq!(
-            env.typecheck_expr(&mut tmp_generator, level_label, &seq),
+            env.typecheck_expr(&mut tmp_generator, level_label, &seq)
+                .map(TranslateOutput::unwrap),
             Ok(Rc::new(Type::String))
         );
     }
@@ -2888,7 +3021,8 @@ mod tests {
                     )),
                     expr: zspan!(ExprType::Number(0))
                 })
-            ),
+            )
+            .map(TranslateOutput::unwrap),
             Ok(Rc::new(Type::Unit))
         );
     }
@@ -3002,7 +3136,8 @@ mod tests {
                     )),
                     expr: zspan!(ExprType::Number(0))
                 })
-            ),
+            )
+            .map(TranslateOutput::unwrap),
             Ok(Rc::new(Type::Unit))
         );
     }
@@ -3019,7 +3154,8 @@ mod tests {
         });
 
         assert_eq!(
-            env.typecheck_array(&mut tmp_generator, level_label, &array_expr),
+            env.typecheck_array(&mut tmp_generator, level_label, &array_expr)
+                .map(TranslateOutput::unwrap),
             Ok(Rc::new(Type::Array(Rc::new(Type::Int), 3)))
         );
     }
@@ -3040,7 +3176,8 @@ mod tests {
         });
 
         assert_eq!(
-            env.typecheck_array(&mut tmp_generator, level_label, &array_expr),
+            env.typecheck_array(&mut tmp_generator, level_label, &array_expr)
+                .map(TranslateOutput::unwrap),
             Ok(Rc::new(Type::Array(Rc::new(Type::Int), 3)))
         );
     }
@@ -3102,7 +3239,8 @@ mod tests {
         });
 
         assert_eq!(
-            env.typecheck_if(&mut tmp_generator, level_label, &if_expr),
+            env.typecheck_if(&mut tmp_generator, level_label, &if_expr)
+                .map(TranslateOutput::unwrap),
             Ok(Rc::new(Type::Unit))
         );
     }
@@ -3140,7 +3278,8 @@ mod tests {
         });
 
         assert_eq!(
-            env.typecheck_if(&mut tmp_generator, level_label, &if_expr),
+            env.typecheck_if(&mut tmp_generator, level_label, &if_expr)
+                .map(TranslateOutput::unwrap),
             Ok(Rc::new(Type::Int))
         );
     }
@@ -3177,7 +3316,8 @@ mod tests {
         });
 
         assert_eq!(
-            env.typecheck_range(&mut tmp_generator, level_label, &range),
+            env.typecheck_range(&mut tmp_generator, level_label, &range)
+                .map(TranslateOutput::unwrap),
             Ok(Rc::new(Type::Iterator(Rc::new(Type::Int))))
         );
     }
@@ -3221,7 +3361,8 @@ mod tests {
         });
 
         assert_eq!(
-            env.typecheck_for(&mut tmp_generator, level_label, &for_expr),
+            env.typecheck_for(&mut tmp_generator, level_label, &for_expr)
+                .map(TranslateOutput::unwrap),
             Ok(Rc::new(Type::Unit))
         );
     }
@@ -3289,7 +3430,8 @@ mod tests {
         });
 
         assert_eq!(
-            env.typecheck_while(&mut tmp_generator, level_label, &while_expr),
+            env.typecheck_while(&mut tmp_generator, level_label, &while_expr)
+                .map(TranslateOutput::unwrap),
             Ok(Rc::new(Type::Unit))
         );
     }
@@ -3346,7 +3488,8 @@ mod tests {
         });
 
         assert_eq!(
-            env.typecheck_compare(&mut tmp_generator, level_label, &compare),
+            env.typecheck_compare(&mut tmp_generator, level_label, &compare)
+                .map(TranslateOutput::unwrap),
             Ok(Rc::new(Type::Bool))
         );
     }
@@ -3458,7 +3601,8 @@ mod tests {
         });
 
         assert_eq!(
-            env.typecheck_closure(&mut tmp_generator, level_label, &closure),
+            env.typecheck_closure(&mut tmp_generator, level_label, &closure)
+                .map(TranslateOutput::unwrap),
             Ok(Rc::new(Type::Fn(vec![Rc::new(Type::Int)], Rc::new(Type::Int))))
         );
     }
@@ -3491,7 +3635,8 @@ mod tests {
         });
 
         assert_eq!(
-            env.typecheck_closure(&mut tmp_generator, level_label, &closure),
+            env.typecheck_closure(&mut tmp_generator, level_label, &closure)
+                .map(TranslateOutput::unwrap),
             Ok(Rc::new(Type::Fn(vec![Rc::new(Type::Int)], Rc::new(Type::String))))
         );
     }
@@ -3567,7 +3712,8 @@ mod tests {
                 &mut tmp_generator,
                 level_label,
                 &zspan!(ExprType::Seq(vec![fn_decl1, let_expr, fn_decl2], false))
-            ),
+            )
+            .map(TranslateOutput::unwrap),
             Ok(Rc::new(Type::Unit))
         );
     }
