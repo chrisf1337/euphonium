@@ -21,12 +21,12 @@ impl std::fmt::Display for Tmp {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Label(pub usize);
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Label(pub String);
 
 impl Label {
     pub fn top() -> Self {
-        Label(0)
+        Label("top".to_owned())
     }
 }
 
@@ -62,6 +62,12 @@ impl TmpGenerator {
     pub fn new_label(&mut self) -> Label {
         let label_count = self.current_label_count;
         self.current_label_count += 1;
-        Label(label_count)
+        Label(format!("L{}", label_count))
+    }
+
+    pub fn new_named_label(&mut self, name: &str) -> Label {
+        let label_count = self.current_label_count;
+        self.current_label_count += 1;
+        Label(format!("L{}{}", name, label_count))
     }
 }

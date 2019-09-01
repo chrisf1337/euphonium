@@ -34,7 +34,7 @@ impl Frame {
 
         Frame {
             name: name.to_owned(),
-            label: tmp_generator.new_label(),
+            label: tmp_generator.new_named_label(name),
             formals: accesses,
             n_locals: 0,
         }

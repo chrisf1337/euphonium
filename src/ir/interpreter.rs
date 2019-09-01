@@ -47,8 +47,8 @@ impl Interpreter {
         }
     }
 
-    pub fn jump(&mut self, label: Label) {
-        self.ip = self.label_table[&label];
+    pub fn jump(&mut self, label: &Label) {
+        self.ip = self.label_table[label];
     }
 
     pub fn step(&mut self) {
@@ -119,9 +119,9 @@ impl Interpreter {
                 match op {
                     ir::CompareOp::Eq => {
                         if l == r {
-                            self.jump(*t_label);
+                            self.jump(t_label);
                         } else {
-                            self.jump(*f_label);
+                            self.jump(f_label);
                         }
                     }
                     _ => unimplemented!(),
@@ -270,11 +270,11 @@ mod tests {
         let mut tmp_generator = TmpGenerator::default();
         let mut interpreter = Interpreter::new(Expr::Stmt(ir::Stmt::Expr(ir::Expr::Const(0))));
         let mut level = Level::new(&mut tmp_generator, Some(Label::top()), "f", &[]);
-        let label = level.label();
         let (local, addr) = interpreter.alloc_local(&mut tmp_generator, &mut level, true);
+        let label = level.label();
         let levels = hashmap! {
             Label::top() => Level::top(),
-            label => level,
+            label.clone() => level.clone(),
         };
         let expr = Env::translate_simple_var(&levels, local, label).clone();
         interpreter.write_u64(0x1234, addr.unwrap());
@@ -290,11 +290,11 @@ mod tests {
         let mut tmp_generator = TmpGenerator::default();
         let mut interpreter = Interpreter::new(Expr::Stmt(ir::Stmt::Expr(ir::Expr::Const(0))));
         let mut level = Level::new(&mut tmp_generator, Some(Label::top()), "f", &[]);
-        let label = level.label();
         let (local, addr) = interpreter.alloc_local(&mut tmp_generator, &mut level, true);
+        let label = level.label();
         let levels = hashmap! {
             Label::top() => Level::top(),
-            label => level,
+            label.clone() => level.clone(),
         };
 
         // Array located at 0x100. Write address into local.
