@@ -3,8 +3,9 @@ use crate::{
         self, Arith, ArithOp, Array, Assign, Bool, Closure, Compare, Decl, DeclType, Enum, Expr, ExprType, FieldAssign,
         FnCall, FnDecl, For, If, LVal, Let, Pattern, Range, Record, Spanned, TypeDecl, TypeDeclType, While,
     },
+    frame::{self, Frame},
     ir,
-    tmp::{Label, TmpGenerator},
+    tmp::{self, Label, TmpGenerator},
     translate::{self, Access, Level},
 };
 use codespan::{ByteIndex, ByteSpan};
@@ -15,7 +16,6 @@ use std::{
     cell::RefCell,
     collections::{HashMap, HashSet},
     hash::Hash,
-    ops::{Deref, DerefMut},
     rc::Rc,
     str::FromStr,
 };
@@ -36,6 +36,16 @@ impl<T> TranslateOutput<T> {
         TranslateOutput {
             t: f(self.t),
             expr: self.expr,
+        }
+    }
+
+    pub fn map_expr<F>(self, f: F) -> TranslateOutput<T>
+    where
+        F: FnOnce(translate::Expr) -> translate::Expr,
+    {
+        TranslateOutput {
+            t: self.t,
+            expr: f(self.expr),
         }
     }
 
@@ -472,16 +482,17 @@ impl<'a> Env<'a> {
         level_label: Label,
         expr: &Expr,
         ty: &Rc<Type>,
-    ) -> Result<Rc<Type>> {
-        let expr_type = self.typecheck_expr(tmp_generator, level_label, expr)?.t;
-        let resolved_expr_type = self.resolve_type(&expr_type, expr.span)?;
+    ) -> Result<TranslateOutput<Rc<Type>>> {
+        let translate_output = self.typecheck_expr(tmp_generator, level_label, expr)?;
+        let expr_type = &translate_output.t;
+        let resolved_expr_type = self.resolve_type(expr_type, expr.span)?;
         if ty != &resolved_expr_type {
             Err(vec![TypecheckErr::new_err(
                 TypecheckErrType::TypeMismatch(ty.clone(), expr_type.clone()),
                 expr.span,
             )])
         } else {
-            Ok(expr_type.clone())
+            Ok(translate_output)
         }
     }
 
@@ -945,13 +956,7 @@ impl<'a> Env<'a> {
                 t: Rc::new(Type::Int),
                 expr: translate::Expr::Expr(ir::Expr::Const(0)),
             }),
-            ExprType::Neg(expr) => {
-                let ty = self.assert_ty(tmp_generator, level_label, expr, &Rc::new(Type::Int))?;
-                Ok(TranslateOutput {
-                    t: ty,
-                    expr: translate::Expr::Expr(ir::Expr::Const(0)),
-                })
-            }
+            ExprType::Neg(expr) => self.assert_ty(tmp_generator, level_label, expr, &Rc::new(Type::Int)),
             ExprType::Arith(arith) => self.typecheck_arith(tmp_generator, level_label, arith),
             ExprType::Unit | ExprType::Continue | ExprType::Break => Ok(TranslateOutput {
                 t: Rc::new(Type::Unit),
@@ -961,13 +966,7 @@ impl<'a> Env<'a> {
                 t: Rc::new(Type::Bool),
                 expr: translate::Expr::Expr(ir::Expr::Const(0)),
             }),
-            ExprType::Not(expr) => {
-                let ty = self.assert_ty(tmp_generator, level_label, expr, &Rc::new(Type::Bool))?;
-                Ok(TranslateOutput {
-                    t: ty,
-                    expr: translate::Expr::Expr(ir::Expr::Const(0)),
-                })
-            }
+            ExprType::Not(expr) => self.assert_ty(tmp_generator, level_label, expr, &Rc::new(Type::Bool)),
             ExprType::Bool(bool_expr) => self.typecheck_bool(tmp_generator, level_label, bool_expr),
             ExprType::LVal(lval) => Ok(self
                 .typecheck_lval(tmp_generator, level_label, lval)?
@@ -1472,20 +1471,49 @@ impl<'a> Env<'a> {
         level_label: Label,
         Spanned { t: expr, span }: &Spanned<If>,
     ) -> Result<TranslateOutput<Rc<Type>>> {
-        self.assert_ty(tmp_generator, level_label, &expr.cond, &Rc::new(Type::Bool))?;
-        let then_expr_type = self.typecheck_expr(tmp_generator, level_label, &expr.then_expr)?.t;
-        if let Some(else_expr) = &expr.else_expr {
-            let else_expr_type = self.typecheck_expr(tmp_generator, level_label, else_expr)?.t;
+        let true_label = tmp_generator.new_label();
+        let false_label = tmp_generator.new_label();
+        let join_label = tmp_generator.new_label();
+        let result = tmp_generator.new_tmp();
+        let cond_gen = self
+            .assert_ty(tmp_generator, level_label, &expr.cond, &Rc::new(Type::Bool))?
+            .expr
+            .unwrap_cond();
+
+        let mut injected_labels = None;
+        let mut then_expr_was_cond = false;
+        let mut else_expr_was_cond = false;
+
+        let TranslateOutput {
+            t: then_expr_type,
+            expr: translated_then_expr,
+        } = self.typecheck_expr(tmp_generator, level_label, &expr.then_expr)?;
+        let then_instr = match translated_then_expr {
+            translate::Expr::Stmt(stmt) => {
+                // If the then expression is a statement, don't bother unwrapping into an Expr::Expr and just run it
+                // directly.
+                stmt
+            }
+            translate::Expr::Cond(cond_gen) => {
+                let true_label = tmp_generator.new_label();
+                let false_label = tmp_generator.new_label();
+                let stmt = ir::Stmt::seq(vec![cond_gen(true_label, false_label)]);
+                injected_labels = Some((true_label, false_label));
+                then_expr_was_cond = true;
+                stmt
+            }
+            expr => ir::Stmt::Move(ir::Expr::Tmp(result), expr.unwrap_expr(tmp_generator)),
+        };
+
+        let else_instr = if let Some(else_expr) = &expr.else_expr {
+            let TranslateOutput {
+                t: else_expr_type,
+                expr: translated_else_expr,
+            } = self.typecheck_expr(tmp_generator, level_label, else_expr)?;
             if self.resolve_type(&then_expr_type, expr.then_expr.span)?
-                == self.resolve_type(&else_expr_type, else_expr.span)?
+                != self.resolve_type(&else_expr_type, else_expr.span)?
             {
-                // Arbitrarily pick the then branch
-                Ok(TranslateOutput {
-                    t: then_expr_type,
-                    expr: translate::Expr::Expr(ir::Expr::Const(0)),
-                })
-            } else {
-                Err(vec![TypecheckErr::new_err(
+                return Err(vec![TypecheckErr::new_err(
                     TypecheckErrType::TypeMismatch(then_expr_type.clone(), else_expr_type.clone()),
                     *span,
                 )
@@ -1495,7 +1523,23 @@ impl<'a> Env<'a> {
                         then_expr_type, else_expr_type
                     ),
                     *span,
-                ))])
+                ))]);
+            } else {
+                Some(match translated_else_expr {
+                    translate::Expr::Stmt(stmt) => {
+                        // If the then expression is a statement, don't bother unwrapping into an Expr::Expr and just run it
+                        // directly.
+                        stmt
+                    }
+                    translate::Expr::Cond(cond_gen) => {
+                        let (true_label, false_label) = injected_labels
+                            .get_or_insert_with(|| (tmp_generator.new_label(), tmp_generator.new_label()));
+                        let stmt = ir::Stmt::seq(vec![cond_gen(*true_label, *false_label)]);
+                        else_expr_was_cond = true;
+                        stmt
+                    }
+                    expr => ir::Stmt::Move(ir::Expr::Tmp(result), expr.unwrap_expr(tmp_generator)),
+                })
             }
         } else {
             if then_expr_type != Rc::new(Type::Unit) {
@@ -1504,11 +1548,53 @@ impl<'a> Env<'a> {
                     expr.then_expr.span,
                 )]);
             }
-            Ok(TranslateOutput {
-                t: Rc::new(Type::Unit),
-                expr: translate::Expr::Expr(ir::Expr::Const(0)),
-            })
+            None
+        };
+
+        let cond_stmt = if else_instr.is_some() {
+            cond_gen(true_label, false_label)
+        } else {
+            // Jump directly to join_label if there's no else branch
+            cond_gen(true_label, join_label)
+        };
+
+        let mut seq = vec![cond_stmt, ir::Stmt::Label(true_label), then_instr];
+        // then_instr will be a CJump if then_expr was Cond, so only insert a Jump if then_expr wasn't Cond
+        if !then_expr_was_cond {
+            seq.extend_from_slice(&[ir::Stmt::Jump(ir::Expr::Label(join_label), vec![join_label])]);
         }
+        if let Some(else_instr) = &else_instr {
+            seq.extend(vec![ir::Stmt::Label(false_label), else_instr.clone()]);
+            // Same logic here
+            if !else_expr_was_cond {
+                seq.extend_from_slice(&[ir::Stmt::Jump(ir::Expr::Label(join_label), vec![join_label])]);
+            }
+        }
+
+        if then_expr_was_cond || else_expr_was_cond {
+            let (true_label, false_label) = injected_labels.unwrap();
+            seq.extend_from_slice(&[
+                ir::Stmt::Label(true_label),
+                ir::Stmt::Move(ir::Expr::Tmp(result), ir::Expr::Const(1)),
+                ir::Stmt::Jump(ir::Expr::Label(join_label), vec![join_label]),
+                ir::Stmt::Label(false_label),
+                ir::Stmt::Move(ir::Expr::Tmp(result), ir::Expr::Const(0)),
+                ir::Stmt::Jump(ir::Expr::Label(join_label), vec![join_label]),
+            ]);
+        }
+        seq.push(ir::Stmt::Label(join_label));
+
+        Ok(TranslateOutput {
+            t: if else_instr.is_some() {
+                then_expr_type
+            } else {
+                Rc::new(Type::Unit)
+            },
+            expr: translate::Expr::Expr(ir::Expr::Seq(
+                Box::new(ir::Stmt::seq(seq)),
+                Box::new(ir::Expr::Tmp(result)),
+            )),
+        })
     }
 
     fn typecheck_range(
@@ -1581,11 +1667,17 @@ impl<'a> Env<'a> {
         level_label: Label,
         Spanned { t: expr, .. }: &Spanned<Arith>,
     ) -> Result<TranslateOutput<Rc<Type>>> {
-        self.assert_ty(tmp_generator, level_label, &expr.l, &Rc::new(Type::Int))?;
-        self.assert_ty(tmp_generator, level_label, &expr.r, &Rc::new(Type::Int))?;
+        let TranslateOutput { expr: l_expr, .. } =
+            self.assert_ty(tmp_generator, level_label, &expr.l, &Rc::new(Type::Int))?;
+        let TranslateOutput { expr: r_expr, .. } =
+            self.assert_ty(tmp_generator, level_label, &expr.r, &Rc::new(Type::Int))?;
         Ok(TranslateOutput {
             t: Rc::new(Type::Int),
-            expr: translate::Expr::Expr(ir::Expr::Const(0)),
+            expr: translate::Expr::Expr(ir::Expr::BinOp(
+                Box::new(l_expr.unwrap_expr(tmp_generator)),
+                expr.op.t.into(),
+                Box::new(r_expr.unwrap_expr(tmp_generator)),
+            )),
         })
     }
 
@@ -1609,23 +1701,24 @@ impl<'a> Env<'a> {
         level_label: Label,
         Spanned { t: expr, span }: &Spanned<Compare>,
     ) -> Result<TranslateOutput<Rc<Type>>> {
-        let left_type = self.resolve_type(
-            &self.typecheck_expr(tmp_generator, level_label, &expr.l)?.t,
-            expr.l.span,
-        )?;
-        let right_type = self.resolve_type(
-            &self.typecheck_expr(tmp_generator, level_label, &expr.r)?.t,
-            expr.r.span,
-        )?;
+        let TranslateOutput { t: l_ty, expr: l_expr } = self.typecheck_expr(tmp_generator, level_label, &expr.l)?;
+        let TranslateOutput { t: r_ty, expr: r_expr } = self.typecheck_expr(tmp_generator, level_label, &expr.r)?;
+        let left_type = self.resolve_type(&l_ty, expr.l.span)?;
+        let right_type = self.resolve_type(&r_ty, expr.r.span)?;
         if left_type != right_type {
             Err(vec![TypecheckErr::new_err(
                 TypecheckErrType::TypeMismatch(left_type.clone(), right_type.clone()),
                 *span,
             )])
         } else {
+            let l_expr = l_expr.unwrap_expr(tmp_generator).clone();
+            let r_expr = r_expr.unwrap_expr(tmp_generator).clone();
+            let op = expr.op.t.into();
             Ok(TranslateOutput {
                 t: Rc::new(Type::Bool),
-                expr: translate::Expr::Expr(ir::Expr::Const(0)),
+                expr: translate::Expr::Cond(Rc::new(move |true_label, false_label| {
+                    ir::Stmt::CJump(l_expr.clone(), op, r_expr.clone(), true_label, false_label)
+                })),
             })
         }
     }
@@ -1795,6 +1888,50 @@ impl<'a> Env<'a> {
         } else {
             panic!("expected function type");
         }
+    }
+
+    pub fn translate_simple_var(levels: &HashMap<Label, Level>, access: Access, level_label: Label) -> translate::Expr {
+        fn _translate_simple_var(
+            levels: &HashMap<Label, Level>,
+            access: Access,
+            level_label: Label,
+            acc_expr: ir::Expr,
+        ) -> ir::Expr {
+            if level_label == Label::top() {
+                panic!("simple_var() reached top");
+            }
+            if level_label == access.level_label {
+                Frame::expr(access.access, &acc_expr)
+            } else {
+                let level = &levels[&level_label];
+                let parent_label = level.parent_label.expect("level has no parent");
+                _translate_simple_var(levels, access, parent_label, ir::Expr::Mem(Box::new(acc_expr)))
+            }
+        }
+
+        translate::Expr::Expr(_translate_simple_var(
+            levels,
+            access,
+            level_label,
+            ir::Expr::Tmp(*tmp::FP),
+        ))
+    }
+
+    /// `array_expr` is a dereferenced pointer to memory on the heap where the first element of the array lives.
+    pub fn translate_pointer_offset(
+        tmp_generator: &mut TmpGenerator,
+        array_expr: &translate::Expr,
+        index_expr: &translate::Expr,
+    ) -> translate::Expr {
+        translate::Expr::Expr(ir::Expr::Mem(Box::new(ir::Expr::BinOp(
+            Box::new(array_expr.clone().unwrap_expr(tmp_generator)),
+            ir::BinOp::Add,
+            Box::new(ir::Expr::BinOp(
+                Box::new(index_expr.clone().unwrap_expr(tmp_generator)),
+                ir::BinOp::Mul,
+                Box::new(ir::Expr::Const(frame::WORD_SIZE)),
+            )),
+        ))))
     }
 }
 
@@ -3751,5 +3888,80 @@ mod tests {
                 .ty,
             TypecheckErrType::UndefinedVar("h".to_owned())
         );
+    }
+
+    #[test]
+    fn test_add_static_link() {
+        let mut tmp_generator = TmpGenerator::default();
+        let level = Level::new(&mut tmp_generator, Some(Label::top()), "f", &[]);
+
+        assert_eq!(level.frame.formals.len(), 1);
+        assert_eq!(level.frame.formals[0], frame::Access::InFrame(0));
+    }
+
+    #[test]
+    fn test_follows_static_links() {
+        {
+            let mut tmp_generator = TmpGenerator::default();
+            let frame = Frame::new(&mut tmp_generator, "f", &[]);
+            let label = frame.label;
+            let mut levels = hashmap! {
+                Label::top() => Level::top(),
+                frame.label => Level {
+                    parent_label: Some(Label::top()),
+                    frame,
+                },
+            };
+            let level = levels.get_mut(&label).unwrap();
+            let local = level.alloc_local(&mut tmp_generator, true);
+
+            assert_eq!(
+                Env::translate_simple_var(&levels, local, label),
+                translate::Expr::Expr(ir::Expr::Mem(Box::new(ir::Expr::BinOp(
+                    Box::new(ir::Expr::Tmp(*tmp::FP)),
+                    ir::BinOp::Add,
+                    Box::new(ir::Expr::Const(-frame::WORD_SIZE))
+                ))))
+            );
+        }
+
+        {
+            let mut tmp_generator = TmpGenerator::default();
+            let frame_f = Frame::new(&mut tmp_generator, "f", &[]);
+            let label_f = frame_f.label;
+            let frame_g = Frame::new(&mut tmp_generator, "g", &[]);
+            let label_g = frame_g.label;
+            let mut levels = hashmap! {
+                Label::top() => Level::top(),
+                label_f => Level {
+                    parent_label: Some(Label::top()),
+                    frame: frame_f,
+                },
+                label_g => Level {
+                    parent_label: Some(label_f),
+                    frame: frame_g,
+                }
+            };
+            let level = levels.get_mut(&label_f).unwrap();
+            let local = level.alloc_local(&mut tmp_generator, true);
+
+            assert_eq!(
+                Env::translate_simple_var(&levels, local, label_g),
+                translate::Expr::Expr(ir::Expr::Mem(Box::new(ir::Expr::BinOp(
+                    Box::new(ir::Expr::Mem(Box::new(ir::Expr::Tmp(*tmp::FP)))),
+                    ir::BinOp::Add,
+                    Box::new(ir::Expr::Const(-frame::WORD_SIZE))
+                ))))
+            );
+        }
+    }
+
+    #[test]
+    fn test_translate_if() {
+        let if_expr = ast::If {
+            cond: zspan!(ast::ExprType::BoolLiteral(true)),
+            then_expr: zspan!(ast::ExprType::BoolLiteral(true)),
+            else_expr: None,
+        };
     }
 }

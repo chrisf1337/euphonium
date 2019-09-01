@@ -227,7 +227,8 @@ mod tests {
     use crate::{
         ir,
         tmp::{Label, TmpGenerator},
-        translate::{self, Expr, Translator},
+        translate::{self, Expr},
+        typecheck::Env,
     };
     use maplit::hashmap;
 
@@ -275,8 +276,7 @@ mod tests {
             Label::top() => Level::top(),
             label => level,
         };
-        let mut translator = Translator::new(&mut tmp_generator);
-        let expr = translator.translate_simple_var(&levels, local, label).clone();
+        let expr = Env::translate_simple_var(&levels, local, label).clone();
         interpreter.write_u64(0x1234, addr.unwrap());
 
         assert_eq!(
@@ -302,12 +302,23 @@ mod tests {
         interpreter.write_u64s(&[1, 2, 3], 0x100);
 
         let (expr1, expr2, expr3) = {
-            let mut translator = Translator::new(&mut tmp_generator);
-            let array_expr = translator.translate_simple_var(&levels, local, label);
+            let array_expr = Env::translate_simple_var(&levels, local, label);
             (
-                translator.translate_pointer_offset(&array_expr, &translate::Expr::Expr(ir::Expr::Const(0))),
-                translator.translate_pointer_offset(&array_expr, &translate::Expr::Expr(ir::Expr::Const(1))),
-                translator.translate_pointer_offset(&array_expr, &translate::Expr::Expr(ir::Expr::Const(2))),
+                Env::translate_pointer_offset(
+                    &mut tmp_generator,
+                    &array_expr,
+                    &translate::Expr::Expr(ir::Expr::Const(0)),
+                ),
+                Env::translate_pointer_offset(
+                    &mut tmp_generator,
+                    &array_expr,
+                    &translate::Expr::Expr(ir::Expr::Const(1)),
+                ),
+                Env::translate_pointer_offset(
+                    &mut tmp_generator,
+                    &array_expr,
+                    &translate::Expr::Expr(ir::Expr::Const(2)),
+                ),
             )
         };
 

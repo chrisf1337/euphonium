@@ -7,7 +7,7 @@ use crate::{
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Level {
     pub parent_label: Option<Label>,
-    pub(in crate::translate) frame: Frame,
+    pub frame: Frame,
 }
 
 impl Level {
