@@ -23,7 +23,7 @@ pub struct Interpreter {
 }
 
 impl Interpreter {
-    pub fn new(expr: Expr) -> Interpreter {
+    fn new(expr: Expr) -> Interpreter {
         let mut tmp_generator = TmpGenerator::default();
         let stmts = expr.unwrap_stmt(&mut tmp_generator).flatten();
         let mut label_table = HashMap::new();
@@ -47,33 +47,39 @@ impl Interpreter {
         }
     }
 
-    pub fn jump(&mut self, label: &Label) {
+    fn jump(&mut self, label: &Label) {
         self.ip = self.label_table[label];
     }
 
-    pub fn step(&mut self) {
+    fn step(&mut self) {
         let stmt = self.stmts[self.ip].clone();
         self.interpret_stmt(&stmt);
         self.ip += 1;
     }
 
-    pub fn sp(&self) -> u64 {
+    fn run(&mut self) {
+        while self.ip < self.stmts.len() {
+            self.step();
+        }
+    }
+
+    fn sp(&self) -> u64 {
         self.tmps[&tmp::SP]
     }
 
-    pub fn sp_mut(&mut self) -> &mut u64 {
+    fn sp_mut(&mut self) -> &mut u64 {
         self.tmps.get_mut(&tmp::SP).unwrap()
     }
 
-    pub fn fp(&self) -> u64 {
+    fn fp(&self) -> u64 {
         self.tmps[&tmp::FP]
     }
 
-    pub fn fp_mut(&mut self) -> &mut u64 {
+    fn fp_mut(&mut self) -> &mut u64 {
         self.tmps.get_mut(&tmp::FP).unwrap()
     }
 
-    pub fn interpret_expr_as_rvalue(&mut self, expr: &ir::Expr) -> u64 {
+    fn interpret_expr_as_rvalue(&mut self, expr: &ir::Expr) -> u64 {
         match expr {
             ir::Expr::Const(c) => unsafe { std::mem::transmute(*c) },
             ir::Expr::Tmp(tmp) => self.tmps[tmp],
@@ -92,12 +98,12 @@ impl Interpreter {
                 let addr = self.interpret_expr_as_rvalue(expr);
                 self.read_u64(addr)
             }
-            ir::Expr::Seq(stmt, expr) => unimplemented!(),
+            ir::Expr::Seq(..) => panic!("cannot interpret {:?}", expr),
             _ => unimplemented!(),
         }
     }
 
-    pub fn interpret_stmt(&mut self, stmt: &ir::Stmt) {
+    fn interpret_stmt(&mut self, stmt: &ir::Stmt) {
         match stmt {
             ir::Stmt::Move(dst, src) => {
                 let value = self.interpret_expr_as_rvalue(src);
@@ -127,31 +133,39 @@ impl Interpreter {
                     _ => unimplemented!(),
                 }
             }
-            _ => unimplemented!(),
+            ir::Stmt::Label(_) => (),
+            ir::Stmt::Jump(expr, _) => {
+                if let ir::Expr::Label(label) = expr {
+                    self.jump(label)
+                } else {
+                    panic!("unexpected jump target: {:?}", expr)
+                }
+            }
+            _ => unimplemented!("{:?}", stmt),
         }
     }
 
-    pub fn write_u64(&mut self, u: u64, addr: u64) {
+    fn write_u64(&mut self, u: u64, addr: u64) {
         let bytes = u.to_le_bytes();
         let addr = addr as usize;
         self.memory[addr..addr + frame::WORD_SIZE as usize].copy_from_slice(&bytes);
     }
 
-    pub fn read_u64(&self, addr: u64) -> u64 {
+    fn read_u64(&self, addr: u64) -> u64 {
         let mut bytes = [0u8; frame::WORD_SIZE as usize];
         let addr = addr as usize;
         bytes.copy_from_slice(&self.memory[addr..addr + frame::WORD_SIZE as usize]);
         u64::from_le_bytes(bytes)
     }
 
-    pub fn write_u64s(&mut self, us: &[u64], mut addr: u64) {
+    fn write_u64s(&mut self, us: &[u64], mut addr: u64) {
         for &u in us {
             self.write_u64(u, addr);
             addr += std::mem::size_of::<u64>() as u64;
         }
     }
 
-    pub fn read_u64s(&self, addr: u64, n: usize) -> Vec<u64> {
+    fn read_u64s(&self, addr: u64, n: usize) -> Vec<u64> {
         let mut bytes = vec![];
         for i in (addr..addr + (n * std::mem::size_of::<u64>()) as u64).step_by(std::mem::size_of::<u64>()) {
             bytes.push(self.read_u64(i));
@@ -159,27 +173,27 @@ impl Interpreter {
         bytes
     }
 
-    pub fn write_i64(&mut self, i: i64, addr: u64) {
+    fn write_i64(&mut self, i: i64, addr: u64) {
         let bytes = i.to_le_bytes();
         let addr = addr as usize;
         self.memory[addr..addr + frame::WORD_SIZE as usize].copy_from_slice(&bytes);
     }
 
-    pub fn read_i64(&self, addr: u64) -> i64 {
+    fn read_i64(&self, addr: u64) -> i64 {
         let mut bytes = [0u8; frame::WORD_SIZE as usize];
         let addr = addr as usize;
         bytes.copy_from_slice(&self.memory[addr..addr + frame::WORD_SIZE as usize]);
         i64::from_le_bytes(bytes)
     }
 
-    pub fn write_i64s(&mut self, is: &[i64], mut addr: u64) {
+    fn write_i64s(&mut self, is: &[i64], mut addr: u64) {
         for &i in is {
             self.write_i64(i, addr);
             addr += std::mem::size_of::<i64>() as u64;
         }
     }
 
-    pub fn read_i64s(&self, addr: u64, n: usize) -> Vec<i64> {
+    fn read_i64s(&self, addr: u64, n: usize) -> Vec<i64> {
         let mut bytes = vec![];
         for i in (addr..addr + (n * std::mem::size_of::<u64>()) as u64).step_by(std::mem::size_of::<u64>()) {
             bytes.push(self.read_i64(i));
@@ -187,7 +201,7 @@ impl Interpreter {
         bytes
     }
 
-    pub fn dump_to_file(&self, name: &str) {
+    fn dump_to_file(&self, name: &str) {
         let path = match env::var("CARGO_MANIFEST_DIR") {
             Ok(dir) => {
                 let dir_path = Path::new(&dir);
@@ -204,7 +218,7 @@ impl Interpreter {
         file.write_all(&self.memory).expect("failed to write to file");
     }
 
-    pub fn alloc_local(
+    fn alloc_local(
         &mut self,
         tmp_generator: &mut TmpGenerator,
         level: &mut Level,
@@ -347,16 +361,31 @@ mod tests {
         assert_eq!(interpreter.read_u64(interpreter.tmps[&tmp::SP]), 0x200);
     }
 
-    // #[test]
-    // fn test_cjump() {
-    //     let mut tmp_generator = TmpGenerator::default();
-    //     let t_label = tmp_generator.new_label();
-    //     let f_label = tmp_generator.new_label();
-    //     let stmts = vec![
-    //         ir::Stmt::CJump(ir::Expr::Const(0), ir::CompareOp::Eq, ir::Expr::Const(0), t_label, f_label),
-    //         t_label,
-    //         ir::Stmt::Expr()
-    //     ];
-    //     let mut interpreter = Interpreter::new(Expr::Stmt())
-    // }
+    #[test]
+    fn test_cjump() {
+        let mut tmp_generator = TmpGenerator::default();
+        let t_label = tmp_generator.new_label();
+        let f_label = tmp_generator.new_label();
+        let join_label = tmp_generator.new_label();
+        let stmts = vec![
+            ir::Stmt::CJump(
+                ir::Expr::Const(0),
+                ir::CompareOp::Eq,
+                ir::Expr::Const(0),
+                t_label.clone(),
+                f_label.clone(),
+            ),
+            ir::Stmt::Label(t_label),
+            ir::Stmt::Move(ir::Expr::Mem(Box::new(ir::Expr::Const(0x200))), ir::Expr::Const(123)),
+            ir::Stmt::Jump(ir::Expr::Label(join_label.clone()), vec![join_label.clone()]),
+            ir::Stmt::Label(f_label),
+            ir::Stmt::Move(ir::Expr::Mem(Box::new(ir::Expr::Const(0x200))), ir::Expr::Const(456)),
+            ir::Stmt::Jump(ir::Expr::Label(join_label.clone()), vec![join_label.clone()]),
+            ir::Stmt::Label(join_label),
+        ];
+        let mut interpreter = Interpreter::new(Expr::Stmt(ir::Stmt::seq(stmts)));
+        interpreter.run();
+
+        assert_eq!(interpreter.read_u64(0x200), 123);
+    }
 }
