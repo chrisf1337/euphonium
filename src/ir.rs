@@ -40,14 +40,91 @@ impl Stmt {
             .fold(Box::new(last), |acc, next| Box::new(Stmt::Seq(Box::new(next), acc)))
     }
 
-    pub fn flatten(stmt: Stmt) -> Vec<Stmt> {
-        match stmt {
-            Stmt::Seq(fst, snd) => {
-                let mut v = Stmt::flatten(*fst);
-                v.extend(Stmt::flatten(*snd));
-                v
+    pub fn flatten(&self) -> Vec<Stmt> {
+        let mut stmts = vec![];
+        match self {
+            Stmt::Move(dst, src) => {
+                let (src_stmts, src_expr) = src.flatten();
+                let (dst_stmts, dst_expr) = dst.flatten();
+                stmts.extend(src_stmts);
+                stmts.extend(dst_stmts);
+                stmts.push(Stmt::Move(dst_expr, src_expr));
+                stmts
             }
-            s => vec![s],
+            Stmt::Expr(expr) => {
+                let (mut stmts, expr) = expr.flatten();
+                stmts.push(Stmt::Expr(expr.clone()));
+                stmts
+            }
+            Stmt::Jump(expr, labels) => {
+                let (mut stmts, expr) = expr.flatten();
+                stmts.push(Stmt::Jump(expr.clone(), labels.clone()));
+                stmts
+            }
+            Stmt::CJump(l, op, r, true_label, false_label) => {
+                let mut stmts = vec![];
+                let (l_stmts, l_expr) = l.flatten();
+                let (r_stmts, r_expr) = r.flatten();
+                stmts.extend(l_stmts);
+                stmts.extend(r_stmts);
+                stmts.push(Stmt::CJump(
+                    l_expr,
+                    *op,
+                    r_expr,
+                    true_label.clone(),
+                    false_label.clone(),
+                ));
+                stmts
+            }
+            Stmt::Seq(stmt1, stmt2) => {
+                let mut stmts = vec![];
+                stmts.extend(stmt1.flatten());
+                stmts.extend(stmt2.flatten());
+                stmts
+            }
+            stmt => vec![stmt.clone()],
+        }
+    }
+}
+
+impl Expr {
+    pub fn flatten(&self) -> (Vec<Stmt>, Expr) {
+        match self {
+            Expr::Const(c) => (vec![], Expr::Const(*c)),
+            Expr::Label(label) => (vec![], Expr::Label(label.clone())),
+            Expr::Tmp(tmp) => (vec![], Expr::Tmp(*tmp)),
+            Expr::BinOp(l, op, r) => {
+                let mut stmts = vec![];
+                let (l_stmts, l_expr) = l.flatten();
+                let (r_stmts, r_expr) = r.flatten();
+                stmts.extend(l_stmts);
+                stmts.extend(r_stmts);
+                (stmts, Expr::BinOp(Box::new(l_expr), *op, Box::new(r_expr)))
+            }
+            Expr::Mem(expr) => {
+                let (stmts, expr) = expr.flatten();
+                (stmts, Expr::Mem(Box::new(expr)))
+            }
+            Expr::Call(func, args) => {
+                let mut stmts = vec![];
+                // Assume that if func is ever not just a label, it must be a Seq whose expr is Label
+                let (func_stmts, func_expr) = func.flatten();
+                stmts.extend(func_stmts);
+
+                let mut arg_exprs = vec![];
+                for arg in args {
+                    let (arg_stmts, arg_expr) = arg.flatten();
+                    stmts.extend(arg_stmts);
+                    arg_exprs.push(arg_expr);
+                }
+                (stmts, Expr::Call(Box::new(func_expr), arg_exprs))
+            }
+            Expr::Seq(stmt, expr) => {
+                let mut stmts = stmt.flatten();
+                let (expr_stmts, expr) = expr.flatten();
+                stmts.extend(expr_stmts);
+                (stmts, expr)
+            }
         }
     }
 }
@@ -108,6 +185,67 @@ impl From<ast::CompareOp> for CompareOp {
 mod tests {
     use super::*;
     use crate::tmp::TmpGenerator;
+    use std::collections::HashMap;
+
+    fn tmp_eq_in_expr(tmp_table: &mut HashMap<Tmp, Tmp>, expr1: &Expr, expr2: &Expr) -> bool {
+        match (expr1, expr2) {
+            (Expr::Tmp(tmp1), Expr::Tmp(tmp2)) => {
+                if let Some(expected_tmp2) = tmp_table.get(tmp1) {
+                    if tmp2 != expected_tmp2 {
+                        return false;
+                    }
+                } else {
+                    tmp_table.insert(*tmp1, *tmp2);
+                }
+                true
+            }
+            (Expr::BinOp(l1, _, r1), Expr::BinOp(l2, _, r2)) => {
+                tmp_eq_in_expr(tmp_table, l1, l2) && tmp_eq_in_expr(tmp_table, r1, r2)
+            }
+            (Expr::Mem(expr1), Expr::Mem(expr2)) => tmp_eq_in_expr(tmp_table, expr1, expr2),
+            (Expr::Call(func1, args1), Expr::Call(func2, args2)) => {
+                tmp_eq_in_expr(tmp_table, func1, func2)
+                    && args1
+                        .into_iter()
+                        .zip(args2.into_iter())
+                        .fold(true, |acc, (arg1, arg2)| acc && tmp_eq_in_expr(tmp_table, arg1, arg2))
+            }
+            (Expr::Seq(stmt1, expr1), Expr::Seq(stmt2, expr2)) => {
+                tmp_eq_in_stmt(tmp_table, stmt1, stmt2) && tmp_eq_in_expr(tmp_table, expr1, expr2)
+            }
+            _ => expr1 == expr2,
+        }
+    }
+
+    fn tmp_eq_in_stmt(tmp_table: &mut HashMap<Tmp, Tmp>, stmt1: &Stmt, stmt2: &Stmt) -> bool {
+        match (stmt1, stmt2) {
+            (Stmt::Move(dst1, src1), Stmt::Move(dst2, src2)) => {
+                tmp_eq_in_expr(tmp_table, dst1, dst2) && tmp_eq_in_expr(tmp_table, src1, src2)
+            }
+            (Stmt::Expr(expr1), Stmt::Expr(expr2)) => tmp_eq_in_expr(tmp_table, expr1, expr2),
+            (Stmt::Jump(expr1, _), Stmt::Jump(expr2, _)) => tmp_eq_in_expr(tmp_table, expr1, expr2),
+            (Stmt::CJump(l1, _, r1, _, _), Stmt::CJump(l2, _, r2, _, _)) => {
+                tmp_eq_in_expr(tmp_table, l1, l2) && tmp_eq_in_expr(tmp_table, r1, r2)
+            }
+            (Stmt::Seq(l_stmt1, l_stmt2), Stmt::Seq(r_stmt1, r_stmt2)) => {
+                tmp_eq_in_stmt(tmp_table, l_stmt1, r_stmt1) && tmp_eq_in_stmt(tmp_table, l_stmt2, r_stmt2)
+            }
+            _ => stmt1 == stmt2,
+        }
+    }
+
+    fn tmp_eq(stmts1: &[Stmt], stmts2: &[Stmt]) -> bool {
+        let mut tmp_table = HashMap::new();
+        if stmts1.len() != stmts2.len() {
+            return false;
+        }
+        for (stmt1, stmt2) in stmts1.into_iter().zip(stmts2.into_iter()) {
+            if !tmp_eq_in_stmt(&mut tmp_table, stmt1, stmt2) {
+                return false;
+            }
+        }
+        true
+    }
 
     #[test]
     fn test_seq() {
@@ -129,5 +267,31 @@ mod tests {
                 Box::new(Stmt::Seq(Box::new(stmt2.clone()), Box::new(stmt3.clone())))
             )
         );
+    }
+
+    #[test]
+    fn test_flatten() {
+        let stmts = Stmt::Move(
+            Expr::BinOp(
+                Box::new(Expr::Seq(
+                    Box::new(Stmt::Expr(Expr::Const(0))),
+                    Box::new(Expr::Const(0)),
+                )),
+                BinOp::Add,
+                Box::new(Expr::Const(8)),
+            ),
+            Expr::Const(0),
+        )
+        .flatten();
+        assert!(tmp_eq(
+            &stmts,
+            &vec![
+                Stmt::Expr(Expr::Const(0)),
+                Stmt::Move(
+                    Expr::BinOp(Box::new(Expr::Const(0)), BinOp::Add, Box::new(Expr::Const(8)),),
+                    Expr::Const(0),
+                ),
+            ]
+        ));
     }
 }

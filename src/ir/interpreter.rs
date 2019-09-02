@@ -25,7 +25,7 @@ pub struct Interpreter {
 impl Interpreter {
     pub fn new(expr: Expr) -> Interpreter {
         let mut tmp_generator = TmpGenerator::default();
-        let stmts = ir::Stmt::flatten(expr.unwrap_stmt(&mut tmp_generator));
+        let stmts = expr.unwrap_stmt(&mut tmp_generator).flatten();
         let mut label_table = HashMap::new();
         for (i, stmt) in stmts.iter().enumerate() {
             if let ir::Stmt::Label(label) = stmt {
