@@ -20,15 +20,14 @@ lalrpop_mod!(#[allow(clippy::all)] pub parser);
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::*;
-    use codespan::ByteOffset;
+    use crate::{ast::*, utils::EMPTY_SOURCEMAP};
 
     #[test]
     fn test_tydecls() {
         let lexer = lexer::Lexer::new(include_str!("../test-euph-files/test_tydecls.euph"));
         let mut errors = vec![];
         let parse_result = parser::ProgramParser::new()
-            .parse(ByteOffset(0), &mut errors, lexer)
+            .parse(EMPTY_SOURCEMAP.1, &mut errors, lexer)
             .map(|decls| decls.into_iter().map(Spanned::unwrap).collect::<Vec<_DeclType>>());
         assert_eq!(errors, vec![]);
         assert_eq!(
@@ -72,7 +71,7 @@ mod tests {
         let lexer = lexer::Lexer::new(include_str!("../test-euph-files/test_exprs.euph"));
         let mut errors = vec![];
         let parse_result = parser::ProgramParser::new()
-            .parse(ByteOffset(0), &mut errors, lexer)
+            .parse(EMPTY_SOURCEMAP.1, &mut errors, lexer)
             .map(|decls| decls.into_iter().map(Spanned::unwrap).collect::<Vec<_DeclType>>());
         assert_eq!(errors, vec![]);
         assert_eq!(
@@ -199,7 +198,7 @@ mod tests {
     fn test_parser() {
         let lexer = lexer::Lexer::new(include_str!("../test-euph-files/test1.euph"));
         let mut errors = vec![];
-        let parse_result = dbg!(parser::ProgramParser::new().parse(ByteOffset(0), &mut errors, lexer))
+        let parse_result = dbg!(parser::ProgramParser::new().parse(EMPTY_SOURCEMAP.1, &mut errors, lexer))
             .map(|decls| decls.into_iter().map(Spanned::unwrap).collect::<Vec<_DeclType>>());
         assert_eq!(errors, vec![]);
         assert_eq!(
@@ -258,7 +257,7 @@ mod tests {
         let lexer = lexer::Lexer::new(include_str!("../test-euph-files/test_enum_exprs.euph"));
         let mut errors = vec![];
         let parse_result = parser::ProgramParser::new()
-            .parse(ByteOffset(0), &mut errors, lexer)
+            .parse(EMPTY_SOURCEMAP.1, &mut errors, lexer)
             .map(|decls| decls.into_iter().map(Spanned::unwrap).collect::<Vec<_DeclType>>());
         assert_eq!(errors, vec![]);
         assert_eq!(
@@ -293,7 +292,7 @@ mod tests {
         let lexer = lexer::Lexer::new("type a = [int; -3]");
         let mut errors = vec![];
         let parse_result = parser::ProgramParser::new()
-            .parse(ByteOffset(0), &mut errors, lexer)
+            .parse(EMPTY_SOURCEMAP.1, &mut errors, lexer)
             .map(|decls| decls.into_iter().map(Spanned::unwrap).collect::<Vec<_DeclType>>());
         assert!(parse_result.is_err() || !errors.is_empty());
     }

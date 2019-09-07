@@ -243,6 +243,7 @@ mod tests {
         tmp::{Label, TmpGenerator},
         translate::{self, Expr},
         typecheck::Env,
+        utils::EMPTY_SOURCEMAP,
     };
     use maplit::hashmap;
 
@@ -392,7 +393,7 @@ mod tests {
     #[test]
     fn test_if_ir() {
         let mut tmp_generator = TmpGenerator::default();
-        let mut env = Env::default();
+        let mut env = Env::new(EMPTY_SOURCEMAP.1);
         let let_expr = zspan!(ast::ExprType::Let(Box::new(zspan!(ast::Let {
             pattern: zspan!(ast::Pattern::String("a".to_owned())),
             immutable: zspan!(false),

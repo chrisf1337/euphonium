@@ -8,7 +8,7 @@ use crate::{
     tmp::{self, Label, TmpGenerator},
     translate::{self, Access, Level},
 };
-use codespan::{ByteIndex, FileId, Span};
+use codespan::{FileId, Span};
 use codespan_reporting;
 use itertools::izip;
 use maplit::hashmap;
@@ -299,7 +299,7 @@ struct LValProperties {
 
 #[derive(Debug, Clone)]
 pub struct Env<'a> {
-    current_file: FileId,
+    pub current_file: FileId,
     parent: Option<&'a Env<'a>>,
     vars: HashMap<String, EnvEntry>,
     types: HashMap<String, Rc<Type>>,
@@ -1153,7 +1153,9 @@ impl<'a> Env<'a> {
                             // param_type should already be well-defined because we have already
                             // checked for invalid types
                             if self.resolve_type(&ty, arg.span)?
-                                != self.resolve_type(param_type, zspan!(self.current_file)).unwrap()
+                                != self
+                                    .resolve_type(param_type, FileSpan::new(self.current_file, Span::initial()))
+                                    .unwrap()
                             {
                                 let mut err = TypecheckErr::new_err(
                                     TypecheckErrType::TypeMismatch(param_type.clone(), ty.clone()),
@@ -1270,7 +1272,10 @@ impl<'a> Env<'a> {
                 {
                     // This should never error because we already checked for invalid types
                     let expected_type = self
-                        .resolve_type(&field_types[&field_id.t], zspan!(self.current_file))
+                        .resolve_type(
+                            &field_types[&field_id.t],
+                            FileSpan::new(self.current_file, Span::initial()),
+                        )
                         .unwrap();
                     let ty = self.typecheck_expr(tmp_generator, level_label, expr)?.t;
                     let actual_type = self.resolve_type(&ty, expr.span)?;
@@ -1760,7 +1765,9 @@ impl<'a> Env<'a> {
                                 // param_type should already be well-defined because we have already
                                 // checked for invalid types
                                 if self.resolve_type(&ty, arg.span)?
-                                    != self.resolve_type(param_type, zspan!(self.current_file)).unwrap()
+                                    != self
+                                        .resolve_type(param_type, FileSpan::new(self.current_file, Span::initial()))
+                                        .unwrap()
                                 {
                                     let mut err = TypecheckErr::new_err(
                                         TypecheckErrType::TypeMismatch(param_type.clone(), ty.clone()),
@@ -1960,13 +1967,13 @@ mod tests {
     use crate::{
         ast::{self, BoolOp, CompareOp, TypeField},
         frame,
+        utils::EMPTY_SOURCEMAP,
     };
-    use codespan::ByteOffset;
     use pretty_assertions::assert_eq;
 
     #[test]
     fn test_resolve_type() {
-        let mut env = Env::default();
+        let mut env = Env::new(EMPTY_SOURCEMAP.1);
         env.insert_type("a".to_owned(), Type::Alias("b".to_owned()), zspan!());
         env.insert_type("b".to_owned(), Type::Alias("c".to_owned()), zspan!());
         env.insert_type("c".to_owned(), Type::Int, zspan!());
@@ -1987,7 +1994,7 @@ mod tests {
 
     #[test]
     fn test_child_env() {
-        let mut env = Env::default();
+        let mut env = Env::new(EMPTY_SOURCEMAP.1);
         let var_properties = EnvEntry {
             ty: Rc::new(Type::Int),
             immutable: true,
@@ -1997,7 +2004,7 @@ mod tests {
             }),
         };
         env.insert_var("a".to_owned(), var_properties.clone(), zspan!());
-        let mut child_env = env.new_child();
+        let mut child_env = env.new_child(env.current_file);
         child_env.insert_type("i".to_owned(), Type::Alias("int".to_owned()), zspan!());
 
         assert!(child_env.contains_type("int"));
@@ -2019,7 +2026,7 @@ mod tests {
             op: zspan!(BoolOp::And),
             r: zspan!(ExprType::BoolLiteral(true)),
         }))));
-        let env = Env::default();
+        let env = Env::new(EMPTY_SOURCEMAP.1);
         assert_eq!(
             env.typecheck_expr(&mut tmp_generator, &level_label, &expr)
                 .map(TranslateOutput::unwrap),
@@ -2041,12 +2048,12 @@ mod tests {
             op: zspan!(BoolOp::And),
             r: zspan!(ExprType::BoolLiteral(true)),
         }))));
-        let env = Env::default();
+        let env = Env::new(EMPTY_SOURCEMAP.1);
         assert_eq!(
             env.typecheck_expr(&mut tmp_generator, &level_label, &expr),
             Err(vec![TypecheckErr::new_err(
                 TypecheckErrType::TypeMismatch(Rc::new(Type::Bool), Rc::new(Type::Int)),
-                span!(0, 0, ByteOffset(0))
+                zspan!(),
             )])
         );
     }
@@ -2056,7 +2063,7 @@ mod tests {
         let mut tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
-        let env = Env::default();
+        let env = Env::new(EMPTY_SOURCEMAP.1);
         let lval = zspan!(LVal::Simple("a".to_owned()));
 
         assert_eq!(
@@ -2072,7 +2079,7 @@ mod tests {
         let mut tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
-        let mut env = Env::default();
+        let mut env = Env::new(EMPTY_SOURCEMAP.1);
         let record = hashmap! {
             "f".to_owned() => Rc::new(Type::Int)
         };
@@ -2086,7 +2093,7 @@ mod tests {
                     access: frame::Access::InFrame(-8),
                 }),
             },
-            Span::new(ByteIndex::none(), ByteIndex::none()),
+            zspan!(),
         );
         let lval = zspan!(LVal::Field(
             Box::new(zspan!(LVal::Simple("x".to_owned()))),
@@ -2107,7 +2114,7 @@ mod tests {
         let mut tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
-        let mut env = Env::default();
+        let mut env = Env::new(EMPTY_SOURCEMAP.1);
         env.insert_var(
             "x".to_owned(),
             EnvEntry {
@@ -2118,7 +2125,7 @@ mod tests {
                     access: frame::Access::InFrame(-8),
                 }),
             },
-            Span::new(ByteIndex::none(), ByteIndex::none()),
+            zspan!(),
         );
         let lval = zspan!(LVal::Field(
             Box::new(zspan!(LVal::Simple("x".to_owned()))),
@@ -2129,7 +2136,7 @@ mod tests {
                 .map(TranslateOutput::unwrap),
             Err(vec![TypecheckErr::new_err(
                 TypecheckErrType::UndefinedField("g".to_owned()),
-                span!(0, 0, ByteOffset(0)),
+                zspan!(),
             )])
         );
     }
@@ -2139,7 +2146,7 @@ mod tests {
         let mut tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
-        let mut env = Env::default();
+        let mut env = Env::new(EMPTY_SOURCEMAP.1);
         env.insert_var(
             "x".to_owned(),
             EnvEntry {
@@ -2150,7 +2157,7 @@ mod tests {
                     access: frame::Access::InFrame(-8),
                 }),
             },
-            Span::new(ByteIndex::none(), ByteIndex::none()),
+            zspan!(),
         );
         let lval = zspan!(LVal::Field(
             Box::new(zspan!(LVal::Simple("x".to_owned()))),
@@ -2161,7 +2168,7 @@ mod tests {
                 .map(TranslateOutput::unwrap),
             Err(vec![TypecheckErr::new_err(
                 TypecheckErrType::UndefinedField("g".to_owned()),
-                span!(0, 0, ByteOffset(0))
+                zspan!()
             )])
         );
     }
@@ -2171,7 +2178,7 @@ mod tests {
         let mut tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
-        let mut env = Env::default();
+        let mut env = Env::new(EMPTY_SOURCEMAP.1);
         env.insert_var(
             "x".to_owned(),
             EnvEntry {
@@ -2182,7 +2189,7 @@ mod tests {
                     access: frame::Access::InFrame(-8),
                 }),
             },
-            Span::new(ByteIndex::none(), ByteIndex::none()),
+            zspan!(),
         );
         let lval = zspan!(LVal::Subscript(
             Box::new(zspan!(LVal::Simple("x".to_owned()))),
@@ -2203,7 +2210,7 @@ mod tests {
         let mut tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
-        let mut env = Env::default();
+        let mut env = Env::new(EMPTY_SOURCEMAP.1);
         let let_expr = zspan!(Let {
             pattern: zspan!(Pattern::String("x".to_owned())),
             immutable: zspan!(true),
@@ -2225,7 +2232,7 @@ mod tests {
         let mut tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
-        let mut env = Env::default();
+        let mut env = Env::new(EMPTY_SOURCEMAP.1);
         let let_expr = zspan!(Let {
             pattern: zspan!(Pattern::String("x".to_owned())),
             immutable: zspan!(true),
@@ -2246,7 +2253,7 @@ mod tests {
         let mut tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
-        let env = Env::default();
+        let env = Env::new(EMPTY_SOURCEMAP.1);
         let fn_call_expr = zspan!(FnCall {
             id: zspan!("f".to_owned()),
             args: vec![],
@@ -2266,7 +2273,7 @@ mod tests {
         let level_label = Label::top();
         let label_f = tmp_generator.new_label();
 
-        let mut env = Env::default();
+        let mut env = Env::new(EMPTY_SOURCEMAP.1);
         env.insert_var(
             "f".to_owned(),
             EnvEntry {
@@ -2274,7 +2281,7 @@ mod tests {
                 immutable: true,
                 entry_type: EnvEntryType::Fn(label_f),
             },
-            Span::new(ByteIndex::none(), ByteIndex::none()),
+            zspan!(),
         );
         let fn_call_expr = zspan!(FnCall {
             id: zspan!("f".to_owned()),
@@ -2295,7 +2302,7 @@ mod tests {
         let level_label = Label::top();
         let label_f = tmp_generator.new_label();
 
-        let mut env = Env::default();
+        let mut env = Env::new(EMPTY_SOURCEMAP.1);
         env.insert_var(
             "f".to_owned(),
             EnvEntry {
@@ -2324,7 +2331,7 @@ mod tests {
         let level_label = Label::top();
         let label_f = tmp_generator.new_label();
 
-        let mut env = Env::default();
+        let mut env = Env::new(EMPTY_SOURCEMAP.1);
         env.insert_var(
             "f".to_owned(),
             EnvEntry {
@@ -2356,7 +2363,7 @@ mod tests {
         let level_label = Label::top();
         let label_f = tmp_generator.new_label();
 
-        let mut env = Env::default();
+        let mut env = Env::new(EMPTY_SOURCEMAP.1);
         env.insert_type("a".to_owned(), Type::Alias("int".to_owned()), zspan!());
         env.insert_var(
             "f".to_owned(),
@@ -2384,7 +2391,7 @@ mod tests {
         let mut tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
-        let mut env = Env::default();
+        let mut env = Env::new(EMPTY_SOURCEMAP.1);
         let type_decl = zspan!(TypeDecl {
             id: zspan!("a".to_owned()),
             ty: zspan!(ast::TypeDeclType::Type(zspan!("int".to_owned()))),
@@ -2404,7 +2411,7 @@ mod tests {
         let mut tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
-        let mut env = Env::default();
+        let mut env = Env::new(EMPTY_SOURCEMAP.1);
         let type_decl = zspan!(TypeDecl {
             id: zspan!("a".to_owned()),
             ty: zspan!(ast::TypeDeclType::Type(zspan!("int".to_owned()))),
@@ -2430,7 +2437,7 @@ mod tests {
         let mut tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
-        let mut env = Env::default();
+        let mut env = Env::new(EMPTY_SOURCEMAP.1);
         let type_decl = zspan!(TypeDecl {
             id: zspan!("i".to_owned()),
             ty: zspan!(ast::TypeDeclType::Type(zspan!("int".to_owned())))
@@ -2457,7 +2464,7 @@ mod tests {
     fn test_recursive_typedef() {
         let mut tmp_generator = TmpGenerator::default();
 
-        let mut env = Env::default();
+        let mut env = Env::new(EMPTY_SOURCEMAP.1);
         let type_decl = zspan!(DeclType::Type(zspan!(TypeDecl {
             id: zspan!("i".to_owned()),
             ty: zspan!(ast::TypeDeclType::Record(vec![zspan!(TypeField {
@@ -2471,7 +2478,7 @@ mod tests {
 
     #[test]
     fn test_check_for_type_decl_cycles_err1() {
-        let mut env = Env::default();
+        let mut env = Env::new(EMPTY_SOURCEMAP.1);
         env.insert_type("a".to_owned(), Type::Alias("a".to_owned()), zspan!());
         assert_eq!(
             env.check_for_type_decl_cycles("a", vec![]).unwrap_err()[0].t.ty,
@@ -2481,7 +2488,7 @@ mod tests {
 
     #[test]
     fn test_check_for_type_decl_cycles_err2() {
-        let mut env = Env::default();
+        let mut env = Env::new(EMPTY_SOURCEMAP.1);
         env.insert_type("a".to_owned(), Type::Alias("b".to_owned()), zspan!());
         env.insert_type("b".to_owned(), Type::Alias("c".to_owned()), zspan!());
         env.insert_type("c".to_owned(), Type::Alias("a".to_owned()), zspan!());
@@ -2493,7 +2500,7 @@ mod tests {
 
     #[test]
     fn test_check_for_type_decl_cycles() {
-        let mut env = Env::default();
+        let mut env = Env::new(EMPTY_SOURCEMAP.1);
         env.insert_type("a".to_owned(), Type::Alias("b".to_owned()), zspan!());
         env.insert_type("b".to_owned(), Type::Alias("c".to_owned()), zspan!());
         assert_eq!(env.check_for_type_decl_cycles("a", vec![]), Ok(()));
@@ -2501,7 +2508,7 @@ mod tests {
 
     #[test]
     fn test_duplicate_type_decl() {
-        let mut env = Env::default();
+        let mut env = Env::new(EMPTY_SOURCEMAP.1);
         env.typecheck_type_decl(&zspan!(ast::TypeDecl {
             id: zspan!("a".to_owned()),
             ty: zspan!(ast::TypeDeclType::Unit)
@@ -2525,7 +2532,7 @@ mod tests {
         let mut tmp_generator = TmpGenerator::default();
         let label_f = tmp_generator.new_label();
 
-        let mut env = Env::default();
+        let mut env = Env::new(EMPTY_SOURCEMAP.1);
         env.insert_var(
             "f".to_owned(),
             EnvEntry {
@@ -2545,7 +2552,7 @@ mod tests {
     fn test_typecheck_first_pass() {
         let mut tmp_generator = TmpGenerator::default();
 
-        let mut env = Env::default();
+        let mut env = Env::new(EMPTY_SOURCEMAP.1);
         let result = env.first_pass(
             &mut tmp_generator,
             &[
@@ -2581,7 +2588,7 @@ mod tests {
         let mut tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
-        let mut env = Env::default();
+        let mut env = Env::new(EMPTY_SOURCEMAP.1);
         let fn_decl1 = zspan!(FnDecl {
             id: zspan!("f".to_owned()),
             type_fields: vec![],
@@ -2611,7 +2618,7 @@ mod tests {
         let mut tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
-        let mut env = Env::default();
+        let mut env = Env::new(EMPTY_SOURCEMAP.1);
         let fn_decl = zspan!(FnDecl {
             id: zspan!("f".to_owned()),
             type_fields: vec![
@@ -2641,7 +2648,7 @@ mod tests {
     fn test_typecheck_fn_decl() {
         let mut tmp_generator = TmpGenerator::default();
 
-        let mut env = Env::default();
+        let mut env = Env::new(EMPTY_SOURCEMAP.1);
         let fn_decl = zspan!(FnDecl {
             id: zspan!("f".to_owned()),
             type_fields: vec![zspan!(TypeField {
@@ -2675,7 +2682,7 @@ mod tests {
 
     #[test]
     fn test_validate_type() {
-        let mut env = Env::default();
+        let mut env = Env::new(EMPTY_SOURCEMAP.1);
         let mut record_fields = HashMap::new();
         record_fields.insert("f".to_owned(), Rc::new(Type::Alias("a".to_owned())));
         record_fields.insert("g".to_owned(), Rc::new(Type::Alias("b".to_owned())));
@@ -2692,7 +2699,7 @@ mod tests {
         let mut tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
-        let mut env = Env::default();
+        let mut env = Env::new(EMPTY_SOURCEMAP.1);
         let record_type = Type::Record(
             "r".to_owned(),
             hashmap! {
@@ -2718,7 +2725,7 @@ mod tests {
         let mut tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
-        let mut env = Env::default();
+        let mut env = Env::new(EMPTY_SOURCEMAP.1);
         let record_type = Type::Record("r".to_owned(), HashMap::new());
         env.insert_type("r".to_owned(), record_type, zspan!());
         let record = zspan!(Record {
@@ -2742,7 +2749,7 @@ mod tests {
         let mut tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
-        let mut env = Env::default();
+        let mut env = Env::new(EMPTY_SOURCEMAP.1);
         let record_type = Type::Record(
             "r".to_owned(),
             hashmap! {
@@ -2786,7 +2793,7 @@ mod tests {
         let mut tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
-        let mut env = Env::default();
+        let mut env = Env::new(EMPTY_SOURCEMAP.1);
         let record_type = Type::Record(
             "r".to_owned(),
             hashmap! {
@@ -2829,7 +2836,7 @@ mod tests {
         let mut tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
-        let mut env = Env::default();
+        let mut env = Env::new(EMPTY_SOURCEMAP.1);
         let record_type = Type::Record(
             "r".to_owned(),
             hashmap! {
@@ -2860,7 +2867,7 @@ mod tests {
     fn test_typecheck_fn_independent() {
         let mut tmp_generator = TmpGenerator::default();
 
-        let mut env = Env::default();
+        let mut env = Env::new(EMPTY_SOURCEMAP.1);
         let fn_expr1 = zspan!(ExprType::Seq(
             vec![zspan!(ExprType::Let(Box::new(zspan!(Let {
                 pattern: zspan!(Pattern::String("a".to_owned())),
@@ -2886,7 +2893,8 @@ mod tests {
         })));
 
         assert_eq!(
-            env.typecheck_decls(&mut tmp_generator, &[fn1, fn2]).unwrap_err()[0]
+            env.typecheck_decls(&mut tmp_generator, EMPTY_SOURCEMAP.1, &[fn1, fn2])
+                .unwrap_err()[0]
                 .t
                 .ty,
             TypecheckErrType::UndefinedVar("a".to_owned())
@@ -2897,7 +2905,7 @@ mod tests {
     fn test_typecheck_fn_body() {
         let mut tmp_generator = TmpGenerator::default();
 
-        let mut env = Env::default();
+        let mut env = Env::new(EMPTY_SOURCEMAP.1);
         let fn_expr = zspan!(ExprType::Arith(Box::new(zspan!(Arith {
             l: zspan!(ExprType::LVal(Box::new(zspan!(LVal::Simple("a".to_owned()))))),
             op: zspan!(ast::ArithOp::Add),
@@ -2919,7 +2927,10 @@ mod tests {
             body: fn_expr,
         })));
 
-        assert_eq!(env.typecheck_decls(&mut tmp_generator, &[fn_decl]), Ok(()));
+        assert_eq!(
+            env.typecheck_decls(&mut tmp_generator, EMPTY_SOURCEMAP.1, &[fn_decl]),
+            Ok(())
+        );
     }
 
     #[test]
@@ -2927,7 +2938,7 @@ mod tests {
         let mut tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
-        let env = Env::default();
+        let env = Env::new(EMPTY_SOURCEMAP.1);
         let seq_expr1 = zspan!(ExprType::Seq(
             vec![zspan!(ExprType::Let(Box::new(zspan!(Let {
                 pattern: zspan!(Pattern::String("a".to_owned())),
@@ -2955,7 +2966,7 @@ mod tests {
         let mut tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
-        let mut env = Env::default();
+        let mut env = Env::new(EMPTY_SOURCEMAP.1);
         env.insert_var(
             "b".to_owned(),
             EnvEntry {
@@ -2985,7 +2996,7 @@ mod tests {
         let mut tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
-        let env = Env::default();
+        let env = Env::new(EMPTY_SOURCEMAP.1);
         let expr = zspan!(ExprType::Let(Box::new(zspan!(Let {
             pattern: zspan!(Pattern::Wildcard),
             immutable: zspan!(true),
@@ -3011,7 +3022,7 @@ mod tests {
         let mut tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
-        let mut env = Env::default();
+        let mut env = Env::new(EMPTY_SOURCEMAP.1);
         env.insert_var(
             "a".to_owned(),
             EnvEntry {
@@ -3046,7 +3057,7 @@ mod tests {
         let mut tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
-        let mut env = Env::default();
+        let mut env = Env::new(EMPTY_SOURCEMAP.1);
         let record_type = Type::Record(
             "r".to_owned(),
             hashmap! {
@@ -3094,7 +3105,7 @@ mod tests {
         let mut tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
-        let mut env = Env::default();
+        let mut env = Env::new(EMPTY_SOURCEMAP.1);
         let record_type = Type::Record(
             "r".to_owned(),
             hashmap! {
@@ -3142,7 +3153,7 @@ mod tests {
         let mut tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
-        let mut env = Env::default();
+        let mut env = Env::new(EMPTY_SOURCEMAP.1);
         let record_type = Type::Record(
             "r".to_owned(),
             hashmap! {
@@ -3188,7 +3199,7 @@ mod tests {
         let mut tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
-        let mut env = Env::default();
+        let mut env = Env::new(EMPTY_SOURCEMAP.1);
         let array_type = Type::Array(Rc::new(Type::Int), 1);
         env.insert_var(
             "a".to_owned(),
@@ -3227,7 +3238,7 @@ mod tests {
         let mut tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
-        let mut env = Env::default();
+        let mut env = Env::new(EMPTY_SOURCEMAP.1);
         let array_type = Type::Array(Rc::new(Type::Int), 1);
         env.insert_var(
             "a".to_owned(),
@@ -3266,7 +3277,7 @@ mod tests {
         let mut tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
-        let mut env = Env::default();
+        let mut env = Env::new(EMPTY_SOURCEMAP.1);
         let array_type = Type::Array(Rc::new(Type::Int), 1);
         env.insert_var(
             "a".to_owned(),
@@ -3303,7 +3314,7 @@ mod tests {
         let mut tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
-        let env = Env::default();
+        let env = Env::new(EMPTY_SOURCEMAP.1);
         let array_expr = zspan!(Array {
             initial_value: zspan!(ExprType::Number(0)),
             len: zspan!(ExprType::Number(3))
@@ -3321,7 +3332,7 @@ mod tests {
         let mut tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
-        let env = Env::default();
+        let env = Env::new(EMPTY_SOURCEMAP.1);
         let array_expr = zspan!(Array {
             initial_value: zspan!(ExprType::Number(0)),
             len: zspan!(ExprType::Arith(Box::new(zspan!(Arith {
@@ -3343,7 +3354,7 @@ mod tests {
         let mut tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
-        let env = Env::default();
+        let env = Env::new(EMPTY_SOURCEMAP.1);
         let array_expr = zspan!(Array {
             initial_value: zspan!(ExprType::Number(0)),
             len: zspan!(ExprType::Neg(Box::new(zspan!(ExprType::Number(3)))))
@@ -3363,7 +3374,7 @@ mod tests {
         let mut tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
-        let env = Env::default();
+        let env = Env::new(EMPTY_SOURCEMAP.1);
         let fn_call = ExprType::FnCall(Box::new(zspan!(FnCall {
             id: zspan!("f".to_owned()),
             args: vec![]
@@ -3387,7 +3398,7 @@ mod tests {
         let mut tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
-        let env = Env::default();
+        let env = Env::new(EMPTY_SOURCEMAP.1);
         let if_expr = zspan!(If {
             cond: zspan!(ExprType::BoolLiteral(true)),
             then_expr: zspan!(ExprType::Unit),
@@ -3406,7 +3417,7 @@ mod tests {
         let mut tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
-        let env = Env::default();
+        let env = Env::new(EMPTY_SOURCEMAP.1);
         let if_expr = zspan!(If {
             cond: zspan!(ExprType::BoolLiteral(true)),
             then_expr: zspan!(ExprType::Number(0)),
@@ -3427,7 +3438,7 @@ mod tests {
         let mut tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
-        let env = Env::default();
+        let env = Env::new(EMPTY_SOURCEMAP.1);
         let if_expr = zspan!(If {
             cond: zspan!(ExprType::BoolLiteral(true)),
             then_expr: zspan!(ExprType::Number(0)),
@@ -3446,7 +3457,7 @@ mod tests {
         let mut tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
-        let env = Env::default();
+        let env = Env::new(EMPTY_SOURCEMAP.1);
         let if_expr = zspan!(If {
             cond: zspan!(ExprType::BoolLiteral(true)),
             then_expr: zspan!(ExprType::Number(0)),
@@ -3467,7 +3478,7 @@ mod tests {
         let mut tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
-        let env = Env::default();
+        let env = Env::new(EMPTY_SOURCEMAP.1);
         let range = zspan!(Range {
             start: zspan!(ExprType::Number(0)),
             end: zspan!(ExprType::Number(1)),
@@ -3485,7 +3496,7 @@ mod tests {
         let mut tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
-        let env = Env::default();
+        let env = Env::new(EMPTY_SOURCEMAP.1);
         let range = zspan!(Range {
             start: zspan!(ExprType::Number(0)),
             end: zspan!(ExprType::String("a".to_owned())),
@@ -3505,7 +3516,7 @@ mod tests {
         let mut tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
-        let env = Env::default();
+        let env = Env::new(EMPTY_SOURCEMAP.1);
         let for_expr = zspan!(For {
             index: zspan!("i".to_owned()),
             range: zspan!(ExprType::Range(Box::new(zspan!(Range {
@@ -3530,7 +3541,7 @@ mod tests {
         let mut tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
-        let env = Env::default();
+        let env = Env::new(EMPTY_SOURCEMAP.1);
         let for_expr = zspan!(For {
             index: zspan!("i".to_owned()),
             range: zspan!(ExprType::Number(0)),
@@ -3554,7 +3565,7 @@ mod tests {
         let mut tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
-        let env = Env::default();
+        let env = Env::new(EMPTY_SOURCEMAP.1);
         let for_expr = zspan!(For {
             index: zspan!("i".to_owned()),
             range: zspan!(ExprType::Range(Box::new(zspan!(Range {
@@ -3581,7 +3592,7 @@ mod tests {
         let mut tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
-        let env = Env::default();
+        let env = Env::new(EMPTY_SOURCEMAP.1);
         let while_expr = zspan!(While {
             cond: zspan!(ExprType::BoolLiteral(true)),
             body: zspan!(ExprType::Seq(vec![zspan!(ExprType::Unit)], false))
@@ -3599,7 +3610,7 @@ mod tests {
         let mut tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
-        let env = Env::default();
+        let env = Env::new(EMPTY_SOURCEMAP.1);
         let while_expr = zspan!(While {
             cond: zspan!(ExprType::Number(0)),
             body: zspan!(ExprType::Seq(vec![zspan!(ExprType::Unit)], false))
@@ -3618,7 +3629,7 @@ mod tests {
         let mut tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
-        let env = Env::default();
+        let env = Env::new(EMPTY_SOURCEMAP.1);
         let while_expr = zspan!(While {
             cond: zspan!(ExprType::BoolLiteral(true)),
             body: zspan!(ExprType::Seq(vec![zspan!(ExprType::Number(0))], true))
@@ -3638,7 +3649,7 @@ mod tests {
         let mut tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
-        let env = Env::default();
+        let env = Env::new(EMPTY_SOURCEMAP.1);
         let compare = zspan!(Compare {
             l: zspan!(ExprType::BoolLiteral(true)),
             op: zspan!(CompareOp::Eq),
@@ -3657,7 +3668,7 @@ mod tests {
         let mut tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
-        let env = Env::default();
+        let env = Env::new(EMPTY_SOURCEMAP.1);
         let compare = zspan!(Compare {
             l: zspan!(ExprType::Number(0)),
             op: zspan!(CompareOp::Eq),
@@ -3678,7 +3689,7 @@ mod tests {
         let mut tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
-        let mut env = Env::default();
+        let mut env = Env::new(EMPTY_SOURCEMAP.1);
         env.insert_type(
             "e".to_owned(),
             Type::Enum(
@@ -3713,7 +3724,7 @@ mod tests {
         let mut tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
-        let mut env = Env::default();
+        let mut env = Env::new(EMPTY_SOURCEMAP.1);
         env.insert_type(
             "e".to_owned(),
             Type::Enum(
@@ -3749,7 +3760,7 @@ mod tests {
         let mut tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
-        let env = Env::default();
+        let env = Env::new(EMPTY_SOURCEMAP.1);
         let closure = zspan!(Closure {
             type_fields: vec![zspan!(TypeField {
                 id: zspan!("a".to_owned()),
@@ -3771,7 +3782,7 @@ mod tests {
         let mut tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
-        let mut env = Env::default();
+        let mut env = Env::new(EMPTY_SOURCEMAP.1);
         env.insert_var(
             "b".to_owned(),
             EnvEntry {
@@ -3804,7 +3815,7 @@ mod tests {
         let mut tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
-        let env = Env::default();
+        let env = Env::new(EMPTY_SOURCEMAP.1);
         let closure = zspan!(Closure {
             type_fields: vec![
                 zspan!(TypeField {
@@ -3833,7 +3844,7 @@ mod tests {
         let mut tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
-        let env = Env::default();
+        let env = Env::new(EMPTY_SOURCEMAP.1);
         let fn_decl1 = zspan!(ExprType::FnDecl(Box::new(zspan!(FnDecl {
             id: zspan!("f".to_owned()),
             type_fields: vec![zspan!(TypeField {
@@ -3881,7 +3892,7 @@ mod tests {
         let mut tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
-        let env = Env::default();
+        let env = Env::new(EMPTY_SOURCEMAP.1);
         let fn_decl1 = zspan!(ExprType::FnDecl(Box::new(zspan!(FnDecl {
             id: zspan!("f".to_owned()),
             type_fields: vec![zspan!(TypeField {

@@ -1,5 +1,5 @@
 use crate::{ast::Spanned, lexer::LexError};
-use codespan::{ByteIndex, ByteOffset, FileId, Span};
+use codespan::{ByteIndex, ByteOffset, Span};
 use lalrpop_util::ParseError;
 use std::{convert::TryFrom, fmt::Debug};
 

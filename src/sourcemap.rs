@@ -1,13 +1,11 @@
 use crate::{ast, lexer, parser};
-use codespan::{ByteIndex, ByteOffset, FileId, Files, RawOffset};
+use codespan::{ByteIndex, FileId, Files};
 use lalrpop_util::{ErrorRecovery, ParseError};
 use std::{
-    collections::HashMap,
     convert::TryFrom,
     fs::File,
     io::{BufReader, Read},
-    path::{Path, PathBuf},
-    sync::Arc,
+    path::Path,
 };
 
 #[derive(Clone)]
@@ -41,7 +39,12 @@ impl Sourcemap {
         }
     }
 
-    pub fn add_file(&mut self, filename: String, file: String) -> (FileId, Result<Vec<ast::Decl>, SourcemapError>) {
+    pub fn add_file(
+        &mut self,
+        filename: impl Into<String>,
+        file: impl Into<String>,
+    ) -> (FileId, Result<Vec<ast::Decl>, SourcemapError>) {
+        let file = file.into();
         let lexer = lexer::Lexer::new(&file);
         let mut errors = vec![];
         let file_id = self.files.add(filename, file);
@@ -94,10 +97,8 @@ mod tests {
     fn test_add_file() {
         let mut sourcemap = Sourcemap::default();
         dbg!(sourcemap
-            .add_file(
-                codespan::FileName::Real(PathBuf::from("test/test_exprs.euph")),
-                "fn f() = {};".to_owned(),
-            )
+            .add_file("test/test_exprs.euph", "fn f() = {};")
+            .1
             .expect("failed to parse"));
     }
 }

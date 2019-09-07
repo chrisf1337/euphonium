@@ -5,7 +5,7 @@ use codespan_reporting::{
     diagnostic::{Diagnostic, Label},
     term::{
         termcolor::{ColorChoice, StandardStream},
-        Config, DisplayStyle,
+        Config,
     },
 };
 use euphonium::{
