@@ -1,14 +1,14 @@
 use crate::{
     ast::{
         self, Arith, ArithOp, Array, Assign, Bool, Closure, Compare, Decl, DeclType, Enum, Expr, ExprType, FieldAssign,
-        FnCall, FnDecl, For, If, LVal, Let, Pattern, Range, Record, Spanned, TypeDecl, TypeDeclType, While,
+        FileSpan, FnCall, FnDecl, For, If, LVal, Let, Pattern, Range, Record, Spanned, TypeDecl, TypeDeclType, While,
     },
     frame::{self, Frame},
     ir,
     tmp::{self, Label, TmpGenerator},
     translate::{self, Access, Level},
 };
-use codespan::{ByteIndex, ByteSpan};
+use codespan::{ByteIndex, FileId, Span};
 use codespan_reporting;
 use itertools::izip;
 use maplit::hashmap;
@@ -89,10 +89,27 @@ pub enum TypecheckErrType {
     IllegalNestedEnumDecl,
 }
 
-impl TypecheckErrType {
-    pub fn diagnostic(&self, env: &Env) -> codespan_reporting::Diagnostic {
+pub type TypecheckErr = Spanned<_TypecheckErr>;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct _TypecheckErr {
+    pub ty: TypecheckErrType,
+    pub source: Option<Spanned<String>>,
+}
+
+impl TypecheckErr {
+    fn new_err(ty: TypecheckErrType, span: FileSpan) -> Self {
+        TypecheckErr::new(_TypecheckErr { ty, source: None }, span)
+    }
+
+    fn with_source(mut self, source: Spanned<String>) -> Self {
+        self.source = Some(source);
+        self
+    }
+
+    pub fn diagnostic(&self, env: &Env) -> codespan_reporting::diagnostic::Diagnostic {
         use TypecheckErrType::*;
-        let msg = match self {
+        let msg = match &self.ty {
             TypeMismatch(expected, actual) => {
                 format!("type mismatch\nexpected: {:?}\n  actual: {:?}", expected, actual)
             }
@@ -127,34 +144,17 @@ impl TypecheckErrType {
             NegativeArrayLen(..) => "array length cannot be negative".to_owned(),
             IllegalNestedEnumDecl => "enum declarations cannot be nested".to_owned(),
         };
-        codespan_reporting::Diagnostic::new_error(&msg)
-    }
-}
 
-pub type TypecheckErr = Spanned<_TypecheckErr>;
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct _TypecheckErr {
-    pub ty: TypecheckErrType,
-    pub source: Option<Spanned<String>>,
-}
-
-impl TypecheckErr {
-    fn new_err(ty: TypecheckErrType, span: ByteSpan) -> Self {
-        TypecheckErr::new(_TypecheckErr { ty, source: None }, span)
-    }
-
-    fn with_source(mut self, source: Spanned<String>) -> Self {
-        self.source = Some(source);
-        self
-    }
-
-    pub fn labels(&self) -> Vec<codespan_reporting::Label> {
-        let mut labels = vec![codespan_reporting::Label::new_primary(self.span)];
-        if let Some(source) = &self.t.source {
-            labels.push(codespan_reporting::Label::new_secondary(source.span).with_message(&source.t));
+        let primary_label = codespan_reporting::diagnostic::Label::new(self.span.file_id, self.span.span, &msg);
+        let mut diagnostic = codespan_reporting::diagnostic::Diagnostic::new_error(&msg, primary_label);
+        if let Some(source) = self.t.source.as_ref() {
+            diagnostic = diagnostic.with_secondary_labels(vec![codespan_reporting::diagnostic::Label::new(
+                source.span.file_id,
+                source.span.span,
+                &source.t,
+            )]);
         }
-        labels
+        diagnostic
     }
 }
 
@@ -299,29 +299,31 @@ struct LValProperties {
 
 #[derive(Debug, Clone)]
 pub struct Env<'a> {
+    current_file: FileId,
     parent: Option<&'a Env<'a>>,
     vars: HashMap<String, EnvEntry>,
     types: HashMap<String, Rc<Type>>,
-    var_def_spans: HashMap<String, ByteSpan>,
-    type_def_spans: HashMap<String, ByteSpan>,
+    var_def_spans: HashMap<String, FileSpan>,
+    type_def_spans: HashMap<String, FileSpan>,
 
-    record_field_decl_spans: HashMap<String, HashMap<String, ByteSpan>>,
-    fn_param_decl_spans: HashMap<String, Vec<ByteSpan>>,
-    enum_case_param_decl_spans: HashMap<String, HashMap<String, Vec<ByteSpan>>>,
+    record_field_decl_spans: HashMap<String, HashMap<String, FileSpan>>,
+    fn_param_decl_spans: HashMap<String, Vec<FileSpan>>,
+    enum_case_param_decl_spans: HashMap<String, HashMap<String, Vec<FileSpan>>>,
 
     levels: Rc<RefCell<HashMap<Label, Level>>>,
 }
 
-impl<'a> Default for Env<'a> {
-    fn default() -> Self {
+impl<'a> Env<'a> {
+    pub fn new(current_file: FileId) -> Self {
         let mut types = HashMap::new();
         types.insert("int".to_owned(), Rc::new(Type::Int));
         types.insert("string".to_owned(), Rc::new(Type::String));
         let mut type_def_spans = HashMap::new();
-        type_def_spans.insert("int".to_owned(), ByteSpan::new(ByteIndex::none(), ByteIndex::none()));
-        type_def_spans.insert("string".to_owned(), ByteSpan::new(ByteIndex::none(), ByteIndex::none()));
+        type_def_spans.insert("int".to_owned(), FileSpan::new(current_file, Span::initial()));
+        type_def_spans.insert("string".to_owned(), FileSpan::new(current_file, Span::initial()));
 
         Env {
+            current_file,
             parent: None,
             vars: HashMap::new(),
             types,
@@ -336,12 +338,11 @@ impl<'a> Default for Env<'a> {
             })),
         }
     }
-}
 
-impl<'a> Env<'a> {
-    fn new(levels: Rc<RefCell<HashMap<Label, Level>>>) -> Self {
+    fn new_child(&'a self, current_file: FileId) -> Env<'a> {
         Env {
-            parent: None,
+            current_file,
+            parent: Some(self),
             vars: HashMap::new(),
             types: HashMap::new(),
             var_def_spans: HashMap::new(),
@@ -351,22 +352,16 @@ impl<'a> Env<'a> {
             fn_param_decl_spans: HashMap::new(),
             enum_case_param_decl_spans: HashMap::new(),
 
-            levels,
+            levels: self.levels.clone(),
         }
     }
 
-    fn new_child(&'a self) -> Env<'a> {
-        let mut child = Env::new(self.levels.clone());
-        child.parent = Some(self);
-        child
-    }
-
-    fn insert_var(&mut self, name: String, entry: EnvEntry, def_span: ByteSpan) {
+    fn insert_var(&mut self, name: String, entry: EnvEntry, def_span: FileSpan) {
         self.vars.insert(name.clone(), entry);
         self.var_def_spans.insert(name, def_span);
     }
 
-    fn insert_type(&mut self, name: String, ty: Type, def_span: ByteSpan) {
+    fn insert_type(&mut self, name: String, ty: Type, def_span: FileSpan) {
         self.types.insert(name.clone(), Rc::new(ty));
         self.type_def_spans.insert(name, def_span);
     }
@@ -391,7 +386,7 @@ impl<'a> Env<'a> {
         }
     }
 
-    fn get_var_def_span(&self, id: &str) -> Option<ByteSpan> {
+    fn get_var_def_span(&self, id: &str) -> Option<FileSpan> {
         if let Some(span) = self.var_def_spans.get(id) {
             Some(*span)
         } else if let Some(parent) = self.parent {
@@ -401,7 +396,7 @@ impl<'a> Env<'a> {
         }
     }
 
-    fn get_type_def_span(&self, id: &str) -> Option<ByteSpan> {
+    fn get_type_def_span(&self, id: &str) -> Option<FileSpan> {
         if let Some(span) = self.type_def_spans.get(id) {
             Some(*span)
         } else if let Some(parent) = self.parent {
@@ -411,7 +406,7 @@ impl<'a> Env<'a> {
         }
     }
 
-    fn get_record_field_decl_spans(&self, id: &str) -> Option<&HashMap<String, ByteSpan>> {
+    fn get_record_field_decl_spans(&self, id: &str) -> Option<&HashMap<String, FileSpan>> {
         if let Some(spans) = self.record_field_decl_spans.get(id) {
             Some(spans)
         } else if let Some(parent) = self.parent {
@@ -421,7 +416,7 @@ impl<'a> Env<'a> {
         }
     }
 
-    fn get_fn_param_decl_spans(&self, id: &str) -> Option<&[ByteSpan]> {
+    fn get_fn_param_decl_spans(&self, id: &str) -> Option<&[FileSpan]> {
         if let Some(spans) = self.fn_param_decl_spans.get(id) {
             Some(spans)
         } else if let Some(parent) = self.parent {
@@ -431,7 +426,7 @@ impl<'a> Env<'a> {
         }
     }
 
-    fn get_enum_case_param_decl_spans(&self, id: &str) -> Option<&HashMap<String, Vec<ByteSpan>>> {
+    fn get_enum_case_param_decl_spans(&self, id: &str) -> Option<&HashMap<String, Vec<FileSpan>>> {
         if let Some(spans) = self.enum_case_param_decl_spans.get(id) {
             Some(spans)
         } else if let Some(parent) = self.parent {
@@ -457,7 +452,7 @@ impl<'a> Env<'a> {
     /// Does not follow aliases in records or enums because they can be recursive. This means that constructing `Type`s
     /// by hand instead of retrieving them from `types` in `Env` will result in failed equality
     /// checks, even if the aliases that they contain point to the same base type.
-    fn resolve_type(&self, ty: &Rc<Type>, def_span: ByteSpan) -> Result<Rc<Type>> {
+    fn resolve_type(&self, ty: &Rc<Type>, def_span: FileSpan) -> Result<Rc<Type>> {
         match ty.as_ref() {
             Type::Alias(alias) => {
                 if let Some(resolved_type) = self.get_type(alias) {
@@ -518,7 +513,7 @@ impl<'a> Env<'a> {
     }
 
     /// Call after translating type decls and checking for cycles.
-    fn validate_type(&self, ty: &Rc<Type>, def_span: ByteSpan) -> Result<()> {
+    fn validate_type(&self, ty: &Rc<Type>, def_span: FileSpan) -> Result<()> {
         match ty.as_ref() {
             Type::String | Type::Bool | Type::Unit | Type::Int | Type::Iterator(_) => Ok(()),
             Type::Alias(_) => self.resolve_type(ty, def_span).map(|_| ()),
@@ -615,14 +610,14 @@ impl<'a> Env<'a> {
         iter: I,
         key_fn: KeyFn,
         err_gen: ErrGen,
-    ) -> Result<HashMap<Key, ByteSpan>>
+    ) -> Result<HashMap<Key, FileSpan>>
     where
         I: IntoIterator<Item = &'b Spanned<T>>,
         KeyFn: Fn(&'b Spanned<T>) -> Key,
-        ErrGen: Fn(&'b Spanned<T>, ByteSpan) -> TypecheckErr,
+        ErrGen: Fn(&'b Spanned<T>, FileSpan) -> TypecheckErr,
     {
         // t -> def span
-        let mut checked_elems: HashMap<Key, ByteSpan> = HashMap::new();
+        let mut checked_elems: HashMap<Key, FileSpan> = HashMap::new();
         let mut errors: Vec<TypecheckErr> = vec![];
         for elem in iter {
             let key = key_fn(elem);
@@ -640,9 +635,10 @@ impl<'a> Env<'a> {
         Ok(checked_elems)
     }
 
-    pub fn typecheck_decls(&mut self, tmp_generator: &mut TmpGenerator, decls: &[Decl]) -> Result<()> {
-        self.first_pass(tmp_generator, &decls)?;
-        self.second_pass(tmp_generator, &decls)
+    pub fn typecheck_decls(&mut self, tmp_generator: &mut TmpGenerator, file_id: FileId, decls: &[Decl]) -> Result<()> {
+        self.current_file = file_id;
+        self.first_pass(tmp_generator, decls)?;
+        self.second_pass(tmp_generator, decls)
     }
 
     fn first_pass(&mut self, tmp_generator: &mut TmpGenerator, decls: &[Decl]) -> Result<()> {
@@ -786,7 +782,7 @@ impl<'a> Env<'a> {
 
     /// Creates a child env to typecheck the function body.
     fn typecheck_fn_decl_body(&self, tmp_generator: &mut TmpGenerator, fn_decl: &Spanned<FnDecl>) -> Result<()> {
-        let mut new_env = self.new_child();
+        let mut new_env = self.new_child(self.current_file);
 
         let (fn_type, formals, label) = {
             let env_entry = new_env.get_var(&fn_decl.id.t).unwrap();
@@ -855,7 +851,7 @@ impl<'a> Env<'a> {
         let ty = Type::from_type_decl(decl.t.clone());
         match &decl.ty.t {
             TypeDeclType::Record(record_fields) => {
-                let field_def_spans: HashMap<String, ByteSpan> = Self::check_for_duplicates(
+                let field_def_spans: HashMap<String, FileSpan> = Self::check_for_duplicates(
                     record_fields,
                     |field| &field.id.t,
                     |field, span| {
@@ -896,7 +892,7 @@ impl<'a> Env<'a> {
         Ok(())
     }
 
-    fn typecheck_expr(
+    pub(crate) fn typecheck_expr(
         &self,
         tmp_generator: &mut TmpGenerator,
         level_label: &Label,
@@ -906,7 +902,7 @@ impl<'a> Env<'a> {
             ExprType::Seq(exprs, returns) => {
                 let (mut new_env, return_type) = {
                     // New scope
-                    let mut new_env = self.new_child();
+                    let mut new_env = self.new_child(self.current_file);
                     for expr in &exprs[..exprs.len() - 1] {
                         let _ = new_env.typecheck_expr_mut(tmp_generator, level_label, expr)?;
                     }
@@ -990,7 +986,7 @@ impl<'a> Env<'a> {
         }
     }
 
-    fn typecheck_expr_mut(
+    pub(crate) fn typecheck_expr_mut(
         &mut self,
         tmp_generator: &mut TmpGenerator,
         level_label: &Label,
@@ -1156,7 +1152,9 @@ impl<'a> Env<'a> {
                         Ok(TranslateOutput { t: ty, .. }) => {
                             // param_type should already be well-defined because we have already
                             // checked for invalid types
-                            if self.resolve_type(&ty, arg.span)? != self.resolve_type(param_type, zspan!()).unwrap() {
+                            if self.resolve_type(&ty, arg.span)?
+                                != self.resolve_type(param_type, zspan!(self.current_file)).unwrap()
+                            {
                                 let mut err = TypecheckErr::new_err(
                                     TypecheckErrType::TypeMismatch(param_type.clone(), ty.clone()),
                                     arg.span,
@@ -1203,6 +1201,7 @@ impl<'a> Env<'a> {
                 field_assigns,
             },
             span,
+            ..
         }: &Spanned<Record>,
     ) -> Result<TranslateOutput<Rc<Type>>> {
         if let Some(ty) = self.get_type(&record_id.t) {
@@ -1270,7 +1269,9 @@ impl<'a> Env<'a> {
                 } in field_assigns
                 {
                     // This should never error because we already checked for invalid types
-                    let expected_type = self.resolve_type(&field_types[&field_id.t], zspan!()).unwrap();
+                    let expected_type = self
+                        .resolve_type(&field_types[&field_id.t], zspan!(self.current_file))
+                        .unwrap();
                     let ty = self.typecheck_expr(tmp_generator, level_label, expr)?.t;
                     let actual_type = self.resolve_type(&ty, expr.span)?;
                     if expected_type != actual_type {
@@ -1629,7 +1630,7 @@ impl<'a> Env<'a> {
             &expr.range,
             &Rc::new(Type::Iterator(Rc::new(Type::Int))),
         )?;
-        let mut child_env = self.new_child();
+        let mut child_env = self.new_child(self.current_file);
         let local = {
             let mut levels = child_env.levels.borrow_mut();
             let level = levels.get_mut(&level_label).unwrap();
@@ -1758,7 +1759,8 @@ impl<'a> Env<'a> {
                             Ok(TranslateOutput { t: ty, .. }) => {
                                 // param_type should already be well-defined because we have already
                                 // checked for invalid types
-                                if self.resolve_type(&ty, arg.span)? != self.resolve_type(param_type, zspan!()).unwrap()
+                                if self.resolve_type(&ty, arg.span)?
+                                    != self.resolve_type(param_type, zspan!(self.current_file)).unwrap()
                                 {
                                     let mut err = TypecheckErr::new_err(
                                         TypecheckErrType::TypeMismatch(param_type.clone(), ty.clone()),
@@ -1811,7 +1813,7 @@ impl<'a> Env<'a> {
         level_label: &Label,
         Spanned { t: expr, .. }: &Spanned<Closure>,
     ) -> Result<TranslateOutput<Rc<Type>>> {
-        let child_env = self.new_child();
+        let child_env = self.new_child(self.current_file);
         Self::check_for_duplicates(
             &expr.type_fields,
             |type_field| &type_field.id.t,
@@ -2084,7 +2086,7 @@ mod tests {
                     access: frame::Access::InFrame(-8),
                 }),
             },
-            ByteSpan::new(ByteIndex::none(), ByteIndex::none()),
+            Span::new(ByteIndex::none(), ByteIndex::none()),
         );
         let lval = zspan!(LVal::Field(
             Box::new(zspan!(LVal::Simple("x".to_owned()))),
@@ -2116,7 +2118,7 @@ mod tests {
                     access: frame::Access::InFrame(-8),
                 }),
             },
-            ByteSpan::new(ByteIndex::none(), ByteIndex::none()),
+            Span::new(ByteIndex::none(), ByteIndex::none()),
         );
         let lval = zspan!(LVal::Field(
             Box::new(zspan!(LVal::Simple("x".to_owned()))),
@@ -2148,7 +2150,7 @@ mod tests {
                     access: frame::Access::InFrame(-8),
                 }),
             },
-            ByteSpan::new(ByteIndex::none(), ByteIndex::none()),
+            Span::new(ByteIndex::none(), ByteIndex::none()),
         );
         let lval = zspan!(LVal::Field(
             Box::new(zspan!(LVal::Simple("x".to_owned()))),
@@ -2180,7 +2182,7 @@ mod tests {
                     access: frame::Access::InFrame(-8),
                 }),
             },
-            ByteSpan::new(ByteIndex::none(), ByteIndex::none()),
+            Span::new(ByteIndex::none(), ByteIndex::none()),
         );
         let lval = zspan!(LVal::Subscript(
             Box::new(zspan!(LVal::Simple("x".to_owned()))),
@@ -2272,7 +2274,7 @@ mod tests {
                 immutable: true,
                 entry_type: EnvEntryType::Fn(label_f),
             },
-            ByteSpan::new(ByteIndex::none(), ByteIndex::none()),
+            Span::new(ByteIndex::none(), ByteIndex::none()),
         );
         let fn_call_expr = zspan!(FnCall {
             id: zspan!("f".to_owned()),

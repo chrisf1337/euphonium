@@ -2,8 +2,11 @@
 
 use clap::{App, Arg};
 use codespan_reporting::{
-    termcolor::{ColorChoice, StandardStream},
-    Diagnostic, Label,
+    diagnostic::{Diagnostic, Label},
+    term::{
+        termcolor::{ColorChoice, StandardStream},
+        Config, DisplayStyle,
+    },
 };
 use euphonium::{
     error::Error,
@@ -32,55 +35,44 @@ fn main() -> Result<(), EuphcErr> {
         .get_matches();
     let files = matches.values_of("FILES").unwrap();
     let mut sourcemap = Sourcemap::default();
+    let empty_file_id = sourcemap.add_empty_file();
     let mut decls = vec![];
     let mut errors = vec![];
     for file in files {
         match sourcemap.add_file_from_disk(file) {
-            Ok(ds) => decls.extend(ds),
-            Err(err) => errors.push(err),
+            (file_id, Ok(ds)) => decls.push((file_id, ds)),
+            (file_id, Err(err)) => errors.push((file_id, err)),
         }
     }
     let mut writer = StandardStream::stderr(ColorChoice::Auto);
+    let config = Config::default();
 
     if !errors.is_empty() {
-        for err in errors {
-            match err {
-                SourcemapError::Parse(parse_errs) => {
-                    for parse_err in parse_errs {
-                        codespan_reporting::emit(
-                            &mut writer,
-                            &sourcemap.codemap,
-                            &Diagnostic::new_error("parse error").with_label(
-                                Label::new_primary(parse_err.span()).with_message(format!("{:?}", parse_err)),
-                            ),
-                        )?;
-                    }
-                }
-                SourcemapError::Io(path, err) => {
-                    codespan_reporting::emit(
-                        &mut writer,
-                        &sourcemap.codemap,
-                        &Diagnostic::new_error(format!("{}: IO error: {:?}", path.to_str().unwrap_or(""), err)),
-                    )?;
-                }
+        for (file_id, SourcemapError { errors: parse_errs }) in errors {
+            for parse_err in parse_errs {
+                let label = Label::new(file_id, parse_err.span(), format!("{:?}", parse_err));
+                codespan_reporting::term::emit(
+                    &mut writer,
+                    &config,
+                    &sourcemap.files,
+                    &Diagnostic::new_error("parse error", label),
+                )?;
             }
         }
         return Err(EuphcErr::ParseErr);
     }
 
-    let mut env = Env::default();
+    let mut env = Env::new(empty_file_id);
     let mut tmp_generator = TmpGenerator::default();
-    match env.typecheck_decls(&mut tmp_generator, &decls) {
-        Ok(()) => (),
-        Err(typecheck_errors) => {
-            for err in typecheck_errors {
-                codespan_reporting::emit(
-                    &mut writer,
-                    &sourcemap.codemap,
-                    &err.ty.diagnostic(&env).with_labels(err.labels()),
-                )?;
+    for (file_id, decls) in decls {
+        match env.typecheck_decls(&mut tmp_generator, file_id, &decls) {
+            Ok(()) => (),
+            Err(typecheck_errors) => {
+                for err in typecheck_errors {
+                    codespan_reporting::term::emit(&mut writer, &config, &sourcemap.files, &err.diagnostic(&env))?;
+                }
+                return Err(EuphcErr::TypecheckErr);
             }
-            return Err(EuphcErr::TypecheckErr);
         }
     }
 

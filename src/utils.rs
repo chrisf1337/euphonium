@@ -1,17 +1,25 @@
 pub mod u64ext;
 
-macro_rules! zspan {
-    ( ) => {
-        codespan::ByteSpan::new(codespan::ByteIndex::none(), codespan::ByteIndex::none())
-    };
-    ( $e:expr ) => {
-        ast::Spanned::new($e, zspan!())
+use crate::sourcemap::Sourcemap;
+use codespan::FileId;
+use lazy_static::lazy_static;
+
+lazy_static! {
+    static ref EMPTY_SOURCEMAP: (Sourcemap, FileId) = {
+        let mut sourcemap = Sourcemap::default();
+        let file_id = sourcemap.add_empty_file();
+        (sourcemap, file_id)
     };
 }
 
-macro_rules! span {
-    ( $l:expr , $r:expr , $off:expr) => {{
-        use codespan::{ByteIndex, ByteSpan};
-        ByteSpan::new(ByteIndex($l as u32) + $off, ByteIndex($r as u32) + $off)
-    }};
+macro_rules! zspan {
+    ( ) => {
+        ast::FileSpan::new(EMPTY_SOURCEMAP.1, codespan::Span::initial())
+    };
+    ( $file_id:expr ) => {
+        ast::FileSpan::new($file_id, codespan::Span::initial())
+    };
+    ( $file_id:expr, $e:expr ) => {
+        ast::Spanned::new($e, ast::FileSpan::new($file_id, codespan::Span::initial()))
+    };
 }

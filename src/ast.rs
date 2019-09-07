@@ -1,4 +1,4 @@
-use codespan::ByteSpan;
+use codespan::{ByteIndex, FileId, Span};
 use std::ops::{Deref, DerefMut};
 
 pub type Decl = Spanned<DeclType>;
@@ -198,13 +198,38 @@ impl From<Let> for _Let {
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub struct FileSpan {
+    pub file_id: FileId,
+    pub span: Span,
+}
+
+impl FileSpan {
+    pub fn new(file_id: FileId, span: Span) -> Self {
+        Self { file_id, span }
+    }
+
+    pub fn merge(self, other: FileSpan) -> FileSpan {
+        assert_eq!(self.file_id, other.file_id);
+        FileSpan::new(self.file_id, self.span.merge(other.span))
+    }
+
+    pub fn start(&self) -> ByteIndex {
+        self.span.start()
+    }
+
+    pub fn end(&self) -> ByteIndex {
+        self.span.end()
+    }
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct Spanned<T> {
     pub t: T,
-    pub span: ByteSpan,
+    pub span: FileSpan,
 }
 
 impl<T> Spanned<T> {
-    pub fn new(t: T, span: ByteSpan) -> Spanned<T> {
+    pub fn new(t: T, span: FileSpan) -> Spanned<T> {
         Spanned { t, span }
     }
 

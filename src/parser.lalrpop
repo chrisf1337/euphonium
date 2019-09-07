@@ -1,11 +1,11 @@
 use crate::{lexer, ast};
 use lalrpop_util::ErrorRecovery;
-use codespan::ByteOffset;
+use codespan::{FileId, Span};
 
-grammar<'err>(offset: ByteOffset, errors: &'err mut Vec<ErrorRecovery<usize, lexer::Tok, lexer::LexError>>);
+grammar<'err>(file_id: FileId, errors: &'err mut Vec<ErrorRecovery<u32, lexer::Tok, lexer::LexError>>);
 
 extern {
-    type Location = usize;
+    type Location = u32;
     type Error = lexer::LexError;
 
     enum lexer::Tok {
@@ -61,7 +61,7 @@ extern {
 }
 
 Spanned<T>: ast::Spanned<T> = {
-    <l:@L> <t:T> <r:@R> => ast::Spanned::new(t, span!(l, r, offset))
+    <l:@L> <t:T> <r:@R> => ast::Spanned::new(t, ast::FileSpan::new(file_id, Span::new(l, r)))
 };
 
 Identifier: String = "identifier";
@@ -87,14 +87,14 @@ Ty: ast::Spanned<ast::Type> = {
         <>.map(|id| ast::Type::Type(ast::Spanned::new(id, span)))
     },
     <l:@L> "[" <ty:Ty> ";" <len:Spanned<"number">> "]" <r:@R> =>
-        ast::Spanned::new(ast::Type::Array(Box::new(ty), len), span!(l, r, offset)),
-    <l:@L> "(" ")" <r:@R> => ast::Spanned::new(ast::Type::Unit, span!(l, r, offset)),
+        ast::Spanned::new(ast::Type::Array(Box::new(ty), len), ast::FileSpan::new(file_id, Span::new(l, r))),
+    <l:@L> "(" ")" <r:@R> => ast::Spanned::new(ast::Type::Unit, ast::FileSpan::new(file_id, Span::new(l, r))),
     <l:@L> "(" <param_types:(<Ty> ",")*> ")" "->" <return_type:Ty> <r:@R> =>
-        ast::Spanned::new(ast::Type::Fn(param_types, Box::new(return_type)), span!(l, r, offset)),
+        ast::Spanned::new(ast::Type::Fn(param_types, Box::new(return_type)), ast::FileSpan::new(file_id, Span::new(l, r))),
     <l:@L> "(" <param_types:(<Ty> ",")*> <last_param_type:Ty> ")" "->" <return_type:Ty> <r:@R> => {
         let mut param_types = param_types;
         param_types.push(last_param_type);
-        ast::Spanned::new(ast::Type::Fn(param_types, Box::new(return_type)), span!(l, r, offset))
+        ast::Spanned::new(ast::Type::Fn(param_types, Box::new(return_type)), ast::FileSpan::new(file_id, Span::new(l, r)))
     }
 };
 
@@ -102,32 +102,32 @@ TypeDeclType: ast::Spanned<ast::TypeDeclType> = {
     <l:@L> <cases: (<Spanned<EnumCase>> "|")*> <last:Spanned<EnumCase>> <r:@R> => {
         if cases.is_empty() {
             if last.t.params.is_empty() {
-                ast::Spanned::new(ast::TypeDeclType::Type(last.t.id), span!(l, r, offset))
+                ast::Spanned::new(ast::TypeDeclType::Type(last.t.id), ast::FileSpan::new(file_id, Span::new(l, r)))
             } else {
-                ast::Spanned::new(ast::TypeDeclType::Enum(vec![last]), span!(l, r, offset))
+                ast::Spanned::new(ast::TypeDeclType::Enum(vec![last]), ast::FileSpan::new(file_id, Span::new(l, r)))
             }
         } else {
             let mut cases = cases;
             cases.push(last);
-            ast::Spanned::new(ast::TypeDeclType::Enum(cases), span!(l, r, offset))
+            ast::Spanned::new(ast::TypeDeclType::Enum(cases), ast::FileSpan::new(file_id, Span::new(l, r)))
         }
     },
     <l:@L> "{" <ty_fields:(<Spanned<TyField>> ",")*> "}" <r:@R> =>
-        ast::Spanned::new(ast::TypeDeclType::Record(ty_fields), span!(l, r, offset)),
+        ast::Spanned::new(ast::TypeDeclType::Record(ty_fields), ast::FileSpan::new(file_id, Span::new(l, r))),
     <l:@L> "{" <ty_fields:(<Spanned<TyField>> ",")*> <last:Spanned<TyField>> "}" <r:@R> => {
         let mut ty_fields = ty_fields;
         ty_fields.push(last);
-        ast::Spanned::new(ast::TypeDeclType::Record(ty_fields), span!(l, r, offset))
+        ast::Spanned::new(ast::TypeDeclType::Record(ty_fields), ast::FileSpan::new(file_id, Span::new(l, r)))
     },
     <l:@L> "[" <ty:Ty> ";" <len:Spanned<"number">> "]" <r:@R> =>
-        ast::Spanned::new(ast::TypeDeclType::Array(ty, len), span!(l, r, offset)),
-    <l:@L> "(" ")" <r:@R> => ast::Spanned::new(ast::TypeDeclType::Unit, span!(l, r, offset)),
+        ast::Spanned::new(ast::TypeDeclType::Array(ty, len), ast::FileSpan::new(file_id, Span::new(l, r))),
+    <l:@L> "(" ")" <r:@R> => ast::Spanned::new(ast::TypeDeclType::Unit, ast::FileSpan::new(file_id, Span::new(l, r))),
     <l:@L> "(" <param_types:(<Ty> ",")*> ")" "->" <return_type:Ty> <r:@R> =>
-        ast::Spanned::new(ast::TypeDeclType::Fn(param_types, return_type), span!(l, r, offset)),
+        ast::Spanned::new(ast::TypeDeclType::Fn(param_types, return_type), ast::FileSpan::new(file_id, Span::new(l, r))),
     <l:@L> "(" <param_types:(<Ty> ",")*> <last_param_type:Ty> ")" "->" <return_type:Ty> <r:@R> => {
         let mut param_types = param_types;
         param_types.push(last_param_type);
-        ast::Spanned::new(ast::TypeDeclType::Fn(param_types, return_type), span!(l, r, offset))
+        ast::Spanned::new(ast::TypeDeclType::Fn(param_types, return_type), ast::FileSpan::new(file_id, Span::new(l, r)))
     }
 };
 
@@ -142,13 +142,13 @@ TypeDecl: ast::TypeDecl =
 _Let: ast::Let = {
    "let" <ml:@L> <mr:@R> <pattern:Spanned<"_">> <ty:(":" <Ty>)?> "=" <expr:Expr> => ast::Let {
         pattern: pattern.map(|_| ast::Pattern::Wildcard),
-        immutable: ast::Spanned::new(true, span!(ml, mr, offset)),
+        immutable: ast::Spanned::new(true, ast::FileSpan::new(file_id, Span::new(ml, mr))),
         ty,
         expr,
     },
    "let" <ml:@L> <mutable:"mut"?> <mr:@R> <id:Spanned<"identifier">> <ty:(":" <Ty>)?> "=" <expr:Expr> => ast::Let {
         pattern: id.map(ast::Pattern::String),
-        immutable: ast::Spanned::new(mutable.is_none(), span!(ml, mr, offset)),
+        immutable: ast::Spanned::new(mutable.is_none(), ast::FileSpan::new(file_id, Span::new(ml, mr))),
         ty,
         expr,
     },
@@ -211,42 +211,42 @@ ExprTypeOrLetOrAssign: ast::Expr = {
         let span = <>.span;
         <>.map(|l| ast::ExprType::Let(Box::new(ast::Spanned::new(l, span))))
     },
-    <l:@L> <expr:Assign> <r:@R> => ast::Expr::new(ast::ExprType::Assign(Box::new(expr)), span!(l, r, offset)),
+    <l:@L> <expr:Assign> <r:@R> => ast::Expr::new(ast::ExprType::Assign(Box::new(expr)), ast::FileSpan::new(file_id, Span::new(l, r))),
 }
 
 CompareExpr: ast::Expr = {
     <l:CompareExpr> <op: Spanned<"==">> <r:RangeExpr> => {
-        let span = l.span.to(r.span);
+        let span = l.span.merge(r.span);
         let op = op.map(|_| ast::CompareOp::Eq);
         ast::Expr::new(ast::ExprType::Compare(Box::new(ast::Spanned::new(ast::Compare { l, op, r }, span))),
             span)
     },
     <l:CompareExpr> <op: Spanned<"!=">> <r:RangeExpr> => {
-        let span = l.span.to(r.span);
+        let span = l.span.merge(r.span);
         let op = op.map(|_| ast::CompareOp::Ne);
         ast::Expr::new(ast::ExprType::Compare(Box::new(ast::Spanned::new(ast::Compare { l, op, r }, span))),
             span)
     },
     <l:CompareExpr> <op: Spanned<">">> <r:RangeExpr> => {
-        let span = l.span.to(r.span);
+        let span = l.span.merge(r.span);
         let op = op.map(|_| ast::CompareOp::Gt);
         ast::Expr::new(ast::ExprType::Compare(Box::new(ast::Spanned::new(ast::Compare { l, op, r }, span))),
             span)
     },
     <l:CompareExpr> <op: Spanned<">=">> <r:RangeExpr> => {
-        let span = l.span.to(r.span);
+        let span = l.span.merge(r.span);
         let op = op.map(|_| ast::CompareOp::Ge);
         ast::Expr::new(ast::ExprType::Compare(Box::new(ast::Spanned::new(ast::Compare { l, op, r }, span))),
             span)
     },
     <l:CompareExpr> <op: Spanned<"<">> <r:RangeExpr> => {
-        let span = l.span.to(r.span);
+        let span = l.span.merge(r.span);
         let op = op.map(|_| ast::CompareOp::Lt);
         ast::Expr::new(ast::ExprType::Compare(Box::new(ast::Spanned::new(ast::Compare { l, op, r }, span))),
             span)
     },
     <l:CompareExpr> <op: Spanned<"<=">> <r:RangeExpr> => {
-        let span = l.span.to(r.span);
+        let span = l.span.merge(r.span);
         let op = op.map(|_| ast::CompareOp::Le);
         ast::Expr::new(ast::ExprType::Compare(Box::new(ast::Spanned::new(ast::Compare { l, op, r }, span))),
             span)
@@ -256,7 +256,7 @@ CompareExpr: ast::Expr = {
 
 RangeExpr: ast::Expr = {
     <l:OpExpr> ".." <r:OpExpr> => {
-        let span = l.span.to(r.span);
+        let span = l.span.merge(r.span);
         ast::Expr::new(ast::ExprType::Range(Box::new(ast::Spanned::new(
             ast::Range {
                 start: l,
@@ -270,19 +270,19 @@ RangeExpr: ast::Expr = {
 
 OpExpr: ast::Expr = {
     <l:OpExpr> <op: Spanned<"+">> <r:Factor> => {
-        let span = l.span.to(r.span);
+        let span = l.span.merge(r.span);
         let op = op.map(|_| ast::ArithOp::Add);
         ast::Expr::new(ast::ExprType::Arith(Box::new(ast::Spanned::new(ast::Arith { l, op, r }, span))),
             span)
     },
     <l:OpExpr> <op: Spanned<"-">> <r:Factor> => {
-        let span = l.span.to(r.span);
+        let span = l.span.merge(r.span);
         let op = op.map(|_| ast::ArithOp::Sub);
         ast::Expr::new(ast::ExprType::Arith(Box::new(ast::Spanned::new(ast::Arith { l, op, r }, span))),
             span)
     },
     <l:OpExpr> <op: Spanned<"||">> <r:Factor> => {
-        let span = l.span.to(r.span);
+        let span = l.span.merge(r.span);
         let op = op.map(|_| ast::BoolOp::Or);
         ast::Expr::new(ast::ExprType::Bool(Box::new(ast::Spanned::new(ast::Bool { l, op, r }, span))),
             span)
@@ -291,7 +291,7 @@ OpExpr: ast::Expr = {
 };
 
 ExprTypeSeq: ast::ExprType = {
-    "{" <l:@L> <r:@R> "}" => ast::ExprType::Seq(vec![ast::Expr::new(ast::ExprType::Unit, span!(l, r, offset))], true),
+    "{" <l:@L> <r:@R> "}" => ast::ExprType::Seq(vec![ast::Expr::new(ast::ExprType::Unit, ast::FileSpan::new(file_id, Span::new(l, r)))], true),
     "{" <exprs:(<Expr> ";")*> <last:Expr> <last_semi:";"?> "}" => {
         let mut exprs = exprs;
         exprs.push(last);
@@ -301,19 +301,19 @@ ExprTypeSeq: ast::ExprType = {
 
 Factor: ast::Expr = {
     <l:Factor> <op: Spanned<"*">> <r:TermOrNeg> => {
-        let span = l.span.to(r.span);
+        let span = l.span.merge(r.span);
         let op = op.map(|_| ast::ArithOp::Mul);
         ast::Expr::new(ast::ExprType::Arith(Box::new(ast::Spanned::new(ast::Arith { l, op, r }, span))),
             span)
     },
     <l:Factor> <op: Spanned<"/">> <r:TermOrNeg> => {
-        let span = l.span.to(r.span);
+        let span = l.span.merge(r.span);
         let op = op.map(|_| ast::ArithOp::Div);
         ast::Expr::new(ast::ExprType::Arith(Box::new(ast::Spanned::new(ast::Arith { l, op, r }, span))),
             span)
     },
     <l:Factor> <op: Spanned<"&&">> <r:TermOrNeg> => {
-        let span = l.span.to(r.span);
+        let span = l.span.merge(r.span);
         let op = op.map(|_| ast::BoolOp::And);
         ast::Expr::new(ast::ExprType::Bool(Box::new(ast::Spanned::new(ast::Bool { l, op, r }, span))),
             span)
@@ -325,11 +325,11 @@ TermOrNeg: ast::Expr = {
     Term,
     <l:@L> "-" <term:Term> => {
         let rspan = term.span;
-        ast::Expr::new(ast::ExprType::Neg(Box::new(term)), span!(l, rspan.end().0, offset))
+        ast::Expr::new(ast::ExprType::Neg(Box::new(term)), ast::FileSpan::new(file_id, Span::new(l, rspan.end())))
     },
     <l:@L> "!" <term:Term> => {
         let rspan = term.span;
-        ast::Expr::new(ast::ExprType::Not(Box::new(term)), span!(l, rspan.end().0, offset))
+        ast::Expr::new(ast::ExprType::Not(Box::new(term)), ast::FileSpan::new(file_id, Span::new(l, rspan.end())))
     },
 };
 

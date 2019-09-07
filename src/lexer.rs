@@ -1,7 +1,7 @@
 use lazy_static::lazy_static;
 use std::collections::HashSet;
 
-pub type Span = (usize, Tok, usize);
+pub type Span = (u32, Tok, u32);
 pub type Result = std::result::Result<Span, LexError>;
 
 lazy_static! {
@@ -245,7 +245,7 @@ impl Lexer {
             "continue" => Tok::Continue,
             _ => Tok::Identifier(identifier),
         };
-        (start_char_info.index, tok, end_char_info.index + 1)
+        (start_char_info.index as u32, tok, (end_char_info.index + 1) as u32)
     }
 
     fn lex_symbol(&mut self) -> Result {
@@ -395,7 +395,7 @@ impl Lexer {
         };
         if let Some(tok) = tok {
             let len = tok.to_string().len();
-            Ok((char_info.index, tok, char_info.index + len))
+            Ok((char_info.index as u32, tok, (char_info.index + len) as u32))
         } else {
             Err(LexError {
                 index: self.current_index,
@@ -440,7 +440,11 @@ impl Lexer {
         }
 
         let number: usize = number_str.parse().unwrap();
-        Ok((start_char_info.index, Tok::Number(number), end_char_info.index + 1))
+        Ok((
+            start_char_info.index as u32,
+            Tok::Number(number),
+            (end_char_info.index + 1) as u32,
+        ))
     }
 
     fn lex_string(&mut self) -> Result {
@@ -471,7 +475,11 @@ impl Lexer {
             .iter()
             .map(|char_info| char_info.ch)
             .collect();
-        Ok((start_char_info.index, Tok::String(s), end_char_info.index + 1))
+        Ok((
+            start_char_info.index as u32,
+            Tok::String(s),
+            (end_char_info.index + 1) as u32,
+        ))
     }
 }
 

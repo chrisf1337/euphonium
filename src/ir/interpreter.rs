@@ -239,7 +239,7 @@ impl Interpreter {
 mod tests {
     use super::*;
     use crate::{
-        ir,
+        ast, ir,
         tmp::{Label, TmpGenerator},
         translate::{self, Expr},
         typecheck::Env,
@@ -387,5 +387,24 @@ mod tests {
         interpreter.run();
 
         assert_eq!(interpreter.read_u64(0x200), 123);
+    }
+
+    #[test]
+    fn test_if_ir() {
+        let mut tmp_generator = TmpGenerator::default();
+        let mut env = Env::default();
+        let let_expr = zspan!(ast::ExprType::Let(Box::new(zspan!(ast::Let {
+            pattern: zspan!(ast::Pattern::String("a".to_owned())),
+            immutable: zspan!(false),
+            ty: None,
+            expr: zspan!(ast::ExprType::Number(0)),
+        }))));
+        env.typecheck_expr_mut(&mut tmp_generator, &Label::top(), &let_expr)
+            .expect("typecheck_let failed");
+        println!("{:#?}", env);
+        // let if_expr = zspan!(ast::If {
+        //     cond: zspan!(ast::ExprType::BoolLiteral(true)),
+        //     then_expr: zspan!(ast::ExprType::)
+        // });
     }
 }
