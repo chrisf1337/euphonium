@@ -294,6 +294,10 @@ struct EnvEntry {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct LValProperties {
     ty: Rc<Type>,
+    /// `None` if mutable, or `Some(var)` if immutable, with `var` being the root immutable variable.
+    ///
+    /// For example, if `a` is an immutable record with a field named `b`, then the `LValProperties`
+    /// for `LVal::Field(a, b)` would have `Some("a")` for its `immutable` field.
     immutable: Option<String>,
 }
 
@@ -1007,17 +1011,23 @@ impl<'a> Env<'a> {
     ) -> Result<TranslateOutput<LValProperties>> {
         match &lval.t {
             LVal::Simple(var) => {
-                if let Some(var_properties) = self.get_var(var) {
+                if let Some(env_entry) = self.get_var(var) {
+                    let trexpr = if let EnvEntryType::Var(access) = &env_entry.entry_type {
+                        let levels = self.levels.borrow();
+                        Env::translate_simple_var(&levels, access, level_label)
+                    } else {
+                        // Reaching here means that we're trying to access a function through an
+                        // lval. This isn't supported properly right now, so we'll return a
+                        // placeholder value here for now.
+                        translate::Expr::Expr(ir::Expr::Const(0))
+                    };
                     Ok(TranslateOutput {
                         t: LValProperties {
-                            ty: var_properties.ty.clone(),
-                            immutable: if var_properties.immutable {
-                                Some(var.clone())
-                            } else {
-                                None
-                            },
+                            ty: env_entry.ty.clone(),
+                            immutable: if env_entry.immutable { Some(var.clone()) } else { None },
                         },
-                        expr: translate::Expr::Expr(ir::Expr::Const(0)),
+                        // expr: Frame::expr(access: Access, fp_expr: &ir::Expr),
+                        expr: trexpr,
                     })
                 } else {
                     Err(vec![TypecheckErr::new_err(
@@ -1321,112 +1331,41 @@ impl<'a> Env<'a> {
         level_label: &Label,
         Spanned { t: assign, span }: &Spanned<Assign>,
     ) -> Result<TranslateOutput<Rc<Type>>> {
-        match &assign.lval.t {
-            LVal::Simple(var) => {
-                if let Some(var_properties) = self.get_var(var) {
-                    if var_properties.immutable {
-                        let def_span = self.get_var_def_span(var).unwrap();
-                        return Err(vec![TypecheckErr::new_err(
-                            TypecheckErrType::MutatingImmutable(var.clone()),
-                            assign.lval.span,
-                        )
-                        .with_source(Spanned::new(format!("{} was defined here", var.clone()), def_span))]);
-                    }
-
-                    let resolved_expected_ty = self.resolve_type(&var_properties.ty, assign.lval.span)?;
-                    let resolved_actual_ty = self.resolve_type(
-                        &self.typecheck_expr(tmp_generator, level_label, &assign.expr)?.t,
-                        assign.expr.span,
-                    )?;
-                    if resolved_expected_ty != resolved_actual_ty {
-                        return Err(vec![TypecheckErr::new_err(
-                            TypecheckErrType::TypeMismatch(resolved_expected_ty, resolved_actual_ty),
-                            *span,
-                        )]);
-                    }
-                } else {
-                    return Err(vec![TypecheckErr::new_err(
-                        TypecheckErrType::UndefinedVar(var.clone()),
-                        assign.lval.span,
-                    )]);
-                }
-            }
-            LVal::Field(lval, field) => {
-                let lval_properties = self.typecheck_lval(tmp_generator, level_label, &lval)?.t;
-                if let Some(ref base_var) = lval_properties.immutable {
-                    return Err(vec![TypecheckErr::new_err(
-                        TypecheckErrType::MutatingImmutable(base_var.clone()),
-                        *span,
-                    )
-                    .with_source(Spanned::new(
-                        format!("{} was defined here", base_var),
-                        self.get_var_def_span(base_var).unwrap(),
-                    ))]);
-                }
-                let lval_type = self.resolve_type(&lval_properties.ty, lval.span)?;
-                if let Type::Record(_, record_field_types) = lval_type.as_ref() {
-                    if let Some(expected_ty) = record_field_types.get(&field.t) {
-                        let resolved_expected_ty = self.resolve_type(expected_ty, assign.lval.span)?;
-                        let resolved_actual_ty = self.resolve_type(
-                            &self.typecheck_expr(tmp_generator, level_label, &assign.expr)?.t,
-                            assign.expr.span,
-                        )?;
-                        if resolved_expected_ty != resolved_actual_ty {
-                            return Err(vec![TypecheckErr::new_err(
-                                TypecheckErrType::TypeMismatch(resolved_expected_ty, resolved_actual_ty),
-                                *span,
-                            )]);
-                        }
-                    } else {
-                        return Err(vec![TypecheckErr::new_err(
-                            TypecheckErrType::UndefinedField(field.t.clone()),
-                            field.span,
-                        )]);
-                    }
-                } else {
-                    return Err(vec![TypecheckErr::new_err(
-                        TypecheckErrType::NotARecord(lval_type),
-                        lval.span,
-                    )]);
-                }
-            }
-            LVal::Subscript(lval, _) => {
-                let lval_properties = self.typecheck_lval(tmp_generator, level_label, &lval)?.t;
-                if let Some(ref base_var) = lval_properties.immutable {
-                    return Err(vec![TypecheckErr::new_err(
-                        TypecheckErrType::MutatingImmutable(base_var.clone()),
-                        *span,
-                    )
-                    .with_source(Spanned::new(
-                        format!("{} was defined here", base_var),
-                        self.get_var_def_span(base_var).unwrap(),
-                    ))]);
-                }
-                let lval_type = self.resolve_type(&lval_properties.ty, lval.span)?;
-                if let Type::Array(elem_type, _) = lval_type.as_ref() {
-                    let resolved_expected_ty = self.resolve_type(elem_type, assign.lval.span)?;
-                    let resolved_actual_ty = self.resolve_type(
-                        &self.typecheck_expr(tmp_generator, level_label, &assign.expr)?.t,
-                        assign.expr.span,
-                    )?;
-                    if resolved_expected_ty != resolved_actual_ty {
-                        return Err(vec![TypecheckErr::new_err(
-                            TypecheckErrType::TypeMismatch(resolved_expected_ty, resolved_actual_ty),
-                            *span,
-                        )]);
-                    }
-                } else {
-                    return Err(vec![TypecheckErr::new_err(
-                        TypecheckErrType::NotAnArray(lval_type),
-                        lval.span,
-                    )]);
-                }
-            }
+        let TranslateOutput {
+            t: lval_properties,
+            expr: assignee_trexpr,
+        } = self.typecheck_lval(tmp_generator, level_label, &assign.lval)?;
+        // Make sure we don't mutate an immutable var.
+        if let Some(root) = lval_properties.immutable.as_ref() {
+            let def_span = self.get_var_def_span(root).unwrap();
+            return Err(vec![TypecheckErr::new_err(
+                TypecheckErrType::MutatingImmutable(root.clone()),
+                assign.lval.span,
+            )
+            .with_source(Spanned::new(format!("{} was defined here", root.clone()), def_span))]);
         }
+
+        let TranslateOutput {
+            t: assigned_val_ty,
+            expr: assigned_val_trexpr,
+        } = self.typecheck_expr(tmp_generator, level_label, &assign.expr)?;
+        let resolved_actual_ty = self.resolve_type(&assigned_val_ty, assign.expr.span)?;
+        let resolved_expected_ty = self.resolve_type(&lval_properties.ty, assign.lval.span)?;
+        if resolved_expected_ty != resolved_actual_ty {
+            return Err(vec![TypecheckErr::new_err(
+                TypecheckErrType::TypeMismatch(resolved_expected_ty, resolved_actual_ty),
+                *span,
+            )]);
+        }
+
+        let trexpr = translate::Expr::Stmt(ir::Stmt::Move(
+            assignee_trexpr.unwrap_expr(tmp_generator),
+            assigned_val_trexpr.unwrap_expr(tmp_generator),
+        ));
 
         Ok(TranslateOutput {
             t: Rc::new(Type::Unit),
-            expr: translate::Expr::Expr(ir::Expr::Const(0)),
+            expr: trexpr,
         })
     }
 
@@ -1914,12 +1853,12 @@ impl<'a> Env<'a> {
 
     pub fn translate_simple_var(
         levels: &HashMap<Label, Level>,
-        access: Access,
+        access: &Access,
         level_label: &Label,
     ) -> translate::Expr {
         fn _translate_simple_var(
             levels: &HashMap<Label, Level>,
-            access: Access,
+            access: &Access,
             level_label: &Label,
             acc_expr: ir::Expr,
         ) -> ir::Expr {
@@ -2077,9 +2016,15 @@ mod tests {
     #[test]
     fn test_typecheck_lval_record_field() {
         let mut tmp_generator = TmpGenerator::default();
-        let level_label = Label::top();
+        let level = Level::new(&mut tmp_generator, Some(Label::top()), "f", &[]);
+        let level_label = level.frame.label.clone();
 
         let mut env = Env::new(EMPTY_SOURCEMAP.1);
+        {
+            let mut levels = env.levels.borrow_mut();
+            levels.insert(level_label.clone(), level);
+        }
+
         let record = hashmap! {
             "f".to_owned() => Rc::new(Type::Int)
         };
@@ -2112,9 +2057,15 @@ mod tests {
     #[test]
     fn test_typecheck_lval_record_field_err1() {
         let mut tmp_generator = TmpGenerator::default();
-        let level_label = Label::top();
+        let level = Level::new(&mut tmp_generator, Some(Label::top()), "f", &[]);
+        let level_label = level.frame.label.clone();
 
         let mut env = Env::new(EMPTY_SOURCEMAP.1);
+        {
+            let mut levels = env.levels.borrow_mut();
+            levels.insert(level_label.clone(), level);
+        }
+
         env.insert_var(
             "x".to_owned(),
             EnvEntry {
@@ -2144,9 +2095,15 @@ mod tests {
     #[test]
     fn test_typecheck_lval_record_field_err2() {
         let mut tmp_generator = TmpGenerator::default();
-        let level_label = Label::top();
+        let level = Level::new(&mut tmp_generator, Some(Label::top()), "f", &[]);
+        let level_label = level.frame.label.clone();
 
         let mut env = Env::new(EMPTY_SOURCEMAP.1);
+        {
+            let mut levels = env.levels.borrow_mut();
+            levels.insert(level_label.clone(), level);
+        }
+
         env.insert_var(
             "x".to_owned(),
             EnvEntry {
@@ -2176,9 +2133,15 @@ mod tests {
     #[test]
     fn test_typecheck_array_subscript() {
         let mut tmp_generator = TmpGenerator::default();
-        let level_label = Label::top();
+        let level = Level::new(&mut tmp_generator, Some(Label::top()), "f", &[]);
+        let level_label = level.frame.label.clone();
 
         let mut env = Env::new(EMPTY_SOURCEMAP.1);
+        {
+            let mut levels = env.levels.borrow_mut();
+            levels.insert(level_label.clone(), level);
+        }
+
         env.insert_var(
             "x".to_owned(),
             EnvEntry {
@@ -2435,9 +2398,15 @@ mod tests {
     #[test]
     fn test_typecheck_expr_typedef() {
         let mut tmp_generator = TmpGenerator::default();
-        let level_label = Label::top();
+        let level = Level::new(&mut tmp_generator, Some(Label::top()), "f", &[]);
+        let level_label = level.frame.label.clone();
 
         let mut env = Env::new(EMPTY_SOURCEMAP.1);
+        {
+            let mut levels = env.levels.borrow_mut();
+            levels.insert(level_label.clone(), level);
+        }
+
         let type_decl = zspan!(TypeDecl {
             id: zspan!("i".to_owned()),
             ty: zspan!(ast::TypeDeclType::Type(zspan!("int".to_owned())))
@@ -2964,9 +2933,15 @@ mod tests {
     #[test]
     fn test_typecheck_seq_captures_value() {
         let mut tmp_generator = TmpGenerator::default();
-        let level_label = Label::top();
+        let level = Level::new(&mut tmp_generator, Some(Label::top()), "f", &[]);
+        let level_label = level.frame.label.clone();
 
         let mut env = Env::new(EMPTY_SOURCEMAP.1);
+        {
+            let mut levels = env.levels.borrow_mut();
+            levels.insert(level_label.clone(), level);
+        }
+
         env.insert_var(
             "b".to_owned(),
             EnvEntry {
@@ -2994,9 +2969,14 @@ mod tests {
     #[test]
     fn test_illegal_let_expr() {
         let mut tmp_generator = TmpGenerator::default();
-        let level_label = Label::top();
+        let level = Level::new(&mut tmp_generator, Some(Label::top()), "f", &[]);
+        let level_label = level.frame.label.clone();
 
         let env = Env::new(EMPTY_SOURCEMAP.1);
+        {
+            let mut levels = env.levels.borrow_mut();
+            levels.insert(level_label.clone(), level);
+        }
         let expr = zspan!(ExprType::Let(Box::new(zspan!(Let {
             pattern: zspan!(Pattern::Wildcard),
             immutable: zspan!(true),
@@ -3020,9 +3000,15 @@ mod tests {
     #[test]
     fn test_assign_immut_err() {
         let mut tmp_generator = TmpGenerator::default();
-        let level_label = Label::top();
+        let level = Level::new(&mut tmp_generator, Some(Label::top()), "f", &[]);
+        let level_label = level.frame.label.clone();
 
         let mut env = Env::new(EMPTY_SOURCEMAP.1);
+        {
+            let mut levels = env.levels.borrow_mut();
+            levels.insert(level_label.clone(), level);
+        }
+
         env.insert_var(
             "a".to_owned(),
             EnvEntry {
@@ -3055,9 +3041,15 @@ mod tests {
     #[test]
     fn test_assign_record_field_immut_err() {
         let mut tmp_generator = TmpGenerator::default();
-        let level_label = Label::top();
+        let level = Level::new(&mut tmp_generator, Some(Label::top()), "f", &[]);
+        let level_label = level.frame.label.clone();
 
         let mut env = Env::new(EMPTY_SOURCEMAP.1);
+        {
+            let mut levels = env.levels.borrow_mut();
+            levels.insert(level_label.clone(), level);
+        }
+
         let record_type = Type::Record(
             "r".to_owned(),
             hashmap! {
@@ -3103,9 +3095,15 @@ mod tests {
     #[test]
     fn test_assign_record_field_type_mismatch() {
         let mut tmp_generator = TmpGenerator::default();
-        let level_label = Label::top();
+        let level = Level::new(&mut tmp_generator, Some(Label::top()), "f", &[]);
+        let level_label = level.frame.label.clone();
 
         let mut env = Env::new(EMPTY_SOURCEMAP.1);
+        {
+            let mut levels = env.levels.borrow_mut();
+            levels.insert(level_label.clone(), level);
+        }
+
         let record_type = Type::Record(
             "r".to_owned(),
             hashmap! {
@@ -3151,9 +3149,15 @@ mod tests {
     #[test]
     fn test_assign_record_field_type() {
         let mut tmp_generator = TmpGenerator::default();
-        let level_label = Label::top();
+        let level = Level::new(&mut tmp_generator, Some(Label::top()), "f", &[]);
+        let level_label = level.frame.label.clone();
 
         let mut env = Env::new(EMPTY_SOURCEMAP.1);
+        {
+            let mut levels = env.levels.borrow_mut();
+            levels.insert(level_label.clone(), level);
+        }
+
         let record_type = Type::Record(
             "r".to_owned(),
             hashmap! {
@@ -3197,9 +3201,15 @@ mod tests {
     #[test]
     fn test_assign_array_immut_err() {
         let mut tmp_generator = TmpGenerator::default();
-        let level_label = Label::top();
+        let level = Level::new(&mut tmp_generator, Some(Label::top()), "f", &[]);
+        let level_label = level.frame.label.clone();
 
         let mut env = Env::new(EMPTY_SOURCEMAP.1);
+        {
+            let mut levels = env.levels.borrow_mut();
+            levels.insert(level_label.clone(), level);
+        }
+
         let array_type = Type::Array(Rc::new(Type::Int), 1);
         env.insert_var(
             "a".to_owned(),
@@ -3236,9 +3246,15 @@ mod tests {
     #[test]
     fn test_assign_array_type_mismatch() {
         let mut tmp_generator = TmpGenerator::default();
-        let level_label = Label::top();
+        let level = Level::new(&mut tmp_generator, Some(Label::top()), "f", &[]);
+        let level_label = level.frame.label.clone();
 
         let mut env = Env::new(EMPTY_SOURCEMAP.1);
+        {
+            let mut levels = env.levels.borrow_mut();
+            levels.insert(level_label.clone(), level);
+        }
+
         let array_type = Type::Array(Rc::new(Type::Int), 1);
         env.insert_var(
             "a".to_owned(),
@@ -3275,9 +3291,14 @@ mod tests {
     #[test]
     fn test_assign_array() {
         let mut tmp_generator = TmpGenerator::default();
-        let level_label = Label::top();
+        let level = Level::new(&mut tmp_generator, Some(Label::top()), "f", &[]);
+        let level_label = level.frame.label.clone();
 
         let mut env = Env::new(EMPTY_SOURCEMAP.1);
+        {
+            let mut levels = env.levels.borrow_mut();
+            levels.insert(level_label.clone(), level);
+        }
         let array_type = Type::Array(Rc::new(Type::Int), 1);
         env.insert_var(
             "a".to_owned(),
@@ -3307,6 +3328,34 @@ mod tests {
             .map(TranslateOutput::unwrap),
             Ok(Rc::new(Type::Unit))
         );
+    }
+
+    #[test]
+    fn test_translate_assign_to_fn() {
+        let mut tmp_generator = TmpGenerator::default();
+        let level_label = Label::top();
+
+        let mut env = Env::new(EMPTY_SOURCEMAP.1);
+        let fn_type = Type::Fn(vec![], Rc::new(Type::Unit));
+        env.insert_var(
+            "f".to_owned(),
+            EnvEntry {
+                ty: Rc::new(fn_type),
+                immutable: true,
+                entry_type: EnvEntryType::Fn(Label("f".to_owned())),
+            },
+            zspan!(),
+        );
+
+        assert!(dbg!(env.typecheck_assign(
+            &mut tmp_generator,
+            &level_label,
+            &zspan!(Assign {
+                lval: zspan!(LVal::Simple("f".to_owned())),
+                expr: zspan!(ExprType::Number(0))
+            })
+        ))
+        .is_err());
     }
 
     #[test]
@@ -3514,9 +3563,15 @@ mod tests {
     #[test]
     fn test_typecheck_for() {
         let mut tmp_generator = TmpGenerator::default();
-        let level_label = Label::top();
+        let level = Level::new(&mut tmp_generator, Some(Label::top()), "f", &[]);
+        let level_label = level.frame.label.clone();
 
         let env = Env::new(EMPTY_SOURCEMAP.1);
+        {
+            let mut levels = env.levels.borrow_mut();
+            levels.insert(level_label.clone(), level);
+        }
+
         let for_expr = zspan!(For {
             index: zspan!("i".to_owned()),
             range: zspan!(ExprType::Range(Box::new(zspan!(Range {
@@ -3563,9 +3618,15 @@ mod tests {
     #[test]
     fn test_typecheck_for_body_type_mismatch() {
         let mut tmp_generator = TmpGenerator::default();
-        let level_label = Label::top();
+        let level = Level::new(&mut tmp_generator, Some(Label::top()), "f", &[]);
+        let level_label = level.frame.label.clone();
 
         let env = Env::new(EMPTY_SOURCEMAP.1);
+        {
+            let mut levels = env.levels.borrow_mut();
+            levels.insert(level_label.clone(), level);
+        }
+
         let for_expr = zspan!(For {
             index: zspan!("i".to_owned()),
             range: zspan!(ExprType::Range(Box::new(zspan!(Range {
@@ -3842,9 +3903,15 @@ mod tests {
     #[test]
     fn test_typecheck_fn_decl_exprs_in_seq_recursive() {
         let mut tmp_generator = TmpGenerator::default();
-        let level_label = Label::top();
+        let level = Level::new(&mut tmp_generator, Some(Label::top()), "f", &[]);
+        let level_label = level.frame.label.clone();
 
         let env = Env::new(EMPTY_SOURCEMAP.1);
+        {
+            let mut levels = env.levels.borrow_mut();
+            levels.insert(level_label.clone(), level);
+        }
+
         let fn_decl1 = zspan!(ExprType::FnDecl(Box::new(zspan!(FnDecl {
             id: zspan!("f".to_owned()),
             type_fields: vec![zspan!(TypeField {
@@ -3948,7 +4015,7 @@ mod tests {
             let local = level.alloc_local(&mut tmp_generator, true);
 
             assert_eq!(
-                Env::translate_simple_var(&levels, local, &label),
+                Env::translate_simple_var(&levels, &local, &label),
                 translate::Expr::Expr(ir::Expr::Mem(Box::new(ir::Expr::BinOp(
                     Box::new(ir::Expr::Tmp(*tmp::FP)),
                     ir::BinOp::Add,
@@ -3978,7 +4045,7 @@ mod tests {
             let local = level.alloc_local(&mut tmp_generator, true);
 
             assert_eq!(
-                Env::translate_simple_var(&levels, local, &label_g),
+                Env::translate_simple_var(&levels, &local, &label_g),
                 translate::Expr::Expr(ir::Expr::Mem(Box::new(ir::Expr::BinOp(
                     Box::new(ir::Expr::Mem(Box::new(ir::Expr::Tmp(*tmp::FP)))),
                     ir::BinOp::Add,

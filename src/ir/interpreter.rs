@@ -291,7 +291,7 @@ mod tests {
             Label::top() => Level::top(),
             label.clone() => level.clone(),
         };
-        let expr = Env::translate_simple_var(&levels, local, label).clone();
+        let expr = Env::translate_simple_var(&levels, &local, label).clone();
         interpreter.write_u64(0x1234, addr.unwrap());
 
         assert_eq!(
@@ -317,7 +317,7 @@ mod tests {
         interpreter.write_u64s(&[1, 2, 3], 0x100);
 
         let (expr1, expr2, expr3) = {
-            let array_expr = Env::translate_simple_var(&levels, local, label);
+            let array_expr = Env::translate_simple_var(&levels, &local, label);
             (
                 Env::translate_pointer_offset(
                     &mut tmp_generator,
@@ -394,18 +394,26 @@ mod tests {
     fn test_if_ir() {
         let mut tmp_generator = TmpGenerator::default();
         let mut env = Env::new(EMPTY_SOURCEMAP.1);
+        let mut stmts = vec![];
         let let_expr = zspan!(ast::ExprType::Let(Box::new(zspan!(ast::Let {
             pattern: zspan!(ast::Pattern::String("a".to_owned())),
             immutable: zspan!(false),
             ty: None,
             expr: zspan!(ast::ExprType::Number(0)),
         }))));
-        env.typecheck_expr_mut(&mut tmp_generator, &Label::top(), &let_expr)
-            .expect("typecheck_let failed");
-        println!("{:#?}", env);
-        // let if_expr = zspan!(ast::If {
-        //     cond: zspan!(ast::ExprType::BoolLiteral(true)),
-        //     then_expr: zspan!(ast::ExprType::)
-        // });
+        stmts.push(
+            env.typecheck_expr_mut(&mut tmp_generator, &Label::top(), &let_expr)
+                .expect("typecheck_let failed")
+                .expr
+                .unwrap_stmt(&mut tmp_generator),
+        );
+        let if_expr = zspan!(ast::If {
+            cond: zspan!(ast::ExprType::BoolLiteral(true)),
+            then_expr: zspan!(ast::ExprType::Assign(Box::new(zspan!(ast::Assign {
+                lval: zspan!(ast::LVal::Simple("a".to_owned())),
+                expr: zspan!(ast::ExprType::Number(1)),
+            })))),
+            else_expr: None,
+        });
     }
 }

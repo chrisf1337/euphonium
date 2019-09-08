@@ -11,7 +11,12 @@ pub struct Level {
 }
 
 impl Level {
-    pub fn new(tmp_generator: &mut TmpGenerator, parent_label: Option<Label>, name: &str, formals: &[bool]) -> Self {
+    pub fn new(
+        tmp_generator: &mut TmpGenerator,
+        parent_label: Option<Label>,
+        name: impl Into<String>,
+        formals: &[bool],
+    ) -> Self {
         // Add static link
         let mut frame_formals = vec![false; formals.len() + 1];
         frame_formals[0] = true;

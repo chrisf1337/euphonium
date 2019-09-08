@@ -20,7 +20,7 @@ pub struct Frame {
 }
 
 impl Frame {
-    pub fn new(tmp_generator: &mut TmpGenerator, name: &str, formals: &[bool]) -> Self {
+    pub fn new(tmp_generator: &mut TmpGenerator, name: impl Into<String>, formals: &[bool]) -> Self {
         let mut offset: i64 = 0;
         let mut accesses = vec![];
         for &formal in formals {
@@ -32,9 +32,11 @@ impl Frame {
             }
         }
 
+        let name = name.into();
+        let label = tmp_generator.new_named_label(&name);
         Frame {
-            name: name.to_owned(),
-            label: tmp_generator.new_named_label(name),
+            name,
+            label,
             formals: accesses,
             n_locals: 0,
         }
@@ -49,6 +51,8 @@ impl Frame {
         }
     }
 
+    /// For in-register temporaries, simply returns the temporary. For in-memory access, returns the
+    /// dereferenced address, suitable for assignment to or from.
     pub fn expr(access: Access, fp_expr: &ir::Expr) -> ir::Expr {
         match access {
             Access::InReg(tmp) => ir::Expr::Tmp(tmp),
