@@ -12,21 +12,33 @@ lazy_static! {
     pub static ref SP: Tmp = Tmp(ReservedTmps::Sp as usize);
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Tmp(pub usize);
 
-impl std::fmt::Display for Tmp {
+impl std::fmt::Debug for Tmp {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "{}", self.0)
+        write!(f, "t{}", self.0)
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+impl std::fmt::Display for Tmp {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "t{}", self.0)
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub struct Label(pub String);
 
 impl Label {
     pub fn top() -> Self {
         Label("top".to_owned())
+    }
+}
+
+impl std::fmt::Debug for Label {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "{}", self.0)
     }
 }
 

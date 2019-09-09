@@ -2,11 +2,12 @@ use crate::{
     ast,
     tmp::{Label, Tmp},
 };
+use std::fmt;
 
 #[cfg(test)]
 pub mod interpreter;
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub enum Expr {
     Const(i64),
     Label(Label),
@@ -17,7 +18,24 @@ pub enum Expr {
     Seq(Box<Stmt>, Box<Expr>),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+impl fmt::Debug for Expr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Expr::Const(c) => write!(f, "{:?}", c),
+            Expr::Label(l) => write!(f, "{:?}", l),
+            Expr::Tmp(t) => write!(f, "{:?}", t),
+            Expr::BinOp(l, op, r) => f.debug_tuple("BinOp").field(l).field(op).field(r).finish(),
+            Expr::Mem(e) => f.debug_tuple("Mem").field(e).finish(),
+            Expr::Call(fun, args) => f.debug_tuple("Call").field(fun).field(args).finish(),
+            Expr::Seq(s, e) => {
+                let entries: &[&dyn fmt::Debug] = &[s, e];
+                f.debug_list().entries(entries).finish()
+            }
+        }
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub enum Stmt {
     Move(Expr, Expr),
     Expr(Expr),
@@ -25,6 +43,26 @@ pub enum Stmt {
     CJump(Expr, CompareOp, Expr, Label, Label),
     Seq(Box<Stmt>, Box<Stmt>),
     Label(Label),
+}
+
+impl fmt::Debug for Stmt {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Stmt::Move(dst, src) => f.debug_tuple("Move").field(dst).field(src).finish(),
+            Stmt::Expr(e) => f.debug_tuple("Expr").field(e).finish(),
+            Stmt::Jump(l, ls) => f.debug_tuple("Jump").field(l).field(ls).finish(),
+            Stmt::CJump(l, op, r, tl, fl) => f
+                .debug_tuple("CJump")
+                .field(l)
+                .field(op)
+                .field(r)
+                .field(tl)
+                .field(fl)
+                .finish(),
+            Stmt::Seq(s1, s2) => f.debug_list().entries(&[s1, s2]).finish(),
+            Stmt::Label(l) => write!(f, "{:?}", l),
+        }
+    }
 }
 
 impl Stmt {
@@ -38,6 +76,11 @@ impl Stmt {
             .into_iter()
             .rev()
             .fold(Box::new(last), |acc, next| Box::new(Stmt::Seq(Box::new(next), acc)))
+    }
+
+    pub fn push(mut self, stmt: Stmt) -> Stmt {
+        self = Stmt::Seq(Box::new(self), Box::new(stmt));
+        self
     }
 
     pub fn flatten(&self) -> Vec<Stmt> {
@@ -129,7 +172,7 @@ impl Expr {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BinOp {
     Add,
     Sub,
@@ -141,6 +184,23 @@ pub enum BinOp {
     RShift,
     ArithRShift,
     Xor,
+}
+
+impl fmt::Debug for BinOp {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            BinOp::Add => write!(f, "+"),
+            BinOp::Sub => write!(f, "-"),
+            BinOp::Mul => write!(f, "*"),
+            BinOp::Div => write!(f, "/"),
+            BinOp::And => write!(f, "&&"),
+            BinOp::Or => write!(f, "||"),
+            BinOp::LShift => write!(f, "<<"),
+            BinOp::RShift => write!(f, ">>"),
+            BinOp::ArithRShift => write!(f, "A>>"),
+            BinOp::Xor => write!(f, "^"),
+        }
+    }
 }
 
 impl From<ast::ArithOp> for BinOp {
@@ -206,8 +266,8 @@ mod tests {
             (Expr::Call(func1, args1), Expr::Call(func2, args2)) => {
                 tmp_eq_in_expr(tmp_table, func1, func2)
                     && args1
-                        .into_iter()
-                        .zip(args2.into_iter())
+                        .iter()
+                        .zip(args2.iter())
                         .fold(true, |acc, (arg1, arg2)| acc && tmp_eq_in_expr(tmp_table, arg1, arg2))
             }
             (Expr::Seq(stmt1, expr1), Expr::Seq(stmt2, expr2)) => {
@@ -239,7 +299,7 @@ mod tests {
         if stmts1.len() != stmts2.len() {
             return false;
         }
-        for (stmt1, stmt2) in stmts1.into_iter().zip(stmts2.into_iter()) {
+        for (stmt1, stmt2) in stmts1.iter().zip(stmts2.iter()) {
             if !tmp_eq_in_stmt(&mut tmp_table, stmt1, stmt2) {
                 return false;
             }
@@ -285,7 +345,7 @@ mod tests {
         .flatten();
         assert!(tmp_eq(
             &stmts,
-            &vec![
+            &[
                 Stmt::Expr(Expr::Const(0)),
                 Stmt::Move(
                     Expr::BinOp(Box::new(Expr::Const(0)), BinOp::Add, Box::new(Expr::Const(8)),),

@@ -68,7 +68,7 @@ impl Interpreter {
     }
 
     fn sp_mut(&mut self) -> &mut u64 {
-        self.tmps.get_mut(&tmp::SP).unwrap()
+        self.tmp_mut(*tmp::SP)
     }
 
     fn fp(&self) -> u64 {
@@ -76,13 +76,17 @@ impl Interpreter {
     }
 
     fn fp_mut(&mut self) -> &mut u64 {
-        self.tmps.get_mut(&tmp::FP).unwrap()
+        self.tmp_mut(*tmp::FP)
+    }
+
+    fn tmp_mut(&mut self, tmp: Tmp) -> &mut u64 {
+        self.tmps.entry(tmp).or_default()
     }
 
     fn interpret_expr_as_rvalue(&mut self, expr: &ir::Expr) -> u64 {
         match expr {
             ir::Expr::Const(c) => unsafe { std::mem::transmute(*c) },
-            ir::Expr::Tmp(tmp) => self.tmps[tmp],
+            ir::Expr::Tmp(tmp) => *self.tmp_mut(*tmp),
             ir::Expr::BinOp(l, op, r) => {
                 let l = self.interpret_expr_as_rvalue(l);
                 let r = self.interpret_expr_as_rvalue(r);
@@ -140,6 +144,9 @@ impl Interpreter {
                 } else {
                     panic!("unexpected jump target: {:?}", expr)
                 }
+            }
+            ir::Stmt::Expr(expr) => {
+                self.interpret_expr_as_rvalue(expr);
             }
             _ => unimplemented!("{:?}", stmt),
         }
@@ -243,7 +250,7 @@ mod tests {
         tmp::{Label, TmpGenerator},
         translate::{self, Expr},
         typecheck::Env,
-        utils::EMPTY_SOURCEMAP,
+        utils::{dump_vec, EMPTY_SOURCEMAP},
     };
     use maplit::hashmap;
 
@@ -393,27 +400,45 @@ mod tests {
     #[test]
     fn test_if_ir() {
         let mut tmp_generator = TmpGenerator::default();
+        let level = Level::new(&mut tmp_generator, Some(Label::top()), "f", &[]);
+        let level_label = level.frame.label.clone();
+
         let mut env = Env::new(EMPTY_SOURCEMAP.1);
-        let mut stmts = vec![];
+        {
+            let mut levels = env.levels.borrow_mut();
+            levels.insert(level_label.clone(), level);
+        }
+
         let let_expr = zspan!(ast::ExprType::Let(Box::new(zspan!(ast::Let {
             pattern: zspan!(ast::Pattern::String("a".to_owned())),
             immutable: zspan!(false),
             ty: None,
             expr: zspan!(ast::ExprType::Number(0)),
         }))));
-        stmts.push(
-            env.typecheck_expr_mut(&mut tmp_generator, &Label::top(), &let_expr)
-                .expect("typecheck_let failed")
-                .expr
-                .unwrap_stmt(&mut tmp_generator),
-        );
-        let if_expr = zspan!(ast::If {
+        let mut stmt = env
+            .typecheck_expr_mut(&mut tmp_generator, &level_label, &let_expr)
+            .expect("typecheck_let failed")
+            .expr
+            .unwrap_stmt(&mut tmp_generator);
+
+        let if_expr = zspan!(ast::ExprType::If(Box::new(zspan!(ast::If {
             cond: zspan!(ast::ExprType::BoolLiteral(true)),
             then_expr: zspan!(ast::ExprType::Assign(Box::new(zspan!(ast::Assign {
                 lval: zspan!(ast::LVal::Simple("a".to_owned())),
                 expr: zspan!(ast::ExprType::Number(1)),
             })))),
             else_expr: None,
-        });
+        }))));
+        stmt = stmt.push(
+            env.typecheck_expr(&mut tmp_generator, &level_label, &if_expr)
+                .expect("typecheck_let failed")
+                .expr
+                .unwrap_stmt(&mut tmp_generator),
+        );
+
+        let mut interpreter = Interpreter::new(Expr::Stmt(stmt));
+        interpreter.run();
+        let addr = interpreter.fp() as i64 - frame::WORD_SIZE;
+        assert_eq!(interpreter.read_u64(addr as u64), 1);
     }
 }

@@ -314,7 +314,7 @@ pub struct Env<'a> {
     fn_param_decl_spans: HashMap<String, Vec<FileSpan>>,
     enum_case_param_decl_spans: HashMap<String, HashMap<String, Vec<FileSpan>>>,
 
-    levels: Rc<RefCell<HashMap<Label, Level>>>,
+    pub(crate) levels: Rc<RefCell<HashMap<Label, Level>>>,
 }
 
 impl<'a> Env<'a> {
@@ -952,9 +952,9 @@ impl<'a> Env<'a> {
                 t: Rc::new(Type::String),
                 expr: translate::Expr::Expr(ir::Expr::Const(0)),
             }),
-            ExprType::Number(_) => Ok(TranslateOutput {
+            ExprType::Number(n) => Ok(TranslateOutput {
                 t: Rc::new(Type::Int),
-                expr: translate::Expr::Expr(ir::Expr::Const(0)),
+                expr: translate::Expr::Expr(ir::Expr::Const(*n as i64)),
             }),
             ExprType::Neg(expr) => self.assert_ty(tmp_generator, level_label, expr, &Rc::new(Type::Int)),
             ExprType::Arith(arith) => self.typecheck_arith(tmp_generator, level_label, arith),
@@ -962,9 +962,9 @@ impl<'a> Env<'a> {
                 t: Rc::new(Type::Unit),
                 expr: translate::Expr::Expr(ir::Expr::Const(0)),
             }),
-            ExprType::BoolLiteral(_) => Ok(TranslateOutput {
+            ExprType::BoolLiteral(b) => Ok(TranslateOutput {
                 t: Rc::new(Type::Bool),
-                expr: translate::Expr::Expr(ir::Expr::Const(0)),
+                expr: translate::Expr::Expr(ir::Expr::Const(if *b { 1 } else { 0 })),
             }),
             ExprType::Not(expr) => self.assert_ty(tmp_generator, level_label, expr, &Rc::new(Type::Bool)),
             ExprType::Bool(bool_expr) => self.typecheck_bool(tmp_generator, level_label, bool_expr),
@@ -1095,7 +1095,10 @@ impl<'a> Env<'a> {
             immutable,
             expr,
         } = &let_expr.t;
-        let expr_type = self.typecheck_expr(tmp_generator, level_label, expr)?.t;
+        let TranslateOutput {
+            t: expr_type,
+            expr: assigned_val_trexpr,
+        } = self.typecheck_expr(tmp_generator, level_label, expr)?;
         if let Some(ast_ty) = ast_ty {
             // Type annotation
             let ty = Rc::new(ast_ty.t.clone().into());
@@ -1127,15 +1130,28 @@ impl<'a> Env<'a> {
                 EnvEntry {
                     ty,
                     immutable: immutable.t,
-                    entry_type: EnvEntryType::Var(local),
+                    entry_type: EnvEntryType::Var(local.clone()),
                 },
                 let_expr.span,
-            )
+            );
+            let levels = self.levels.borrow();
+            let assignee_trexpr = Env::translate_simple_var(&levels, &local, level_label);
+            Ok(TranslateOutput {
+                t: Rc::new(Type::Unit),
+                expr: translate::Expr::Stmt(ir::Stmt::Move(
+                    assignee_trexpr.unwrap_expr(tmp_generator),
+                    assigned_val_trexpr.unwrap_expr(tmp_generator),
+                )),
+            })
+        } else {
+            Ok(TranslateOutput {
+                t: Rc::new(Type::Unit),
+                expr: translate::Expr::Stmt(ir::Stmt::Seq(
+                    Box::new(assigned_val_trexpr.unwrap_stmt(tmp_generator)),
+                    Box::new(ir::Stmt::Expr(ir::Expr::Const(0))),
+                )),
+            })
         }
-        Ok(TranslateOutput {
-            t: Rc::new(Type::Unit),
-            expr: translate::Expr::Expr(ir::Expr::Const(0)),
-        })
     }
 
     fn typecheck_fn_call(
@@ -2171,9 +2187,14 @@ mod tests {
     #[test]
     fn test_typecheck_let_type_annotation() {
         let mut tmp_generator = TmpGenerator::default();
-        let level_label = Label::top();
+        let level = Level::new(&mut tmp_generator, Some(Label::top()), "f", &[]);
+        let level_label = level.frame.label.clone();
 
         let mut env = Env::new(EMPTY_SOURCEMAP.1);
+        {
+            let mut levels = env.levels.borrow_mut();
+            levels.insert(level_label.clone(), level);
+        }
         let let_expr = zspan!(Let {
             pattern: zspan!(Pattern::String("x".to_owned())),
             immutable: zspan!(true),
@@ -2905,9 +2926,14 @@ mod tests {
     #[test]
     fn test_typecheck_seq_independent() {
         let mut tmp_generator = TmpGenerator::default();
-        let level_label = Label::top();
+        let level = Level::new(&mut tmp_generator, Some(Label::top()), "f", &[]);
+        let level_label = level.frame.label.clone();
 
         let env = Env::new(EMPTY_SOURCEMAP.1);
+        {
+            let mut levels = env.levels.borrow_mut();
+            levels.insert(level_label.clone(), level);
+        }
         let seq_expr1 = zspan!(ExprType::Seq(
             vec![zspan!(ExprType::Let(Box::new(zspan!(Let {
                 pattern: zspan!(Pattern::String("a".to_owned())),
@@ -3841,9 +3867,14 @@ mod tests {
     #[should_panic] // FIXME
     fn test_typecheck_closure_captures_value() {
         let mut tmp_generator = TmpGenerator::default();
-        let level_label = Label::top();
+        let level = Level::new(&mut tmp_generator, Some(Label::top()), "f", &[]);
+        let level_label = level.frame.label.clone();
 
         let mut env = Env::new(EMPTY_SOURCEMAP.1);
+        {
+            let mut levels = env.levels.borrow_mut();
+            levels.insert(level_label.clone(), level);
+        }
         env.insert_var(
             "b".to_owned(),
             EnvEntry {
@@ -3957,9 +3988,14 @@ mod tests {
     #[test]
     fn test_typecheck_fn_decl_exprs_in_seq_captures_correctly() {
         let mut tmp_generator = TmpGenerator::default();
-        let level_label = Label::top();
+        let level = Level::new(&mut tmp_generator, Some(Label::top()), "f", &[]);
+        let level_label = level.frame.label.clone();
 
         let env = Env::new(EMPTY_SOURCEMAP.1);
+        {
+            let mut levels = env.levels.borrow_mut();
+            levels.insert(level_label.clone(), level);
+        }
         let fn_decl1 = zspan!(ExprType::FnDecl(Box::new(zspan!(FnDecl {
             id: zspan!("f".to_owned()),
             type_fields: vec![zspan!(TypeField {

@@ -21,3 +21,13 @@ macro_rules! zspan {
         )
     };
 }
+
+use std::fmt::Debug;
+
+pub fn dump_vec<T: Debug>(v: &[T]) {
+    println!("[");
+    for elem in v {
+        println!("    {:?}", elem);
+    }
+    println!("]");
+}
