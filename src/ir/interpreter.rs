@@ -113,7 +113,7 @@ impl Interpreter {
                 let value = self.interpret_expr_as_rvalue(src);
                 match dst {
                     ir::Expr::Tmp(tmp) => {
-                        let tmp = self.tmps.get_mut(&tmp).unwrap();
+                        let tmp = self.tmp_mut(*tmp);
                         *tmp = value;
                     }
                     ir::Expr::Mem(addr_expr) => {
@@ -409,6 +409,7 @@ mod tests {
             levels.insert(level_label.clone(), level);
         }
 
+        // let a = 0;
         let let_expr = zspan!(ast::ExprType::Let(Box::new(zspan!(ast::Let {
             pattern: zspan!(ast::Pattern::String("a".to_owned())),
             immutable: zspan!(false),
@@ -421,6 +422,7 @@ mod tests {
             .expr
             .unwrap_stmt(&mut tmp_generator);
 
+        // if true { a = 1 };
         let if_expr = zspan!(ast::ExprType::If(Box::new(zspan!(ast::If {
             cond: zspan!(ast::ExprType::BoolLiteral(true)),
             then_expr: zspan!(ast::ExprType::Assign(Box::new(zspan!(ast::Assign {
@@ -440,5 +442,59 @@ mod tests {
         interpreter.run();
         let addr = interpreter.fp() as i64 - frame::WORD_SIZE;
         assert_eq!(interpreter.read_u64(addr as u64), 1);
+    }
+
+    #[test]
+    fn test_if_as_expr_ir() {
+        let mut tmp_generator = TmpGenerator::default();
+        let level = Level::new(&mut tmp_generator, Some(Label::top()), "f", &[]);
+        let level_label = level.frame.label.clone();
+
+        let mut env = Env::new(EMPTY_SOURCEMAP.1);
+        {
+            let mut levels = env.levels.borrow_mut();
+            levels.insert(level_label.clone(), level);
+        }
+
+        // let a = 0;
+        let let_expr = zspan!(ast::ExprType::Let(Box::new(zspan!(ast::Let {
+            pattern: zspan!(ast::Pattern::String("a".to_owned())),
+            immutable: zspan!(false),
+            ty: None,
+            expr: zspan!(ast::ExprType::Number(0)),
+        }))));
+        let mut stmt = env
+            .typecheck_expr_mut(&mut tmp_generator, &level_label, &let_expr)
+            .expect("typecheck_let failed")
+            .expr
+            .unwrap_stmt(&mut tmp_generator);
+
+        // a = if a == 0 { 123 } else { 456 };
+        let if_expr = zspan!(ast::ExprType::If(Box::new(zspan!(ast::If {
+            cond: zspan!(ast::ExprType::Compare(Box::new(zspan!(ast::Compare {
+                l: zspan!(ast::ExprType::LVal(Box::new(zspan!(ast::LVal::Simple("a".to_owned()))))),
+                op: zspan!(ast::CompareOp::Eq),
+                r: zspan!(ast::ExprType::Number(0))
+            })))),
+            then_expr: zspan!(ast::ExprType::Number(123)),
+            else_expr: Some(zspan!(ast::ExprType::Number(456))),
+        }))));
+        let assign_expr = zspan!(ast::ExprType::Assign(Box::new(zspan!(ast::Assign {
+            lval: zspan!(ast::LVal::Simple("a".to_owned())),
+            expr: if_expr,
+        }))));
+
+        stmt = stmt.push(
+            env.typecheck_expr(&mut tmp_generator, &level_label, &assign_expr)
+                .expect("typecheck_let failed")
+                .expr
+                .unwrap_stmt(&mut tmp_generator),
+        );
+        dump_vec(&stmt.flatten());
+
+        let mut interpreter = Interpreter::new(Expr::Stmt(stmt));
+        interpreter.run();
+        let addr = interpreter.fp() as i64 - frame::WORD_SIZE;
+        assert_eq!(interpreter.read_u64(addr as u64), 123);
     }
 }
