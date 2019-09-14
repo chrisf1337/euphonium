@@ -1026,7 +1026,6 @@ impl<'a> Env<'a> {
                             ty: env_entry.ty.clone(),
                             immutable: if env_entry.immutable { Some(var.clone()) } else { None },
                         },
-                        // expr: Frame::expr(access: Access, fp_expr: &ir::Expr),
                         expr: trexpr,
                     })
                 } else {
@@ -1037,7 +1036,8 @@ impl<'a> Env<'a> {
                 }
             }
             LVal::Field(var, field) => {
-                let lval_properties = self.typecheck_lval(tmp_generator, level_label, var)?.t;
+                let TranslateOutput { t: lval_properties, .. } =
+                    self.typecheck_lval(tmp_generator, level_label, var)?;
                 if let Type::Record(_, fields) = self.resolve_type(&lval_properties.ty, var.span)?.as_ref() {
                     if let Some(field_type) = fields.get(&field.t) {
                         // A field is mutable only if the record it belongs to is mutable
@@ -1056,8 +1056,14 @@ impl<'a> Env<'a> {
                 )])
             }
             LVal::Subscript(var, index) => {
-                let lval_properties = self.typecheck_lval(tmp_generator, level_label, var)?.t;
-                let index_type = self.typecheck_expr(tmp_generator, level_label, index)?.t;
+                let TranslateOutput {
+                    t: lval_properties,
+                    expr: lval_trexpr,
+                } = self.typecheck_lval(tmp_generator, level_label, var)?;
+                let TranslateOutput {
+                    t: index_type,
+                    expr: index_trexpr,
+                } = self.typecheck_expr(tmp_generator, level_label, index)?;
                 if let Type::Array(ty, _) = self.resolve_type(&lval_properties.ty, var.span)?.as_ref() {
                     if self.resolve_type(&index_type, index.span)? == Rc::new(Type::Int) {
                         Ok(TranslateOutput {
@@ -1065,7 +1071,7 @@ impl<'a> Env<'a> {
                                 ty: ty.clone(),
                                 immutable: lval_properties.immutable,
                             },
-                            expr: translate::Expr::Expr(ir::Expr::Const(0)),
+                            expr: Env::translate_pointer_offset(tmp_generator, &lval_trexpr, &index_trexpr),
                         })
                     } else {
                         Err(vec![TypecheckErr::new_err(
@@ -1412,7 +1418,10 @@ impl<'a> Env<'a> {
         level_label: &Label,
         Spanned { t: array, .. }: &Spanned<Array>,
     ) -> Result<TranslateOutput<Rc<Type>>> {
-        let elem_type = self.typecheck_expr(tmp_generator, level_label, &array.initial_value)?.t;
+        let TranslateOutput {
+            t: elem_type,
+            expr: init_val_trexpr,
+        } = self.typecheck_expr(tmp_generator, level_label, &array.initial_value)?;
         let len = Self::eval_arith_const_expr(&array.len)?;
         if len < 0 {
             return Err(vec![TypecheckErr::new_err(
@@ -1422,7 +1431,10 @@ impl<'a> Env<'a> {
         }
         Ok(TranslateOutput {
             t: Rc::new(Type::Array(elem_type, len as usize)),
-            expr: translate::Expr::Expr(ir::Expr::Const(0)),
+            expr: Frame::external_call(
+                "__new_array",
+                vec![init_val_trexpr.unwrap_expr(tmp_generator), ir::Expr::Const(len as i64)],
+            ),
         })
     }
 
@@ -4089,14 +4101,5 @@ mod tests {
                 ))))
             );
         }
-    }
-
-    #[test]
-    fn test_translate_if() {
-        let if_expr = ast::If {
-            cond: zspan!(ast::ExprType::BoolLiteral(true)),
-            then_expr: zspan!(ast::ExprType::BoolLiteral(true)),
-            else_expr: None,
-        };
     }
 }

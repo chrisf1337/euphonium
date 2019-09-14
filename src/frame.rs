@@ -1,6 +1,7 @@
 use crate::{
     ir,
     tmp::{Label, Tmp, TmpGenerator},
+    translate,
 };
 
 pub const WORD_SIZE: i64 = std::mem::size_of::<u64>() as i64;
@@ -62,5 +63,9 @@ impl Frame {
                 Box::new(ir::Expr::Const(offset)),
             ))),
         }
+    }
+
+    pub fn external_call(fn_name: impl Into<String>, args: Vec<ir::Expr>) -> translate::Expr {
+        translate::Expr::Expr(ir::Expr::Call(Box::new(ir::Expr::Label(Label(fn_name.into()))), args))
     }
 }
