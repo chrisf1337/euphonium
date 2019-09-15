@@ -17,7 +17,8 @@ const MEMORY_SIZE: usize = 1024;
 
 lazy_static! {
     static ref RUNTIME_FNS: HashSet<String> = hashset! {
-        "__malloc".to_owned()
+        "__malloc".to_owned(),
+        "__panic".to_owned(),
     };
 }
 
@@ -288,6 +289,7 @@ impl Interpreter {
     fn runtime_call(&mut self, name: &str, args: &[ir::Expr]) -> u64 {
         match name {
             "__malloc" => self.__malloc(args),
+            "__panic" => self.__panic(args),
             _ => unreachable!("{} is not a runtime function", name),
         }
     }
@@ -301,6 +303,10 @@ impl Interpreter {
     fn __malloc(&mut self, args: &[ir::Expr]) -> u64 {
         let len = self.interpret_expr_as_rvalue(&args[0]);
         self.malloc(len)
+    }
+
+    fn __panic(&mut self, _args: &[ir::Expr]) -> u64 {
+        panic!()
     }
 }
 
@@ -652,5 +658,95 @@ mod tests {
             let val = interpreter.interpret_expr_as_rvalue(&trexpr);
             assert_eq!(val, 3);
         }
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_array_bounds_checking_under() {
+        let mut tmp_generator = TmpGenerator::default();
+        let level = Level::new(&mut tmp_generator, Some(Label::top()), "f", &[]);
+        let level_label = level.frame.label.clone();
+
+        let mut env = Env::new(EMPTY_SOURCEMAP.1);
+        {
+            let mut levels = env.levels.borrow_mut();
+            levels.insert(level_label.clone(), level);
+        }
+
+        // let a = [0; 10];
+        let let_expr = zspan!(ast::ExprType::Let(Box::new(zspan!(ast::Let {
+            pattern: zspan!(ast::Pattern::String("a".to_owned())),
+            immutable: zspan!(false),
+            ty: None,
+            expr: zspan!(ast::ExprType::Array(Box::new(zspan!(ast::Array {
+                initial_value: zspan!(ast::ExprType::Number(0)),
+                len: zspan!(ast::ExprType::Number(10)),
+            })))),
+        }))));
+        let mut stmt = env
+            .typecheck_expr_mut(&mut tmp_generator, &level_label, &let_expr)
+            .expect("typecheck failed")
+            .expr
+            .unwrap_stmt(&mut tmp_generator);
+
+        // a[-1];
+        let subscript_expr = zspan!(ast::ExprType::LVal(Box::new(zspan!(ast::LVal::Subscript(
+            Box::new(zspan!(ast::LVal::Simple("a".to_owned()))),
+            zspan!(ast::ExprType::Neg(Box::new(zspan!(ast::ExprType::Number(1)))))
+        )))));
+        stmt = stmt.push(
+            env.typecheck_expr_mut(&mut tmp_generator, &level_label, &subscript_expr)
+                .expect("typecheck failed")
+                .expr
+                .unwrap_stmt(&mut tmp_generator),
+        );
+
+        let mut interpreter = Interpreter::new(Expr::Stmt(stmt));
+        interpreter.run();
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_array_bounds_checking_over() {
+        let mut tmp_generator = TmpGenerator::default();
+        let level = Level::new(&mut tmp_generator, Some(Label::top()), "f", &[]);
+        let level_label = level.frame.label.clone();
+
+        let mut env = Env::new(EMPTY_SOURCEMAP.1);
+        {
+            let mut levels = env.levels.borrow_mut();
+            levels.insert(level_label.clone(), level);
+        }
+
+        // let a = [0; 10];
+        let let_expr = zspan!(ast::ExprType::Let(Box::new(zspan!(ast::Let {
+            pattern: zspan!(ast::Pattern::String("a".to_owned())),
+            immutable: zspan!(false),
+            ty: None,
+            expr: zspan!(ast::ExprType::Array(Box::new(zspan!(ast::Array {
+                initial_value: zspan!(ast::ExprType::Number(0)),
+                len: zspan!(ast::ExprType::Number(10)),
+            })))),
+        }))));
+        let mut stmt = env
+            .typecheck_expr_mut(&mut tmp_generator, &level_label, &let_expr)
+            .expect("typecheck failed")
+            .expr
+            .unwrap_stmt(&mut tmp_generator);
+
+        // a[10];
+        let subscript_expr = zspan!(ast::ExprType::LVal(Box::new(zspan!(ast::LVal::Subscript(
+            Box::new(zspan!(ast::LVal::Simple("a".to_owned()))),
+            zspan!(ast::ExprType::Number(10))
+        )))));
+        stmt = stmt.push(
+            env.typecheck_expr_mut(&mut tmp_generator, &level_label, &subscript_expr)
+                .expect("typecheck failed")
+                .expr
+                .unwrap_stmt(&mut tmp_generator),
+        );
+
+        let mut interpreter = Interpreter::new(Expr::Stmt(stmt));
+        interpreter.run();
     }
 }

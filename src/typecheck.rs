@@ -962,7 +962,18 @@ impl<'a> Env<'a> {
                 t: Rc::new(Type::Int),
                 expr: translate::Expr::Expr(ir::Expr::Const(*n as i64)),
             }),
-            ExprType::Neg(expr) => self.assert_ty(tmp_generator, level_label, expr, &Rc::new(Type::Int)),
+            ExprType::Neg(expr) => {
+                let TranslateOutput { expr, .. } =
+                    self.assert_ty(tmp_generator, level_label, expr, &Rc::new(Type::Int))?;
+                Ok(TranslateOutput {
+                    t: Rc::new(Type::Int),
+                    expr: translate::Expr::Expr(ir::Expr::BinOp(
+                        Box::new(ir::Expr::Const(-1)),
+                        ir::BinOp::Mul,
+                        Box::new(expr.unwrap_expr(tmp_generator)),
+                    )),
+                })
+            }
             ExprType::Arith(arith) => self.typecheck_arith(tmp_generator, level_label, arith),
             ExprType::Unit | ExprType::Continue | ExprType::Break => Ok(TranslateOutput {
                 t: Rc::new(Type::Unit),

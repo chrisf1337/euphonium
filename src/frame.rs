@@ -1,7 +1,6 @@
 use crate::{
     ir,
     tmp::{Label, Tmp, TmpGenerator},
-    translate,
 };
 
 pub const WORD_SIZE: i64 = std::mem::size_of::<u64>() as i64;
