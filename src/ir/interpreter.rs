@@ -30,18 +30,11 @@ pub struct Interpreter {
     label_table: HashMap<Label, usize>,
     /// Heap pointer
     hp: u64,
+    panicked: bool,
 }
 
-impl Interpreter {
-    fn new(expr: Expr) -> Interpreter {
-        let mut tmp_generator = TmpGenerator::default();
-        let stmts = expr.unwrap_stmt(&mut tmp_generator).flatten();
-        let mut label_table = HashMap::new();
-        for (i, stmt) in stmts.iter().enumerate() {
-            if let ir::Stmt::Label(label) = stmt {
-                label_table.insert(label.clone(), i);
-            }
-        }
+impl Default for Interpreter {
+    fn default() -> Interpreter {
         let fp = MEMORY_SIZE as u64;
         let sp = MEMORY_SIZE as u64;
         let tmps = hashmap! {
@@ -49,29 +42,53 @@ impl Interpreter {
             tmp::SP.clone() => sp,
         };
         Interpreter {
-            stmts,
+            stmts: vec![],
             tmps,
             memory: [0; MEMORY_SIZE],
             ip: 0,
-            label_table,
+            label_table: HashMap::new(),
             hp: 0,
+            panicked: false,
         }
     }
+}
 
+impl Interpreter {
     fn jump(&mut self, label: &Label) {
         self.ip = self.label_table[dbg!(label)];
     }
 
-    fn step(&mut self) {
+    fn step(&mut self) -> Option<u64> {
         let stmt = self.stmts[self.ip].clone();
-        self.interpret_stmt(&stmt);
+        let val = self.interpret_stmt(&stmt);
         self.ip += 1;
+        val
     }
 
-    fn run(&mut self) {
+    fn run(&mut self) -> Option<u64> {
+        let mut val: Option<u64> = None;
         while self.ip < self.stmts.len() {
-            self.step();
+            val = self.step();
+            if self.panicked {
+                return None;
+            }
         }
+        val
+    }
+
+    fn run_expr(&mut self, tmp_generator: &mut TmpGenerator, expr: Expr) -> Option<u64> {
+        let stmts = expr.unwrap_stmt(tmp_generator).flatten();
+        let mut label_table = HashMap::new();
+        for (i, stmt) in stmts.iter().enumerate() {
+            if let ir::Stmt::Label(label) = stmt {
+                label_table.insert(label.clone(), i);
+            }
+        }
+        self.stmts = stmts;
+        self.label_table = label_table;
+        self.ip = 0;
+        self.panicked = false;
+        self.run()
     }
 
     fn sp(&self) -> u64 {
@@ -133,8 +150,7 @@ impl Interpreter {
         }
     }
 
-    fn interpret_stmt(&mut self, stmt: &ir::Stmt) {
-        println!("{:?}", stmt);
+    fn interpret_stmt(&mut self, stmt: &ir::Stmt) -> Option<u64> {
         match stmt {
             ir::Stmt::Move(dst, src) => {
                 let value = self.interpret_expr_as_rvalue(src);
@@ -149,6 +165,7 @@ impl Interpreter {
                     }
                     _ => panic!("cannot move to non Tmp or Mem"),
                 }
+                None
             }
             ir::Stmt::CJump(l, op, r, t_label, f_label) => {
                 let l = self.interpret_expr_as_rvalue(l);
@@ -177,23 +194,22 @@ impl Interpreter {
                     }
                     _ => unimplemented!("{:?}", op),
                 }
+                None
             }
-            ir::Stmt::Label(_) => (),
+            ir::Stmt::Label(_) => None,
             ir::Stmt::Jump(expr, _) => {
                 if let ir::Expr::Label(label) = expr {
-                    self.jump(label)
+                    self.jump(label);
+                    None
                 } else {
-                    panic!("unexpected jump target: {:?}", expr)
+                    panic!("unexpected jump target: {:?}", expr);
                 }
             }
-            ir::Stmt::Expr(expr) => {
-                self.interpret_expr_as_rvalue(expr);
-            }
+            ir::Stmt::Expr(expr) => Some(self.interpret_expr_as_rvalue(expr)),
             ir::Stmt::Seq(stmt1, stmt2) => {
                 self.interpret_stmt(stmt1);
-                self.interpret_stmt(stmt2);
+                self.interpret_stmt(stmt2)
             }
-            _ => unimplemented!("{:?}", stmt),
         }
     }
 
@@ -306,7 +322,8 @@ impl Interpreter {
     }
 
     fn __panic(&mut self, _args: &[ir::Expr]) -> u64 {
-        panic!()
+        self.panicked = true;
+        0
     }
 }
 
@@ -324,7 +341,7 @@ mod tests {
 
     #[test]
     fn test_read_write() {
-        let mut interpreter = Interpreter::new(Expr::Stmt(ir::Stmt::Expr(ir::Expr::Const(0))));
+        let mut interpreter = Interpreter::default();
         interpreter.write_u64(0x12345, 0);
         assert_eq!(interpreter.read_u64(0), 0x12345);
 
@@ -340,7 +357,7 @@ mod tests {
 
     #[test]
     fn test_deref() {
-        let mut interpreter = Interpreter::new(Expr::Stmt(ir::Stmt::Expr(ir::Expr::Const(0))));
+        let mut interpreter = Interpreter::default();
         interpreter.write_u64(0x54321, 0x234);
         interpreter.write_u64(0x234, 0x123);
         assert_eq!(
@@ -358,7 +375,7 @@ mod tests {
     #[test]
     fn test_translate_simple_var() {
         let mut tmp_generator = TmpGenerator::default();
-        let mut interpreter = Interpreter::new(Expr::Stmt(ir::Stmt::Expr(ir::Expr::Const(0))));
+        let mut interpreter = Interpreter::default();
         let mut level = Level::new(&mut tmp_generator, Some(Label::top()), "f", &[]);
         let (local, addr) = interpreter.alloc_local(&mut tmp_generator, &mut level, true);
         let label = level.label();
@@ -378,7 +395,7 @@ mod tests {
     #[test]
     fn test_translate_pointer_offset() {
         let mut tmp_generator = TmpGenerator::default();
-        let mut interpreter = Interpreter::new(Expr::Stmt(ir::Stmt::Expr(ir::Expr::Const(0))));
+        let mut interpreter = Interpreter::default();
         let mut level = Level::new(&mut tmp_generator, Some(Label::top()), "f", &[]);
         let (local, addr) = interpreter.alloc_local(&mut tmp_generator, &mut level, true);
         let label = level.label();
@@ -428,7 +445,7 @@ mod tests {
 
     #[test]
     fn test_move() {
-        let mut interpreter = Interpreter::new(Expr::Stmt(ir::Stmt::Expr(ir::Expr::Const(0))));
+        let mut interpreter = Interpreter::default();
         *interpreter.sp_mut() -= frame::WORD_SIZE as u64;
         interpreter.interpret_stmt(&ir::Stmt::Move(
             ir::Expr::Mem(Box::new(ir::Expr::Tmp(*tmp::SP))),
@@ -459,8 +476,8 @@ mod tests {
             ir::Stmt::Jump(ir::Expr::Label(join_label.clone()), vec![join_label.clone()]),
             ir::Stmt::Label(join_label),
         ];
-        let mut interpreter = Interpreter::new(Expr::Stmt(ir::Stmt::seq(stmts)));
-        interpreter.run();
+        let mut interpreter = Interpreter::default();
+        interpreter.run_expr(&mut tmp_generator, Expr::Stmt(ir::Stmt::seq(stmts)));
 
         assert_eq!(interpreter.read_u64(0x200), 123);
     }
@@ -506,8 +523,8 @@ mod tests {
                 .unwrap_stmt(&mut tmp_generator),
         );
 
-        let mut interpreter = Interpreter::new(Expr::Stmt(stmt));
-        interpreter.run();
+        let mut interpreter = Interpreter::default();
+        interpreter.run_expr(&mut tmp_generator, Expr::Stmt(stmt));
         let addr = interpreter.fp() as i64 - frame::WORD_SIZE;
         assert_eq!(interpreter.read_u64(addr as u64), 1);
     }
@@ -560,8 +577,8 @@ mod tests {
         );
         dump_vec(&stmt.flatten());
 
-        let mut interpreter = Interpreter::new(Expr::Stmt(stmt));
-        interpreter.run();
+        let mut interpreter = Interpreter::default();
+        interpreter.run_expr(&mut tmp_generator, Expr::Stmt(stmt));
         let addr = interpreter.fp() as i64 - frame::WORD_SIZE;
         assert_eq!(interpreter.read_u64(addr as u64), 123);
     }
@@ -624,44 +641,50 @@ mod tests {
                 .unwrap_stmt(&mut tmp_generator),
         );
 
-        let mut interpreter = Interpreter::new(Expr::Stmt(stmt));
-        interpreter.run();
-
-        let a_expr = zspan!(ast::ExprType::LVal(Box::new(zspan!(ast::LVal::Simple("a".to_owned())))));
-        let a_trexpr = env
-            .typecheck_expr(&mut tmp_generator, &level_label, &a_expr)
-            .expect("typecheck")
-            .expr;
+        let mut interpreter = Interpreter::default();
+        interpreter.run_expr(&mut tmp_generator, Expr::Stmt(stmt));
 
         {
-            let trexpr = ir::Expr::Mem(Box::new(a_trexpr.clone().unwrap_expr(&mut tmp_generator)));
-            let val = interpreter.interpret_expr_as_rvalue(&trexpr);
-            assert_eq!(val, 1);
+            let expr = zspan!(ast::ExprType::LVal(Box::new(zspan!(ast::LVal::Subscript(
+                Box::new(zspan!(ast::LVal::Simple("a".to_owned()))),
+                zspan!(ast::ExprType::Number(0))
+            )))));
+            let trexpr = env
+                .typecheck_expr(&mut tmp_generator, &level_label, &expr)
+                .expect("typecheck")
+                .expr;
+            let val = interpreter.run_expr(&mut tmp_generator, trexpr);
+            assert_eq!(val, Some(1));
         }
 
         {
-            let trexpr = ir::Expr::Mem(Box::new(ir::Expr::BinOp(
-                Box::new(a_trexpr.clone().unwrap_expr(&mut tmp_generator)),
-                ir::BinOp::Add,
-                Box::new(ir::Expr::Const(frame::WORD_SIZE)),
-            )));
-            let val = interpreter.interpret_expr_as_rvalue(&trexpr);
-            assert_eq!(val, 0);
+            let expr = zspan!(ast::ExprType::LVal(Box::new(zspan!(ast::LVal::Subscript(
+                Box::new(zspan!(ast::LVal::Simple("a".to_owned()))),
+                zspan!(ast::ExprType::Number(1))
+            )))));
+            let trexpr = env
+                .typecheck_expr(&mut tmp_generator, &level_label, &expr)
+                .expect("typecheck")
+                .expr;
+            let val = interpreter.run_expr(&mut tmp_generator, trexpr);
+            assert_eq!(val, Some(0));
         }
 
         {
-            let trexpr = ir::Expr::Mem(Box::new(ir::Expr::BinOp(
-                Box::new(a_trexpr.clone().unwrap_expr(&mut tmp_generator)),
-                ir::BinOp::Add,
-                Box::new(ir::Expr::Const(frame::WORD_SIZE * 3)),
-            )));
-            let val = interpreter.interpret_expr_as_rvalue(&trexpr);
-            assert_eq!(val, 3);
+            let expr = zspan!(ast::ExprType::LVal(Box::new(zspan!(ast::LVal::Subscript(
+                Box::new(zspan!(ast::LVal::Simple("a".to_owned()))),
+                zspan!(ast::ExprType::Number(3))
+            )))));
+            let trexpr = env
+                .typecheck_expr(&mut tmp_generator, &level_label, &expr)
+                .expect("typecheck")
+                .expr;
+            let val = interpreter.run_expr(&mut tmp_generator, trexpr);
+            assert_eq!(val, Some(3));
         }
     }
 
     #[test]
-    #[should_panic]
     fn test_array_bounds_checking_under() {
         let mut tmp_generator = TmpGenerator::default();
         let level = Level::new(&mut tmp_generator, Some(Label::top()), "f", &[]);
@@ -701,52 +724,20 @@ mod tests {
                 .unwrap_stmt(&mut tmp_generator),
         );
 
-        let mut interpreter = Interpreter::new(Expr::Stmt(stmt));
-        interpreter.run();
-    }
-
-    #[test]
-    #[should_panic]
-    fn test_array_bounds_checking_over() {
-        let mut tmp_generator = TmpGenerator::default();
-        let level = Level::new(&mut tmp_generator, Some(Label::top()), "f", &[]);
-        let level_label = level.frame.label.clone();
-
-        let mut env = Env::new(EMPTY_SOURCEMAP.1);
-        {
-            let mut levels = env.levels.borrow_mut();
-            levels.insert(level_label.clone(), level);
-        }
-
-        // let a = [0; 10];
-        let let_expr = zspan!(ast::ExprType::Let(Box::new(zspan!(ast::Let {
-            pattern: zspan!(ast::Pattern::String("a".to_owned())),
-            immutable: zspan!(false),
-            ty: None,
-            expr: zspan!(ast::ExprType::Array(Box::new(zspan!(ast::Array {
-                initial_value: zspan!(ast::ExprType::Number(0)),
-                len: zspan!(ast::ExprType::Number(10)),
-            })))),
-        }))));
-        let mut stmt = env
-            .typecheck_expr_mut(&mut tmp_generator, &level_label, &let_expr)
-            .expect("typecheck failed")
-            .expr
-            .unwrap_stmt(&mut tmp_generator);
+        let mut interpreter = Interpreter::default();
+        interpreter.run_expr(&mut tmp_generator, Expr::Stmt(stmt));
+        assert!(interpreter.panicked);
 
         // a[10];
         let subscript_expr = zspan!(ast::ExprType::LVal(Box::new(zspan!(ast::LVal::Subscript(
             Box::new(zspan!(ast::LVal::Simple("a".to_owned()))),
             zspan!(ast::ExprType::Number(10))
         )))));
-        stmt = stmt.push(
-            env.typecheck_expr_mut(&mut tmp_generator, &level_label, &subscript_expr)
-                .expect("typecheck failed")
-                .expr
-                .unwrap_stmt(&mut tmp_generator),
-        );
-
-        let mut interpreter = Interpreter::new(Expr::Stmt(stmt));
-        interpreter.run();
+        let trexpr = env
+            .typecheck_expr_mut(&mut tmp_generator, &level_label, &subscript_expr)
+            .expect("typecheck failed")
+            .expr;
+        interpreter.run_expr(&mut tmp_generator, trexpr);
+        assert!(interpreter.panicked);
     }
 }
