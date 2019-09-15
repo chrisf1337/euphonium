@@ -17,7 +17,7 @@ const MEMORY_SIZE: usize = 1024;
 
 lazy_static! {
     static ref RUNTIME_FNS: HashSet<String> = hashset! {
-        "__new_array".to_owned()
+        "__malloc".to_owned()
     };
 }
 
@@ -58,7 +58,7 @@ impl Interpreter {
     }
 
     fn jump(&mut self, label: &Label) {
-        self.ip = self.label_table[label];
+        self.ip = self.label_table[dbg!(label)];
     }
 
     fn step(&mut self) {
@@ -112,7 +112,10 @@ impl Interpreter {
                 let addr = self.interpret_expr_as_rvalue(expr);
                 self.read_u64(addr)
             }
-            ir::Expr::Seq(..) => panic!("cannot interpret {:?}", expr),
+            ir::Expr::Seq(stmt, expr) => {
+                self.interpret_stmt(stmt);
+                self.interpret_expr_as_rvalue(expr)
+            }
             ir::Expr::Call(label, args) => {
                 let name = if let ir::Expr::Label(Label(label)) = label.as_ref() {
                     label
@@ -130,6 +133,7 @@ impl Interpreter {
     }
 
     fn interpret_stmt(&mut self, stmt: &ir::Stmt) {
+        println!("{:?}", stmt);
         match stmt {
             ir::Stmt::Move(dst, src) => {
                 let value = self.interpret_expr_as_rvalue(src);
@@ -156,7 +160,21 @@ impl Interpreter {
                             self.jump(f_label);
                         }
                     }
-                    _ => unimplemented!(),
+                    ir::CompareOp::Ge => {
+                        if l >= r {
+                            self.jump(t_label);
+                        } else {
+                            self.jump(f_label);
+                        }
+                    }
+                    ir::CompareOp::Lt => {
+                        if l < r {
+                            self.jump(t_label);
+                        } else {
+                            self.jump(f_label);
+                        }
+                    }
+                    _ => unimplemented!("{:?}", op),
                 }
             }
             ir::Stmt::Label(_) => (),
@@ -169,6 +187,10 @@ impl Interpreter {
             }
             ir::Stmt::Expr(expr) => {
                 self.interpret_expr_as_rvalue(expr);
+            }
+            ir::Stmt::Seq(stmt1, stmt2) => {
+                self.interpret_stmt(stmt1);
+                self.interpret_stmt(stmt2);
             }
             _ => unimplemented!("{:?}", stmt),
         }
@@ -265,8 +287,8 @@ impl Interpreter {
 
     fn runtime_call(&mut self, name: &str, args: &[ir::Expr]) -> u64 {
         match name {
-            "__new_array" => self.__new_array(args),
-            _ => 0,
+            "__malloc" => self.__malloc(args),
+            _ => unreachable!("{} is not a runtime function", name),
         }
     }
 
@@ -276,12 +298,9 @@ impl Interpreter {
         addr
     }
 
-    fn __new_array(&mut self, args: &[ir::Expr]) -> u64 {
-        let init_val = self.interpret_expr_as_rvalue(&args[0]);
-        let len = self.interpret_expr_as_rvalue(&args[1]);
-        let start = self.malloc(len);
-        self.write_u64s(&vec![init_val; len as usize], start);
-        start
+    fn __malloc(&mut self, args: &[ir::Expr]) -> u64 {
+        let len = self.interpret_expr_as_rvalue(&args[0]);
+        self.malloc(len)
     }
 }
 
@@ -399,17 +418,6 @@ mod tests {
             interpreter.interpret_expr_as_rvalue(&expr3.unwrap_expr(&mut tmp_generator)),
             3
         );
-    }
-
-    #[test]
-    fn test_new_array() {
-        let mut interpreter = Interpreter::new(Expr::Stmt(ir::Stmt::Expr(ir::Expr::Const(0))));
-        interpreter.__new_array(&[ir::Expr::Const(123), ir::Expr::Const(4)]);
-        assert_eq!(interpreter.read_u64(frame::WORD_SIZE as u64 * 0), 123);
-        assert_eq!(interpreter.read_u64(frame::WORD_SIZE as u64 * 1), 123);
-        assert_eq!(interpreter.read_u64(frame::WORD_SIZE as u64 * 2), 123);
-        assert_eq!(interpreter.read_u64(frame::WORD_SIZE as u64 * 3), 123);
-        assert_eq!(interpreter.read_u64(frame::WORD_SIZE as u64 * 4), 0);
     }
 
     #[test]
@@ -613,45 +621,35 @@ mod tests {
         let mut interpreter = Interpreter::new(Expr::Stmt(stmt));
         interpreter.run();
 
+        let a_expr = zspan!(ast::ExprType::LVal(Box::new(zspan!(ast::LVal::Simple("a".to_owned())))));
+        let a_trexpr = env
+            .typecheck_expr(&mut tmp_generator, &level_label, &a_expr)
+            .expect("typecheck")
+            .expr;
+
         {
-            let expr = zspan!(ast::ExprType::LVal(Box::new(zspan!(ast::LVal::Subscript(
-                Box::new(zspan!(ast::LVal::Simple("a".to_owned()))),
-                zspan!(ast::ExprType::Number(0))
-            )))));
-            let val = interpreter.interpret_expr_as_rvalue(
-                &env.typecheck_expr(&mut tmp_generator, &level_label, &expr)
-                    .expect("typecheck failed")
-                    .expr
-                    .unwrap_expr(&mut tmp_generator),
-            );
+            let trexpr = ir::Expr::Mem(Box::new(a_trexpr.clone().unwrap_expr(&mut tmp_generator)));
+            let val = interpreter.interpret_expr_as_rvalue(&trexpr);
             assert_eq!(val, 1);
         }
 
         {
-            let expr = zspan!(ast::ExprType::LVal(Box::new(zspan!(ast::LVal::Subscript(
-                Box::new(zspan!(ast::LVal::Simple("a".to_owned()))),
-                zspan!(ast::ExprType::Number(1))
-            )))));
-            let val = interpreter.interpret_expr_as_rvalue(
-                &env.typecheck_expr(&mut tmp_generator, &level_label, &expr)
-                    .expect("typecheck failed")
-                    .expr
-                    .unwrap_expr(&mut tmp_generator),
-            );
+            let trexpr = ir::Expr::Mem(Box::new(ir::Expr::BinOp(
+                Box::new(a_trexpr.clone().unwrap_expr(&mut tmp_generator)),
+                ir::BinOp::Add,
+                Box::new(ir::Expr::Const(frame::WORD_SIZE)),
+            )));
+            let val = interpreter.interpret_expr_as_rvalue(&trexpr);
             assert_eq!(val, 0);
         }
 
         {
-            let expr = zspan!(ast::ExprType::LVal(Box::new(zspan!(ast::LVal::Subscript(
-                Box::new(zspan!(ast::LVal::Simple("a".to_owned()))),
-                zspan!(ast::ExprType::Number(3))
-            )))));
-            let val = interpreter.interpret_expr_as_rvalue(
-                &env.typecheck_expr(&mut tmp_generator, &level_label, &expr)
-                    .expect("typecheck failed")
-                    .expr
-                    .unwrap_expr(&mut tmp_generator),
-            );
+            let trexpr = ir::Expr::Mem(Box::new(ir::Expr::BinOp(
+                Box::new(a_trexpr.clone().unwrap_expr(&mut tmp_generator)),
+                ir::BinOp::Add,
+                Box::new(ir::Expr::Const(frame::WORD_SIZE * 3)),
+            )));
+            let val = interpreter.interpret_expr_as_rvalue(&trexpr);
             assert_eq!(val, 3);
         }
     }

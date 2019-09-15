@@ -159,11 +159,17 @@ impl TypecheckErr {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecordField {
+    ty: Rc<Type>,
+    index: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Type {
     Int,
     String,
     Bool,
-    Record(String, HashMap<String, Rc<Type>>),
+    Record(String, HashMap<String, RecordField>),
     Array(Rc<Type>, usize),
     Unit,
     Alias(String),
@@ -190,8 +196,8 @@ impl Type {
             ),
             TypeDeclType::Record(type_fields) => {
                 let mut type_fields_hm = HashMap::new();
-                for TypeField { id, ty } in type_fields.into_iter().map(|tf| tf.t.into()) {
-                    type_fields_hm.insert(id, ty);
+                for (i, TypeField { id, ty }) in type_fields.into_iter().map(|tf| tf.t.into()).enumerate() {
+                    type_fields_hm.insert(id, RecordField { ty, index: i });
                 }
                 Type::Record(type_decl.id.t.clone(), type_fields_hm)
             }
@@ -523,7 +529,7 @@ impl<'a> Env<'a> {
             Type::Alias(_) => self.resolve_type(ty, def_span).map(|_| ()),
             Type::Record(_, record) => {
                 let mut errors = vec![];
-                for ty in record.values() {
+                for RecordField { ty, .. } in record.values() {
                     match self.validate_type(ty, def_span) {
                         Ok(()) => (),
                         Err(errs) => errors.extend(errs),
@@ -1036,17 +1042,24 @@ impl<'a> Env<'a> {
                 }
             }
             LVal::Field(var, field) => {
-                let TranslateOutput { t: lval_properties, .. } =
-                    self.typecheck_lval(tmp_generator, level_label, var)?;
+                let TranslateOutput {
+                    t: lval_properties,
+                    expr: record_trexpr,
+                } = self.typecheck_lval(tmp_generator, level_label, var)?;
                 if let Type::Record(_, fields) = self.resolve_type(&lval_properties.ty, var.span)?.as_ref() {
-                    if let Some(field_type) = fields.get(&field.t) {
+                    if let Some(RecordField { ty: field_type, index }) = fields.get(&field.t) {
                         // A field is mutable only if the record it belongs to is mutable
+                        let trexpr = Env::translate_pointer_offset(
+                            tmp_generator,
+                            &record_trexpr,
+                            &translate::Expr::Expr(ir::Expr::Const(*index as i64)),
+                        );
                         return Ok(TranslateOutput {
                             t: LValProperties {
                                 ty: field_type.clone(),
                                 immutable: lval_properties.immutable,
                             },
-                            expr: translate::Expr::Expr(ir::Expr::Const(0)),
+                            expr: trexpr,
                         });
                     }
                 }
@@ -1064,14 +1077,56 @@ impl<'a> Env<'a> {
                     t: index_type,
                     expr: index_trexpr,
                 } = self.typecheck_expr(tmp_generator, level_label, index)?;
-                if let Type::Array(ty, _) = self.resolve_type(&lval_properties.ty, var.span)?.as_ref() {
+                if let Type::Array(ty, len) = self.resolve_type(&lval_properties.ty, var.span)?.as_ref() {
                     if self.resolve_type(&index_type, index.span)? == Rc::new(Type::Int) {
+                        let index_tmp_trexpr = ir::Expr::Tmp(tmp_generator.new_tmp());
+                        let true_label_1 = tmp_generator.new_label();
+                        let true_label_2 = tmp_generator.new_label();
+                        let false_label = tmp_generator.new_label();
+                        let join_label = tmp_generator.new_label();
+                        let bounds_check_stmt = vec![
+                            ir::Stmt::Move(index_tmp_trexpr.clone(), index_trexpr.unwrap_expr(tmp_generator)),
+                            ir::Stmt::CJump(
+                                index_tmp_trexpr.clone(),
+                                ir::CompareOp::Ge,
+                                ir::Expr::Const(0),
+                                true_label_1.clone(),
+                                false_label.clone(),
+                            ),
+                            ir::Stmt::Label(true_label_1),
+                            ir::Stmt::CJump(
+                                index_tmp_trexpr.clone(),
+                                ir::CompareOp::Lt,
+                                ir::Expr::Const(*len as i64),
+                                true_label_2.clone(),
+                                false_label.clone(),
+                            ),
+                            ir::Stmt::Label(true_label_2),
+                            ir::Stmt::Jump(ir::Expr::Label(join_label.clone()), vec![join_label.clone()]),
+                            ir::Stmt::Label(false_label),
+                            ir::Stmt::Expr(ir::Expr::Call(
+                                Box::new(ir::Expr::Label(Label("__panic".to_owned()))),
+                                vec![],
+                            )),
+                            ir::Stmt::Label(join_label),
+                        ];
+
                         Ok(TranslateOutput {
                             t: LValProperties {
                                 ty: ty.clone(),
                                 immutable: lval_properties.immutable,
                             },
-                            expr: Env::translate_pointer_offset(tmp_generator, &lval_trexpr, &index_trexpr),
+                            expr: translate::Expr::Expr(ir::Expr::Seq(
+                                Box::new(ir::Stmt::seq(bounds_check_stmt)),
+                                Box::new(
+                                    Env::translate_pointer_offset(
+                                        tmp_generator,
+                                        &lval_trexpr,
+                                        &translate::Expr::Expr(index_tmp_trexpr),
+                                    )
+                                    .unwrap_expr(tmp_generator),
+                                ),
+                            )),
                         })
                     } else {
                         Err(vec![TypecheckErr::new_err(
@@ -1296,6 +1351,10 @@ impl<'a> Env<'a> {
                     },
                 )?;
 
+                let record_malloc_trexpr =
+                    Frame::external_call("__malloc", vec![ir::Expr::Const(field_types.len() as i64)]);
+                let record_tmp_trexpr = ir::Expr::Tmp(tmp_generator.new_tmp());
+                let mut assign_stmts = vec![ir::Stmt::Move(record_tmp_trexpr.clone(), record_malloc_trexpr)];
                 let mut errors = vec![];
                 for Spanned {
                     t: FieldAssign { id: field_id, expr },
@@ -1305,11 +1364,12 @@ impl<'a> Env<'a> {
                     // This should never error because we already checked for invalid types
                     let expected_type = self
                         .resolve_type(
-                            &field_types[&field_id.t],
+                            &field_types[&field_id.t].ty,
                             FileSpan::new(self.current_file, Span::initial()),
                         )
                         .unwrap();
-                    let ty = self.typecheck_expr(tmp_generator, level_label, expr)?.t;
+                    let TranslateOutput { t: ty, expr: trexpr } =
+                        self.typecheck_expr(tmp_generator, level_label, expr)?;
                     let actual_type = self.resolve_type(&ty, expr.span)?;
                     if expected_type != actual_type {
                         errors.push(
@@ -1323,6 +1383,17 @@ impl<'a> Env<'a> {
                             )),
                         );
                     }
+
+                    let field_index = field_types[&field_id.t].index;
+                    let field_trexpr = Env::translate_pointer_offset(
+                        tmp_generator,
+                        &translate::Expr::Expr(record_tmp_trexpr.clone()),
+                        &translate::Expr::Expr(ir::Expr::Const(field_index as i64)),
+                    );
+                    assign_stmts.push(ir::Stmt::Move(
+                        field_trexpr.unwrap_expr(tmp_generator),
+                        trexpr.unwrap_expr(tmp_generator),
+                    ));
                 }
 
                 if !errors.is_empty() {
@@ -1331,7 +1402,10 @@ impl<'a> Env<'a> {
 
                 Ok(TranslateOutput {
                     t: ty.clone(),
-                    expr: translate::Expr::Expr(ir::Expr::Const(0)),
+                    expr: translate::Expr::Expr(ir::Expr::Seq(
+                        Box::new(ir::Stmt::seq(assign_stmts)),
+                        Box::new(record_tmp_trexpr),
+                    )),
                 })
             } else {
                 Err(vec![TypecheckErr::new_err(
@@ -1429,12 +1503,29 @@ impl<'a> Env<'a> {
                 array.len.span,
             )]);
         }
+
+        let array_malloc_trexpr = Frame::external_call("__malloc", vec![ir::Expr::Const(len as i64)]);
+        let array_tmp_trexpr = ir::Expr::Tmp(tmp_generator.new_tmp());
+
+        let mut assign_stmts = vec![ir::Stmt::Move(array_tmp_trexpr.clone(), array_malloc_trexpr)];
+        for i in 0..len {
+            let elem_trexpr = Env::translate_pointer_offset(
+                tmp_generator,
+                &translate::Expr::Expr(array_tmp_trexpr.clone()),
+                &translate::Expr::Expr(ir::Expr::Const(i as i64)),
+            );
+            assign_stmts.push(ir::Stmt::Move(
+                elem_trexpr.unwrap_expr(tmp_generator),
+                init_val_trexpr.clone().unwrap_expr(tmp_generator),
+            ));
+        }
+
         Ok(TranslateOutput {
             t: Rc::new(Type::Array(elem_type, len as usize)),
-            expr: Frame::external_call(
-                "__new_array",
-                vec![init_val_trexpr.unwrap_expr(tmp_generator), ir::Expr::Const(len as i64)],
-            ),
+            expr: translate::Expr::Expr(ir::Expr::Seq(
+                Box::new(ir::Stmt::seq(assign_stmts)),
+                Box::new(array_tmp_trexpr),
+            )),
         })
     }
 
@@ -2054,7 +2145,7 @@ mod tests {
         }
 
         let record = hashmap! {
-            "f".to_owned() => Rc::new(Type::Int)
+            "f".to_owned() => RecordField{ ty: Rc::new(Type::Int), index: 0}
         };
         env.insert_var(
             "x".to_owned(),
@@ -2686,8 +2777,20 @@ mod tests {
     fn test_validate_type() {
         let mut env = Env::new(EMPTY_SOURCEMAP.1);
         let mut record_fields = HashMap::new();
-        record_fields.insert("f".to_owned(), Rc::new(Type::Alias("a".to_owned())));
-        record_fields.insert("g".to_owned(), Rc::new(Type::Alias("b".to_owned())));
+        record_fields.insert(
+            "f".to_owned(),
+            RecordField {
+                ty: Rc::new(Type::Alias("a".to_owned())),
+                index: 0,
+            },
+        );
+        record_fields.insert(
+            "g".to_owned(),
+            RecordField {
+                ty: Rc::new(Type::Alias("b".to_owned())),
+                index: 1,
+            },
+        );
         env.insert_type("a".to_owned(), Type::Record("a".to_owned(), record_fields), zspan!());
 
         let errs = env.check_for_invalid_types().unwrap_err();
@@ -2705,7 +2808,7 @@ mod tests {
         let record_type = Type::Record(
             "r".to_owned(),
             hashmap! {
-                "a".to_owned() => Rc::new(Type::Int),
+                "a".to_owned() => RecordField { ty: Rc::new(Type::Int), index: 0 },
             },
         );
         env.insert_type("r".to_owned(), record_type, zspan!());
@@ -2755,7 +2858,7 @@ mod tests {
         let record_type = Type::Record(
             "r".to_owned(),
             hashmap! {
-                "a".to_owned() => Rc::new(Type::Int),
+                "a".to_owned() => RecordField { ty: Rc::new(Type::Int), index: 0 },
             },
         );
 
@@ -2799,8 +2902,8 @@ mod tests {
         let record_type = Type::Record(
             "r".to_owned(),
             hashmap! {
-                "a".to_owned() => Rc::new(Type::Int),
-                "b".to_owned() => Rc::new(Type::String),
+                "a".to_owned() => RecordField { ty: Rc::new(Type::Int), index: 0 },
+                "b".to_owned() => RecordField { ty: Rc::new(Type::String), index: 1},
             },
         );
         env.insert_type("r".to_owned(), record_type.clone(), zspan!());
@@ -2842,7 +2945,7 @@ mod tests {
         let record_type = Type::Record(
             "r".to_owned(),
             hashmap! {
-                "a".to_owned() => Rc::new(Type::Int)
+                "a".to_owned() => RecordField { ty: Rc::new(Type::Int), index: 0 },
             },
         );
         env.insert_type("r".to_owned(), record_type, zspan!());
@@ -3091,7 +3194,7 @@ mod tests {
         let record_type = Type::Record(
             "r".to_owned(),
             hashmap! {
-                "a".to_owned() => Rc::new(Type::Int)
+                "a".to_owned() => RecordField { ty: Rc::new(Type::Int), index: 0 },
             },
         );
         env.insert_type("r".to_owned(), record_type.clone(), zspan!());
@@ -3145,7 +3248,7 @@ mod tests {
         let record_type = Type::Record(
             "r".to_owned(),
             hashmap! {
-                "a".to_owned() => Rc::new(Type::Int)
+                "a".to_owned() => RecordField { ty: Rc::new(Type::Int), index: 0 },
             },
         );
         env.insert_type("r".to_owned(), record_type.clone(), zspan!());
@@ -3199,7 +3302,7 @@ mod tests {
         let record_type = Type::Record(
             "r".to_owned(),
             hashmap! {
-                "a".to_owned() => Rc::new(Type::Int)
+                "a".to_owned() => RecordField{ ty: Rc::new(Type::Int), index: 0 },
             },
         );
         env.insert_type("r".to_owned(), record_type.clone(), zspan!());

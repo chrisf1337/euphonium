@@ -65,7 +65,7 @@ impl Frame {
         }
     }
 
-    pub fn external_call(fn_name: impl Into<String>, args: Vec<ir::Expr>) -> translate::Expr {
-        translate::Expr::Expr(ir::Expr::Call(Box::new(ir::Expr::Label(Label(fn_name.into()))), args))
+    pub fn external_call(fn_name: impl Into<String>, args: Vec<ir::Expr>) -> ir::Expr {
+        ir::Expr::Call(Box::new(ir::Expr::Label(Label(fn_name.into()))), args)
     }
 }
