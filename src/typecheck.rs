@@ -1797,7 +1797,7 @@ impl<'a> Env<'a> {
         let r_expr = r_expr.unwrap_expr(tmp_generator).clone();
 
         let expr = if left_type == Rc::new(Type::String) {
-            translate::Expr::Expr(ir::Expr::Call(Box::new(ir::Expr::Const(0)), vec![]))
+            translate::Expr::Expr(Frame::external_call("__strcmp", vec![l_expr, r_expr]))
         } else {
             let op = expr.op.t.into();
             translate::Expr::Cond(Rc::new(move |true_label, false_label| {
@@ -1986,30 +1986,11 @@ impl<'a> Env<'a> {
         access: &Access,
         level_label: &Label,
     ) -> translate::Expr {
-        fn _translate_simple_var(
-            levels: &HashMap<Label, Level>,
-            access: &Access,
-            level_label: &Label,
-            acc_expr: ir::Expr,
-        ) -> ir::Expr {
-            if level_label == &Label::top() {
-                panic!("simple_var() reached top");
-            }
-            if level_label == &access.level_label {
-                Frame::expr(access.access, &acc_expr)
-            } else {
-                let level = &levels[level_label];
-                let parent_label = level.parent_label.as_ref().expect("level has no parent");
-                _translate_simple_var(levels, access, parent_label, ir::Expr::Mem(Box::new(acc_expr)))
-            }
-        }
-
-        translate::Expr::Expr(_translate_simple_var(
-            levels,
-            access,
-            level_label,
-            ir::Expr::Tmp(*tmp::FP),
-        ))
+        let def_level_label = &access.level_label;
+        let def_level = &levels[def_level_label];
+        let current_level = &levels[level_label];
+        let static_link = Env::static_link(levels, current_level, def_level);
+        translate::Expr::Expr(Frame::expr(access.access, &static_link))
     }
 
     /// `array_expr` is a dereferenced pointer to memory on the heap where the first element of the array lives.
@@ -2027,6 +2008,16 @@ impl<'a> Env<'a> {
                 Box::new(ir::Expr::Const(frame::WORD_SIZE)),
             )),
         ))))
+    }
+
+    pub fn static_link(levels: &HashMap<Label, Level>, from_level: &Level, to_level: &Level) -> ir::Expr {
+        if from_level == to_level {
+            ir::Expr::Tmp(*tmp::FP)
+        } else {
+            let parent_label = from_level.parent_label.as_ref().unwrap();
+            let parent_level = &levels[&parent_label];
+            ir::Expr::Mem(Box::new(Env::static_link(levels, parent_level, to_level)))
+        }
     }
 }
 
@@ -2779,7 +2770,7 @@ mod tests {
             level.formals(),
             vec![Access {
                 level_label: label,
-                access: frame::Access::InFrame(8)
+                access: frame::Access::InFrame(-8)
             }]
         );
     }
@@ -4164,7 +4155,7 @@ mod tests {
     fn test_follows_static_links() {
         {
             let mut tmp_generator = TmpGenerator::default();
-            let frame = Frame::new(&mut tmp_generator, "f", &[]);
+            let frame = Frame::new(&mut tmp_generator, "f", &[true]);
             let label = frame.label.clone();
             let mut levels = hashmap! {
                 Label::top() => Level::top(),
@@ -4188,9 +4179,9 @@ mod tests {
 
         {
             let mut tmp_generator = TmpGenerator::default();
-            let frame_f = Frame::new(&mut tmp_generator, "f", &[]);
+            let frame_f = Frame::new(&mut tmp_generator, "f", &[true]);
             let label_f = frame_f.label.clone();
-            let frame_g = Frame::new(&mut tmp_generator, "g", &[]);
+            let frame_g = Frame::new(&mut tmp_generator, "g", &[true]);
             let label_g = frame_g.label.clone();
             let mut levels = hashmap! {
                 Label::top() => Level::top(),

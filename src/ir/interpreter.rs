@@ -19,6 +19,7 @@ lazy_static! {
     static ref RUNTIME_FNS: HashSet<String> = hashset! {
         "__malloc".to_owned(),
         "__panic".to_owned(),
+        "__strcmp".to_owned(),
     };
 }
 
@@ -325,6 +326,11 @@ impl Interpreter {
         self.panicked = true;
         0
     }
+
+    // fn __strcmp(&self, args: &[ir::Expr]) -> u64 {
+    //     let l = self.interpret_expr_as_rvalue(&args[0]);
+    //     let r = self.interpret_expr_as_rvalue(&args[1]);
+    // }
 }
 
 #[cfg(test)]
@@ -739,5 +745,32 @@ mod tests {
             .expr;
         interpreter.run_expr(&mut tmp_generator, trexpr);
         assert!(interpreter.panicked);
+    }
+
+    #[test]
+    fn test_record_expr() {
+        let mut tmp_generator = TmpGenerator::default();
+        let level = Level::new(&mut tmp_generator, Some(Label::top()), "f", &[]);
+        let level_label = level.frame.label.clone();
+
+        let mut env = Env::new(EMPTY_SOURCEMAP.1);
+        {
+            let mut levels = env.levels.borrow_mut();
+            levels.insert(level_label.clone(), level);
+        }
+
+        let record_decl = zspan!(ast::TypeDecl {
+            id: zspan!("r".to_owned()),
+            ty: zspan!(ast::TypeDeclType::Record(vec![
+                zspan!(ast::TypeField {
+                    id: zspan!("a".to_owned()),
+                    ty: zspan!(ast::Type::Type(zspan!("int".to_owned()))),
+                }),
+                zspan!(ast::TypeField {
+                    id: zspan!("b".to_owned()),
+                    ty: zspan!(ast::Type::Type(zspan!("string".to_owned()))),
+                })
+            ]))
+        });
     }
 }

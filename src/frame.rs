@@ -26,7 +26,7 @@ impl Frame {
         for &formal in formals {
             if formal {
                 accesses.push(Access::InFrame(offset));
-                offset += WORD_SIZE;
+                offset += -WORD_SIZE;
             } else {
                 accesses.push(Access::InReg(tmp_generator.new_tmp()));
             }
@@ -42,10 +42,19 @@ impl Frame {
         }
     }
 
+    fn escaping_formals(&self) -> Vec<&Access> {
+        self.formals
+            .iter()
+            .filter(|access| if let Access::InFrame(_) = access { true } else { false })
+            .collect()
+    }
+
     pub fn alloc_local(&mut self, tmp_generator: &mut TmpGenerator, escapes: bool) -> Access {
+        let escaping_formals_len = self.escaping_formals().len();
         if escapes {
+            let access = Access::InFrame(-WORD_SIZE * (self.n_locals + escaping_formals_len) as i64);
             self.n_locals += 1;
-            Access::InFrame(-WORD_SIZE * self.n_locals as i64)
+            access
         } else {
             Access::InReg(tmp_generator.new_tmp())
         }
@@ -66,5 +75,10 @@ impl Frame {
 
     pub fn external_call(fn_name: impl Into<String>, args: Vec<ir::Expr>) -> ir::Expr {
         ir::Expr::Call(Box::new(ir::Expr::Label(Label(fn_name.into()))), args)
+    }
+
+    pub fn string(tmp_generator: &mut TmpGenerator, s: &str) -> ir::Expr {
+        let label = tmp_generator.new_label();
+        ir::Expr::Label(label)
     }
 }
