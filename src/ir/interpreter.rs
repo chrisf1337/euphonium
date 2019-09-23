@@ -558,7 +558,7 @@ mod tests {
             expr: zspan!(ast::ExprType::Number(0)),
         }))));
         let mut stmt = env
-            .typecheck_expr_mut(&mut tmp_generator, &level_label, &let_expr)
+            .typecheck_expr_mut(&mut tmp_generator, &level_label, &let_expr, None)
             .expect("typecheck failed")
             .expr
             .unwrap_stmt(&mut tmp_generator);
@@ -573,7 +573,7 @@ mod tests {
             else_expr: None,
         }))));
         stmt = stmt.appending(
-            env.typecheck_expr(&mut tmp_generator, &level_label, &if_expr)
+            env.typecheck_expr(&mut tmp_generator, &level_label, &if_expr, None)
                 .expect("typecheck failed")
                 .expr
                 .unwrap_stmt(&mut tmp_generator),
@@ -605,7 +605,7 @@ mod tests {
             expr: zspan!(ast::ExprType::Number(0)),
         }))));
         let mut stmt = env
-            .typecheck_expr_mut(&mut tmp_generator, &level_label, &let_expr)
+            .typecheck_expr_mut(&mut tmp_generator, &level_label, &let_expr, None)
             .expect("typecheck failed")
             .expr
             .unwrap_stmt(&mut tmp_generator);
@@ -626,7 +626,7 @@ mod tests {
         }))));
 
         stmt = stmt.appending(
-            env.typecheck_expr(&mut tmp_generator, &level_label, &assign_expr)
+            env.typecheck_expr(&mut tmp_generator, &level_label, &assign_expr, None)
                 .expect("typecheck failed")
                 .expr
                 .unwrap_stmt(&mut tmp_generator),
@@ -662,7 +662,7 @@ mod tests {
             })))),
         }))));
         let mut stmt = env
-            .typecheck_expr_mut(&mut tmp_generator, &level_label, &let_expr)
+            .typecheck_expr_mut(&mut tmp_generator, &level_label, &let_expr, None)
             .expect("typecheck failed")
             .expr
             .unwrap_stmt(&mut tmp_generator);
@@ -676,7 +676,7 @@ mod tests {
             expr: zspan!(ast::ExprType::Number(1)),
         }))));
         stmt = stmt.appending(
-            env.typecheck_expr_mut(&mut tmp_generator, &level_label, &assign_expr)
+            env.typecheck_expr_mut(&mut tmp_generator, &level_label, &assign_expr, None)
                 .expect("typecheck failed")
                 .expr
                 .unwrap_stmt(&mut tmp_generator),
@@ -691,7 +691,7 @@ mod tests {
             expr: zspan!(ast::ExprType::Number(3)),
         }))));
         stmt = stmt.appending(
-            env.typecheck_expr_mut(&mut tmp_generator, &level_label, &assign_expr)
+            env.typecheck_expr_mut(&mut tmp_generator, &level_label, &assign_expr, None)
                 .expect("typecheck failed")
                 .expr
                 .unwrap_stmt(&mut tmp_generator),
@@ -706,7 +706,7 @@ mod tests {
                 zspan!(ast::ExprType::Number(0))
             )))));
             let trexpr = env
-                .typecheck_expr(&mut tmp_generator, &level_label, &expr)
+                .typecheck_expr(&mut tmp_generator, &level_label, &expr, None)
                 .expect("typecheck")
                 .expr;
             let val = interpreter.run_expr(&mut tmp_generator, trexpr);
@@ -719,7 +719,7 @@ mod tests {
                 zspan!(ast::ExprType::Number(1))
             )))));
             let trexpr = env
-                .typecheck_expr(&mut tmp_generator, &level_label, &expr)
+                .typecheck_expr(&mut tmp_generator, &level_label, &expr, None)
                 .expect("typecheck")
                 .expr;
             let val = interpreter.run_expr(&mut tmp_generator, trexpr);
@@ -732,7 +732,7 @@ mod tests {
                 zspan!(ast::ExprType::Number(3))
             )))));
             let trexpr = env
-                .typecheck_expr(&mut tmp_generator, &level_label, &expr)
+                .typecheck_expr(&mut tmp_generator, &level_label, &expr, None)
                 .expect("typecheck")
                 .expr;
             let val = interpreter.run_expr(&mut tmp_generator, trexpr);
@@ -763,7 +763,7 @@ mod tests {
             })))),
         }))));
         let mut stmt = env
-            .typecheck_expr_mut(&mut tmp_generator, &level_label, &let_expr)
+            .typecheck_expr_mut(&mut tmp_generator, &level_label, &let_expr, None)
             .expect("typecheck failed")
             .expr
             .unwrap_stmt(&mut tmp_generator);
@@ -774,7 +774,7 @@ mod tests {
             zspan!(ast::ExprType::Neg(Box::new(zspan!(ast::ExprType::Number(1)))))
         )))));
         stmt = stmt.appending(
-            env.typecheck_expr_mut(&mut tmp_generator, &level_label, &subscript_expr)
+            env.typecheck_expr_mut(&mut tmp_generator, &level_label, &subscript_expr, None)
                 .expect("typecheck failed")
                 .expr
                 .unwrap_stmt(&mut tmp_generator),
@@ -790,7 +790,7 @@ mod tests {
             zspan!(ast::ExprType::Number(10))
         )))));
         let trexpr = env
-            .typecheck_expr_mut(&mut tmp_generator, &level_label, &subscript_expr)
+            .typecheck_expr_mut(&mut tmp_generator, &level_label, &subscript_expr, None)
             .expect("typecheck failed")
             .expr;
         interpreter.run_expr(&mut tmp_generator, trexpr);
@@ -842,8 +842,8 @@ mod tests {
                 ]
             }))))
         }))));
-        let mut stmt = env
-            .typecheck_expr_mut(&mut tmp_generator, &level_label, &assign_expr)?
+        let stmt = env
+            .typecheck_expr_mut(&mut tmp_generator, &level_label, &assign_expr, None)?
             .expr
             .unwrap_stmt(&mut tmp_generator);
 
@@ -864,7 +864,7 @@ mod tests {
                 zspan!("a".to_owned())
             )))));
             let trexpr = env
-                .typecheck_expr(&mut tmp_generator, &level_label, &subscript_expr)?
+                .typecheck_expr(&mut tmp_generator, &level_label, &subscript_expr, None)?
                 .expr;
             assert_eq!(interpreter.run_expr(&mut tmp_generator, trexpr).expect("run_expr"), 123);
         }
@@ -875,7 +875,7 @@ mod tests {
                 zspan!("b".to_owned())
             )))));
             let trexpr = env
-                .typecheck_expr(&mut tmp_generator, &level_label, &subscript_expr)?
+                .typecheck_expr(&mut tmp_generator, &level_label, &subscript_expr, None)?
                 .expr;
             let result = interpreter.run_expr(&mut tmp_generator, trexpr).expect("run_expr");
             assert_eq!(interpreter.read_str(result), "string".to_owned());
