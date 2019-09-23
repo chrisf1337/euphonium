@@ -316,7 +316,7 @@ impl Interpreter {
 
         let bytes = self.read_u8s(addr, len);
         std::str::from_utf8(&bytes)
-            .expect(&format!("invalid string: {:?}", bytes))
+            .unwrap_or_else(|_| panic!("invalid string: {:?}", bytes))
             .to_owned()
     }
 
@@ -651,13 +651,13 @@ mod tests {
             levels.insert(level_label.clone(), level);
         }
 
-        // let a = [0; 10];
+        // let a = [123; 10];
         let let_expr = zspan!(ast::ExprType::Let(Box::new(zspan!(ast::Let {
             pattern: zspan!(ast::Pattern::String("a".to_owned())),
             immutable: zspan!(false),
             ty: None,
             expr: zspan!(ast::ExprType::Array(Box::new(zspan!(ast::Array {
-                initial_value: zspan!(ast::ExprType::Number(0)),
+                initial_value: zspan!(ast::ExprType::Number(123)),
                 len: zspan!(ast::ExprType::Number(10)),
             })))),
         }))));
@@ -723,7 +723,7 @@ mod tests {
                 .expect("typecheck")
                 .expr;
             let val = interpreter.run_expr(&mut tmp_generator, trexpr);
-            assert_eq!(val, Some(0));
+            assert_eq!(val, Some(123));
         }
 
         {
