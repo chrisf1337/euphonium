@@ -1,4 +1,5 @@
 use crate::{
+    fragment::{Fragment, StringFragment},
     frame, ir,
     tmp::{self, Label, Tmp, TmpGenerator},
     translate::{Access, Expr, Level},
@@ -23,12 +24,16 @@ lazy_static! {
     };
 }
 
+#[derive(Clone)]
 pub struct Interpreter {
     stmts: Vec<ir::Stmt>,
     tmps: HashMap<Tmp, u64>,
     memory: [u8; MEMORY_SIZE],
     ip: usize,
-    label_table: HashMap<Label, usize>,
+    /// Map of label to instruction index in `stmts`.
+    jump_table: HashMap<Label, usize>,
+    /// Map of label to address in `memory`.
+    string_table: HashMap<Label, u64>,
     /// Heap pointer
     hp: u64,
     panicked: bool,
@@ -47,7 +52,8 @@ impl Default for Interpreter {
             tmps,
             memory: [0; MEMORY_SIZE],
             ip: 0,
-            label_table: HashMap::new(),
+            jump_table: HashMap::new(),
+            string_table: HashMap::new(),
             hp: 0,
             panicked: false,
         }
@@ -56,7 +62,7 @@ impl Default for Interpreter {
 
 impl Interpreter {
     fn jump(&mut self, label: &Label) {
-        self.ip = self.label_table[dbg!(label)];
+        self.ip = self.jump_table[label];
     }
 
     fn step(&mut self) -> Option<u64> {
@@ -79,14 +85,14 @@ impl Interpreter {
 
     fn run_expr(&mut self, tmp_generator: &mut TmpGenerator, expr: Expr) -> Option<u64> {
         let stmts = expr.unwrap_stmt(tmp_generator).flatten();
-        let mut label_table = HashMap::new();
+        let mut jump_table = HashMap::new();
         for (i, stmt) in stmts.iter().enumerate() {
             if let ir::Stmt::Label(label) = stmt {
-                label_table.insert(label.clone(), i);
+                jump_table.insert(label.clone(), i);
             }
         }
         self.stmts = stmts;
-        self.label_table = label_table;
+        self.jump_table = jump_table;
         self.ip = 0;
         self.panicked = false;
         self.run()
@@ -110,6 +116,25 @@ impl Interpreter {
 
     fn tmp_mut(&mut self, tmp: Tmp) -> &mut u64 {
         self.tmps.entry(tmp).or_default()
+    }
+
+    fn set_string_table(&mut self, fragments: &[Fragment]) {
+        for fragment in fragments {
+            if let Fragment::String(StringFragment { label, string }) = fragment {
+                self.string_table.insert(label.clone(), self.hp);
+
+                let mut p = self.hp;
+                let string = string.clone().into_bytes();
+                self.write_u64(string.len() as u64, p);
+                p += std::mem::size_of::<u64>() as u64;
+                self.write_u8s(&string, p);
+                p += string.len() as u64;
+                let padding = vec![0; std::mem::size_of::<u64>() - (string.len() % std::mem::size_of::<u64>())];
+                self.write_u8s(&padding, p);
+                p += padding.len() as u64;
+                self.hp = p;
+            }
+        }
     }
 
     fn interpret_expr_as_rvalue(&mut self, expr: &ir::Expr) -> u64 {
@@ -147,6 +172,7 @@ impl Interpreter {
                     unimplemented!("{}", name)
                 }
             }
+            ir::Expr::Label(label) => self.string_table[label],
             _ => unimplemented!(),
         }
     }
@@ -214,16 +240,32 @@ impl Interpreter {
         }
     }
 
+    fn write_u8(&mut self, u: u8, addr: u64) {
+        self.memory[addr as usize] = u;
+    }
+
+    fn read_u8(&self, addr: u64) -> u8 {
+        self.memory[addr as usize]
+    }
+
+    fn write_u8s(&mut self, us: &[u8], addr: u64) {
+        let addr = addr as usize;
+        self.memory[addr..addr + us.len()].copy_from_slice(us)
+    }
+
+    fn read_u8s(&self, addr: u64, n: usize) -> Vec<u8> {
+        let addr = addr as usize;
+        self.memory[addr..addr + n].to_vec()
+    }
+
     fn write_u64(&mut self, u: u64, addr: u64) {
         let bytes = u.to_le_bytes();
-        let addr = addr as usize;
-        self.memory[addr..addr + frame::WORD_SIZE as usize].copy_from_slice(&bytes);
+        self.write_u8s(&bytes, addr);
     }
 
     fn read_u64(&self, addr: u64) -> u64 {
         let mut bytes = [0u8; frame::WORD_SIZE as usize];
-        let addr = addr as usize;
-        bytes.copy_from_slice(&self.memory[addr..addr + frame::WORD_SIZE as usize]);
+        bytes.copy_from_slice(&self.read_u8s(addr, std::mem::size_of::<u64>()));
         u64::from_le_bytes(bytes)
     }
 
@@ -244,14 +286,12 @@ impl Interpreter {
 
     fn write_i64(&mut self, i: i64, addr: u64) {
         let bytes = i.to_le_bytes();
-        let addr = addr as usize;
-        self.memory[addr..addr + frame::WORD_SIZE as usize].copy_from_slice(&bytes);
+        self.write_u8s(&bytes, addr);
     }
 
     fn read_i64(&self, addr: u64) -> i64 {
         let mut bytes = [0u8; frame::WORD_SIZE as usize];
-        let addr = addr as usize;
-        bytes.copy_from_slice(&self.memory[addr..addr + frame::WORD_SIZE as usize]);
+        bytes.copy_from_slice(&self.read_u8s(addr, std::mem::size_of::<i64>()));
         i64::from_le_bytes(bytes)
     }
 
@@ -268,6 +308,16 @@ impl Interpreter {
             bytes.push(self.read_i64(i));
         }
         bytes
+    }
+
+    fn read_str(&self, mut addr: u64) -> String {
+        let len = self.read_u64(addr) as usize;
+        addr += std::mem::size_of::<u64>() as u64;
+
+        let bytes = self.read_u8s(addr, len);
+        std::str::from_utf8(&bytes)
+            .expect(&format!("invalid string: {:?}", bytes))
+            .to_owned()
     }
 
     fn dump_to_file(&self, name: &str) {
@@ -340,7 +390,7 @@ mod tests {
         ast, ir,
         tmp::{Label, TmpGenerator},
         translate::{self, Expr},
-        typecheck::Env,
+        typecheck::{Env, TypecheckErr},
         utils::{dump_vec, EMPTY_SOURCEMAP},
     };
     use maplit::hashmap;
@@ -522,7 +572,7 @@ mod tests {
             })))),
             else_expr: None,
         }))));
-        stmt = stmt.push(
+        stmt = stmt.appending(
             env.typecheck_expr(&mut tmp_generator, &level_label, &if_expr)
                 .expect("typecheck failed")
                 .expr
@@ -575,7 +625,7 @@ mod tests {
             expr: if_expr,
         }))));
 
-        stmt = stmt.push(
+        stmt = stmt.appending(
             env.typecheck_expr(&mut tmp_generator, &level_label, &assign_expr)
                 .expect("typecheck failed")
                 .expr
@@ -625,7 +675,7 @@ mod tests {
             )),
             expr: zspan!(ast::ExprType::Number(1)),
         }))));
-        stmt = stmt.push(
+        stmt = stmt.appending(
             env.typecheck_expr_mut(&mut tmp_generator, &level_label, &assign_expr)
                 .expect("typecheck failed")
                 .expr
@@ -640,7 +690,7 @@ mod tests {
             )),
             expr: zspan!(ast::ExprType::Number(3)),
         }))));
-        stmt = stmt.push(
+        stmt = stmt.appending(
             env.typecheck_expr_mut(&mut tmp_generator, &level_label, &assign_expr)
                 .expect("typecheck failed")
                 .expr
@@ -723,7 +773,7 @@ mod tests {
             Box::new(zspan!(ast::LVal::Simple("a".to_owned()))),
             zspan!(ast::ExprType::Neg(Box::new(zspan!(ast::ExprType::Number(1)))))
         )))));
-        stmt = stmt.push(
+        stmt = stmt.appending(
             env.typecheck_expr_mut(&mut tmp_generator, &level_label, &subscript_expr)
                 .expect("typecheck failed")
                 .expr
@@ -748,7 +798,7 @@ mod tests {
     }
 
     #[test]
-    fn test_record_expr() {
+    fn test_record_expr() -> Result<(), Vec<TypecheckErr>> {
         let mut tmp_generator = TmpGenerator::default();
         let level = Level::new(&mut tmp_generator, Some(Label::top()), "f", &[]);
         let level_label = level.frame.label.clone();
@@ -772,5 +822,65 @@ mod tests {
                 })
             ]))
         });
+        env.typecheck_type_decl(&record_decl)?;
+
+        let assign_expr = zspan!(ast::ExprType::Let(Box::new(zspan!(ast::Let {
+            pattern: zspan!(ast::Pattern::String("a".to_owned())),
+            immutable: zspan!(true),
+            ty: None,
+            expr: zspan!(ast::ExprType::Record(Box::new(zspan!(ast::Record {
+                id: zspan!("r".to_owned()),
+                field_assigns: vec![
+                    zspan!(ast::FieldAssign {
+                        id: zspan!("a".to_owned()),
+                        expr: zspan!(ast::ExprType::Number(123)),
+                    }),
+                    zspan!(ast::FieldAssign {
+                        id: zspan!("b".to_owned()),
+                        expr: zspan!(ast::ExprType::String("string".to_owned())),
+                    }),
+                ]
+            }))))
+        }))));
+        let mut stmt = env
+            .typecheck_expr_mut(&mut tmp_generator, &level_label, &assign_expr)?
+            .expr
+            .unwrap_stmt(&mut tmp_generator);
+
+        let mut interpreter = Interpreter::default();
+        {
+            let fragments = env.fragments.borrow();
+            interpreter.set_string_table(&fragments);
+        }
+
+        interpreter.run_expr(&mut tmp_generator, Expr::Stmt(stmt));
+
+        println!("{:?}", interpreter.string_table);
+        interpreter.dump_to_file("test_record_expr");
+
+        {
+            let subscript_expr = zspan!(ast::ExprType::LVal(Box::new(zspan!(ast::LVal::Field(
+                Box::new(zspan!(ast::LVal::Simple("a".to_owned()))),
+                zspan!("a".to_owned())
+            )))));
+            let trexpr = env
+                .typecheck_expr(&mut tmp_generator, &level_label, &subscript_expr)?
+                .expr;
+            assert_eq!(interpreter.run_expr(&mut tmp_generator, trexpr).expect("run_expr"), 123);
+        }
+
+        {
+            let subscript_expr = zspan!(ast::ExprType::LVal(Box::new(zspan!(ast::LVal::Field(
+                Box::new(zspan!(ast::LVal::Simple("a".to_owned()))),
+                zspan!("b".to_owned())
+            )))));
+            let trexpr = env
+                .typecheck_expr(&mut tmp_generator, &level_label, &subscript_expr)?
+                .expr;
+            let result = interpreter.run_expr(&mut tmp_generator, trexpr).expect("run_expr");
+            assert_eq!(interpreter.read_str(result), "string".to_owned());
+        }
+
+        Ok(())
     }
 }

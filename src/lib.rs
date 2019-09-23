@@ -5,6 +5,7 @@ mod utils;
 
 pub mod ast;
 pub mod error;
+mod fragment;
 mod frame;
 mod ir;
 pub mod lexer;

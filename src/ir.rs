@@ -78,7 +78,7 @@ impl Stmt {
             .fold(Box::new(last), |acc, next| Box::new(Stmt::Seq(Box::new(next), acc)))
     }
 
-    pub fn push(mut self, stmt: Stmt) -> Stmt {
+    pub fn appending(mut self, stmt: Stmt) -> Stmt {
         self = Stmt::Seq(Box::new(self), Box::new(stmt));
         self
     }

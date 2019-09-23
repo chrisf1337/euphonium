@@ -1,4 +1,5 @@
 use crate::{
+    fragment::{Fragment, StringFragment},
     ir,
     tmp::{Label, Tmp, TmpGenerator},
 };
@@ -77,8 +78,15 @@ impl Frame {
         ir::Expr::Call(Box::new(ir::Expr::Label(Label(fn_name.into()))), args)
     }
 
-    pub fn string(tmp_generator: &mut TmpGenerator, s: &str) -> ir::Expr {
+    // TODO: Dedup literals.
+    pub fn string(tmp_generator: &mut TmpGenerator, string: impl Into<String>) -> (ir::Expr, Fragment) {
         let label = tmp_generator.new_label();
-        ir::Expr::Label(label)
+        (
+            ir::Expr::Label(label.clone()),
+            Fragment::String(StringFragment {
+                label,
+                string: string.into(),
+            }),
+        )
     }
 }

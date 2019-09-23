@@ -3,6 +3,7 @@ use crate::{
         self, Arith, ArithOp, Array, Assign, Bool, Closure, Compare, Decl, DeclType, Enum, Expr, ExprType, FieldAssign,
         FileSpan, FnCall, FnDecl, For, If, LVal, Let, Pattern, Range, Record, Spanned, TypeDecl, TypeDeclType, While,
     },
+    fragment::Fragment,
     frame::{self, Frame},
     ir,
     tmp::{self, Label, TmpGenerator},
@@ -321,6 +322,7 @@ pub struct Env<'a> {
     enum_case_param_decl_spans: HashMap<String, HashMap<String, Vec<FileSpan>>>,
 
     pub(crate) levels: Rc<RefCell<HashMap<Label, Level>>>,
+    pub(crate) fragments: Rc<RefCell<Vec<Fragment>>>,
 }
 
 impl<'a> Env<'a> {
@@ -346,6 +348,7 @@ impl<'a> Env<'a> {
             levels: Rc::new(RefCell::new(hashmap! {
                 Label::top() => Level::top(),
             })),
+            fragments: Rc::new(RefCell::new(vec![])),
         }
     }
 
@@ -363,6 +366,7 @@ impl<'a> Env<'a> {
             enum_case_param_decl_spans: HashMap::new(),
 
             levels: self.levels.clone(),
+            fragments: self.fragments.clone(),
         }
     }
 
@@ -844,7 +848,7 @@ impl<'a> Env<'a> {
         Ok(())
     }
 
-    fn typecheck_type_decl(&mut self, decl: &Spanned<TypeDecl>) -> Result<()> {
+    pub(crate) fn typecheck_type_decl(&mut self, decl: &Spanned<TypeDecl>) -> Result<()> {
         let id = decl.id.t.clone();
 
         if self.contains_type(&id) {
@@ -954,10 +958,15 @@ impl<'a> Env<'a> {
                     expr: translate::Expr::Expr(ir::Expr::Const(0)),
                 })
             }
-            ExprType::String(_) => Ok(TranslateOutput {
-                t: Rc::new(Type::String),
-                expr: translate::Expr::Expr(ir::Expr::Const(0)),
-            }),
+            ExprType::String(s) => {
+                let (label, fragment) = Frame::string(tmp_generator, s);
+                let mut fragments = self.fragments.borrow_mut();
+                fragments.push(fragment);
+                Ok(TranslateOutput {
+                    t: Rc::new(Type::String),
+                    expr: translate::Expr::Expr(label),
+                })
+            }
             ExprType::Number(n) => Ok(TranslateOutput {
                 t: Rc::new(Type::Int),
                 expr: translate::Expr::Expr(ir::Expr::Const(*n as i64)),
@@ -1403,7 +1412,7 @@ impl<'a> Env<'a> {
                     );
                     assign_stmts.push(ir::Stmt::Move(
                         field_trexpr.unwrap_expr(tmp_generator),
-                        trexpr.unwrap_expr(tmp_generator),
+                        dbg!(trexpr.unwrap_expr(tmp_generator)),
                     ));
                 }
 
