@@ -4,19 +4,15 @@
 mod utils;
 
 pub mod ast;
-pub mod error;
 mod fragment;
 mod frame;
 mod ir;
 pub mod lexer;
+pub mod parser;
 pub mod sourcemap;
 pub mod tmp;
 mod translate;
 pub mod typecheck;
-
-use lalrpop_util::lalrpop_mod;
-
-lalrpop_mod!(#[allow(clippy::all)] pub parser);
 
 #[cfg(test)]
 mod tests {
@@ -24,16 +20,15 @@ mod tests {
     use crate::{ast::*, utils::EMPTY_SOURCEMAP};
 
     #[test]
-    fn test_tydecls() {
-        let lexer = lexer::Lexer::new(include_str!("../test-euph-files/test_tydecls.euph"));
-        let mut errors = vec![];
-        let parse_result = parser::ProgramParser::new()
-            .parse(EMPTY_SOURCEMAP.1, &mut errors, lexer)
-            .map(|decls| decls.into_iter().map(Spanned::unwrap).collect::<Vec<_DeclType>>());
-        assert_eq!(errors, vec![]);
+    fn test_tydecls() -> parser::Result<()> {
+        let decls: Vec<_DeclType> =
+            parser::parse_program(EMPTY_SOURCEMAP.1, include_str!("../test-euph-files/test_tydecls.euph"))?
+                .into_iter()
+                .map(|decl| decl.t.into())
+                .collect();
         assert_eq!(
-            parse_result,
-            Ok(vec![
+            decls,
+            vec![
                 _DeclType::Type(_TypeDecl {
                     type_id: "a".to_owned(),
                     ty: _TypeDeclType::Type("int".to_owned())
@@ -63,21 +58,21 @@ mod tests {
                     type_id: "g".to_owned(),
                     ty: _TypeDeclType::Fn(vec![], _Type::Type("int".to_owned())),
                 }),
-            ])
+            ]
         );
+        Ok(())
     }
 
     #[test]
-    fn test_exprs() {
-        let lexer = lexer::Lexer::new(include_str!("../test-euph-files/test_exprs.euph"));
-        let mut errors = vec![];
-        let parse_result = parser::ProgramParser::new()
-            .parse(EMPTY_SOURCEMAP.1, &mut errors, lexer)
-            .map(|decls| decls.into_iter().map(Spanned::unwrap).collect::<Vec<_DeclType>>());
-        assert_eq!(errors, vec![]);
+    fn test_exprs() -> parser::Result<()> {
+        let decls: Vec<_DeclType> =
+            parser::parse_program(EMPTY_SOURCEMAP.1, include_str!("../test-euph-files/test_exprs.euph"))?
+                .into_iter()
+                .map(|decl| decl.t.into())
+                .collect();
         assert_eq!(
-            parse_result,
-            Ok(vec![_DeclType::Fn(_FnDecl {
+            decls,
+            vec![_DeclType::Fn(_FnDecl {
                 id: "f".to_owned(),
                 type_fields: vec![],
                 return_type: None,
@@ -191,20 +186,21 @@ mod tests {
                     ],
                     false
                 )
-            })])
-        )
+            })]
+        );
+        Ok(())
     }
 
     #[test]
-    fn test_parser() {
-        let lexer = lexer::Lexer::new(include_str!("../test-euph-files/test1.euph"));
-        let mut errors = vec![];
-        let parse_result = dbg!(parser::ProgramParser::new().parse(EMPTY_SOURCEMAP.1, &mut errors, lexer))
-            .map(|decls| decls.into_iter().map(Spanned::unwrap).collect::<Vec<_DeclType>>());
-        assert_eq!(errors, vec![]);
+    fn test_parser() -> parser::Result<()> {
+        let decls: Vec<_DeclType> =
+            parser::parse_program(EMPTY_SOURCEMAP.1, include_str!("../test-euph-files/test1.euph"))?
+                .into_iter()
+                .map(|decl| decl.t.into())
+                .collect();
         assert_eq!(
-            parse_result,
-            Ok(vec![
+            decls,
+            vec![
                 _DeclType::Fn(_FnDecl {
                     id: "f".to_owned(),
                     type_fields: vec![],
@@ -249,21 +245,23 @@ mod tests {
                         r: _ExprType::Number(2)
                     })),
                 }),
-            ])
+            ]
         );
+        Ok(())
     }
 
     #[test]
-    fn test_enum_exprs() {
-        let lexer = lexer::Lexer::new(include_str!("../test-euph-files/test_enum_exprs.euph"));
-        let mut errors = vec![];
-        let parse_result = parser::ProgramParser::new()
-            .parse(EMPTY_SOURCEMAP.1, &mut errors, lexer)
-            .map(|decls| decls.into_iter().map(Spanned::unwrap).collect::<Vec<_DeclType>>());
-        assert_eq!(errors, vec![]);
+    fn test_enum_exprs() -> parser::Result<()> {
+        let decls: Vec<_DeclType> = parser::parse_program(
+            EMPTY_SOURCEMAP.1,
+            include_str!("../test-euph-files/test_enum_exprs.euph"),
+        )?
+        .into_iter()
+        .map(|decl| decl.t.into())
+        .collect();
         assert_eq!(
-            parse_result,
-            Ok(vec![_DeclType::Fn(_FnDecl {
+            decls,
+            vec![_DeclType::Fn(_FnDecl {
                 id: "f".to_owned(),
                 type_fields: vec![],
                 return_type: None,
@@ -284,17 +282,14 @@ mod tests {
                     }))],
                     false
                 )
-            }),])
+            }),]
         );
+        Ok(())
     }
 
     #[test]
     fn test_parser_array_negative_index_err() {
-        let lexer = lexer::Lexer::new("type a = [int; -3]");
-        let mut errors = vec![];
-        let parse_result = parser::ProgramParser::new()
-            .parse(EMPTY_SOURCEMAP.1, &mut errors, lexer)
-            .map(|decls| decls.into_iter().map(Spanned::unwrap).collect::<Vec<_DeclType>>());
-        assert!(parse_result.is_err() || !errors.is_empty());
+        let decls = parser::parse_program(EMPTY_SOURCEMAP.1, "type a = [int; -3]");
+        assert!(decls.is_err());
     }
 }

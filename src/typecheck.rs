@@ -1793,13 +1793,15 @@ impl<'a> Env<'a> {
         Spanned { t: expr, .. }: &Spanned<While>,
         break_label: Option<Label>,
     ) -> Result<TranslateOutput<Rc<Type>>> {
-        self.assert_ty(
-            tmp_generator,
-            level_label,
-            &expr.cond,
-            &Rc::new(Type::Bool),
-            break_label.clone(),
-        )?;
+        let cond = self
+            .assert_ty(
+                tmp_generator,
+                level_label,
+                &expr.cond,
+                &Rc::new(Type::Bool),
+                break_label.clone(),
+            )?
+            .expr;
         self.assert_ty(
             tmp_generator,
             level_label,

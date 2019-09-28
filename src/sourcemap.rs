@@ -1,8 +1,9 @@
-use crate::{ast, lexer, parser};
-use codespan::{ByteIndex, FileId, Files};
-use lalrpop_util::{ErrorRecovery, ParseError};
+use crate::{
+    ast,
+    parser::{parse_program, ParseError},
+};
+use codespan::{FileId, Files};
 use std::{
-    convert::TryFrom,
     fs::File,
     io::{BufReader, Read},
     path::Path,
@@ -19,13 +20,8 @@ impl Default for Sourcemap {
     }
 }
 
-#[derive(Debug)]
-pub struct SourcemapError {
-    pub errors: Vec<ParseError<ByteIndex, lexer::Tok, lexer::LexError>>,
-}
-
 impl Sourcemap {
-    pub fn add_file_from_disk<P: AsRef<Path>>(&mut self, path: P) -> (FileId, Result<Vec<ast::Decl>, SourcemapError>) {
+    pub fn add_file_from_disk<P: AsRef<Path>>(&mut self, path: P) -> (FileId, Result<Vec<ast::Decl>, Vec<ParseError>>) {
         match File::open(path.as_ref()) {
             Ok(file) => {
                 let mut buf_reader = BufReader::new(file);
@@ -43,45 +39,10 @@ impl Sourcemap {
         &mut self,
         filename: impl Into<String>,
         file: impl Into<String>,
-    ) -> (FileId, Result<Vec<ast::Decl>, SourcemapError>) {
+    ) -> (FileId, Result<Vec<ast::Decl>, Vec<ParseError>>) {
         let file = file.into();
-        let lexer = lexer::Lexer::new(&file);
-        let mut errors = vec![];
-        let file_id = self.files.add(filename, file);
-        let span = self.files.source_span(file_id);
-        match parser::ProgramParser::new().parse(file_id, &mut errors, lexer) {
-            Ok(decls) => {
-                if errors.is_empty() {
-                    (file_id, Ok(decls))
-                } else {
-                    let mut converted_errors = vec![];
-                    for ErrorRecovery { error, .. } in errors {
-                        converted_errors
-                            .push(error.map_location(|loc| ByteIndex(span.start().0 + u32::try_from(loc).unwrap())));
-                    }
-                    (
-                        file_id,
-                        Err(SourcemapError {
-                            errors: converted_errors,
-                        }),
-                    )
-                }
-            }
-            Err(err) => {
-                let mut converted_errors = vec![];
-                for ErrorRecovery { error, .. } in errors {
-                    converted_errors
-                        .push(error.map_location(|loc| ByteIndex(span.start().0 + u32::try_from(loc).unwrap())));
-                }
-                converted_errors.push(err.map_location(|loc| ByteIndex(span.start().0 + u32::try_from(loc).unwrap())));
-                (
-                    file_id,
-                    Err(SourcemapError {
-                        errors: converted_errors,
-                    }),
-                )
-            }
-        }
+        let file_id = self.files.add(filename, file.clone());
+        (file_id, parse_program(file_id, &file))
     }
 
     pub fn add_empty_file(&mut self) -> FileId {

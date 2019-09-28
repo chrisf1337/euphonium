@@ -8,12 +8,7 @@ use codespan_reporting::{
         Config,
     },
 };
-use euphonium::{
-    error::Error,
-    sourcemap::{Sourcemap, SourcemapError},
-    tmp::TmpGenerator,
-    typecheck::Env,
-};
+use euphonium::{parser::ParseErrorExt, sourcemap::Sourcemap, tmp::TmpGenerator, typecheck::Env};
 
 #[derive(Debug)]
 enum EuphcErr {
@@ -48,7 +43,7 @@ fn main() -> Result<(), EuphcErr> {
     let config = Config::default();
 
     if !errors.is_empty() {
-        for (file_id, SourcemapError { errors: parse_errs }) in errors {
+        for (file_id, parse_errs) in errors {
             for parse_err in parse_errs {
                 let label = Label::new(file_id, parse_err.span(), format!("{:?}", parse_err));
                 codespan_reporting::term::emit(
