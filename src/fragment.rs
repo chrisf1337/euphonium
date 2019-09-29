@@ -9,7 +9,7 @@ pub enum Fragment {
 #[derive(Debug, Clone)]
 pub struct FnFragment {
     pub body: ir::Stmt,
-    pub frame_name: String,
+    pub label: Label,
 }
 
 #[derive(Debug, Clone)]
