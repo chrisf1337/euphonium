@@ -199,7 +199,7 @@ DeclType: ast::DeclType = {
     },
 };
 
-Expr: ast::Expr = {
+pub Expr: ast::Expr = {
     Spanned<Closure> => <>.map(|e| ast::ExprType::Closure(Box::new(e))),
     Spanned<FnDeclExpr> => <>.map(|e| ast::ExprType::FnDecl(Box::new(e))),
     ExprTypeOrLetOrAssign,

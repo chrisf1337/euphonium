@@ -7,7 +7,7 @@ use lalrpop_util::lalrpop_mod;
 use std::convert::TryFrom;
 
 lalrpop_mod! {
-    #[allow(clippy::all)]
+    #[allow(clippy::all, dead_code)]
     lalrpop_parser
 }
 
@@ -21,6 +21,29 @@ pub fn parse_program(file_id: FileId, program: &str) -> Result<Vec<Decl>> {
         Ok(decls) => {
             if errors.is_empty() {
                 Ok(decls)
+            } else {
+                Err(errors.into_iter().map(|e| e.error).collect())
+            }
+        }
+        Err(err) => {
+            let mut errors: Vec<ParseError> = errors.into_iter().map(|e| e.error).collect();
+            errors.insert(0, err);
+            Err(errors)
+        }
+    }
+}
+
+#[cfg(test)]
+use crate::{ast, utils::EMPTY_SOURCEMAP};
+
+#[cfg(test)]
+pub fn parse_expr(expr: &str) -> Result<ast::Expr> {
+    let mut errors = vec![];
+    let lexer = Lexer::new(expr);
+    match lalrpop_parser::ExprParser::new().parse(EMPTY_SOURCEMAP.1, &mut errors, lexer) {
+        Ok(expr) => {
+            if errors.is_empty() {
+                Ok(expr)
             } else {
                 Err(errors.into_iter().map(|e| e.error).collect())
             }

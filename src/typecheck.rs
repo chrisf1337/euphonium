@@ -918,21 +918,39 @@ impl<'a> Env<'a> {
     ) -> Result<TranslateOutput<Rc<Type>>> {
         match &expr.t {
             ExprType::Seq(exprs, returns) => {
-                let (mut new_env, return_type) = {
+                let (mut new_env, return_type, trexpr) = {
                     // New scope
                     let mut new_env = self.new_child(self.current_file);
+                    let mut stmts = vec![];
                     for expr in &exprs[..exprs.len() - 1] {
-                        let _ = new_env.typecheck_expr_mut(tmp_generator, level_label, expr, break_label.clone())?;
+                        let trexpr = new_env
+                            .typecheck_expr_mut(tmp_generator, level_label, expr, break_label.clone())?
+                            .expr;
+                        // We don't emit any IR for function decls, so ignore them.
+                        match &expr.t {
+                            ExprType::FnDecl(_) => (),
+                            _ => stmts.push(trexpr.unwrap_stmt(tmp_generator)),
+                        }
                     }
                     let last_expr = exprs.last().unwrap();
-                    let return_type = if *returns {
-                        new_env
-                            .typecheck_expr_mut(tmp_generator, level_label, last_expr, break_label.clone())?
-                            .t
+                    let TranslateOutput {
+                        t: return_type,
+                        expr: trexpr,
+                    } = if *returns {
+                        // Here, units are represented with ir::Expr::Const(0), the same as if we
+                        // returned the result of a function decl, so we don't have to take that
+                        // special case into account.
+                        new_env.typecheck_expr_mut(tmp_generator, level_label, last_expr, break_label.clone())?
                     } else {
-                        let _ =
+                        let TranslateOutput { expr: trexpr, .. } =
                             new_env.typecheck_expr_mut(tmp_generator, level_label, last_expr, break_label.clone())?;
-                        Rc::new(Type::Unit)
+                        TranslateOutput {
+                            t: Rc::new(Type::Unit),
+                            expr: translate::Expr::Expr(ir::Expr::Seq(
+                                Box::new(trexpr.unwrap_stmt(tmp_generator)),
+                                Box::new(ir::Expr::Const(0)),
+                            )),
+                        }
                     };
 
                     // Remove all non-fn decl exprs so that in the second pass they'll already be
@@ -945,7 +963,18 @@ impl<'a> Env<'a> {
                     }
 
                     new_env.vars = fn_decls;
-                    (new_env, return_type)
+                    (
+                        new_env,
+                        return_type,
+                        if stmts.is_empty() {
+                            trexpr.unwrap_expr(tmp_generator)
+                        } else {
+                            ir::Expr::Seq(
+                                Box::new(ir::Stmt::seq(stmts)),
+                                Box::new(trexpr.unwrap_expr(tmp_generator)),
+                            )
+                        },
+                    )
                 };
 
                 // The only possible place where inline fn decl exprs can be is inside seq exprs
@@ -962,7 +991,7 @@ impl<'a> Env<'a> {
 
                 Ok(TranslateOutput {
                     t: return_type,
-                    expr: translate::Expr::Expr(ir::Expr::Const(0)),
+                    expr: translate::Expr::Expr(trexpr),
                 })
             }
             ExprType::String(s) => {
@@ -1802,16 +1831,34 @@ impl<'a> Env<'a> {
                 break_label.clone(),
             )?
             .expr;
-        self.assert_ty(
-            tmp_generator,
-            level_label,
-            &expr.body,
-            &Rc::new(Type::Unit),
-            break_label,
-        )?;
+        let body = self
+            .assert_ty(
+                tmp_generator,
+                level_label,
+                &expr.body,
+                &Rc::new(Type::Unit),
+                break_label,
+            )?
+            .expr
+            .unwrap_stmt(tmp_generator);
+
+        let test_label = tmp_generator.new_label();
+        let done_label = tmp_generator.new_label();
+        let cond_true_label = tmp_generator.new_label();
+        let gen_stmt = cond.unwrap_cond();
+
+        let stmts = ir::Stmt::seq(vec![
+            ir::Stmt::Label(test_label.clone()),
+            gen_stmt(cond_true_label.clone(), done_label.clone()),
+            ir::Stmt::Label(cond_true_label),
+            body,
+            ir::Stmt::Jump(ir::Expr::Label(test_label.clone()), vec![test_label]),
+            ir::Stmt::Label(done_label),
+        ]);
+
         Ok(TranslateOutput {
             t: Rc::new(Type::Unit),
-            expr: translate::Expr::Expr(ir::Expr::Const(0)),
+            expr: translate::Expr::Stmt(stmts),
         })
     }
 

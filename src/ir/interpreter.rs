@@ -173,7 +173,6 @@ impl Interpreter {
                 }
             }
             ir::Expr::Label(label) => self.string_table[label],
-            _ => unimplemented!(),
         }
     }
 
@@ -195,8 +194,8 @@ impl Interpreter {
                 None
             }
             ir::Stmt::CJump(l, op, r, t_label, f_label) => {
-                let l = self.interpret_expr_as_rvalue(l);
-                let r = self.interpret_expr_as_rvalue(r);
+                let l: i64 = unsafe { std::mem::transmute(self.interpret_expr_as_rvalue(l)) };
+                let r: i64 = unsafe { std::mem::transmute(self.interpret_expr_as_rvalue(r)) };
                 match op {
                     ir::CompareOp::Eq => {
                         if l == r {
@@ -207,6 +206,13 @@ impl Interpreter {
                     }
                     ir::CompareOp::Ge => {
                         if l >= r {
+                            self.jump(t_label);
+                        } else {
+                            self.jump(f_label);
+                        }
+                    }
+                    ir::CompareOp::Gt => {
+                        if l > r {
                             self.jump(t_label);
                         } else {
                             self.jump(f_label);
@@ -387,13 +393,31 @@ impl Interpreter {
 mod tests {
     use super::*;
     use crate::{
-        ast, ir,
+        ast, ir, parser,
         tmp::{Label, TmpGenerator},
         translate::{self, Expr},
         typecheck::{Env, TypecheckErr},
         utils::{dump_vec, EMPTY_SOURCEMAP},
     };
     use maplit::hashmap;
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    enum InterpreterTestErr {
+        ParseErr(Vec<parser::ParseError>),
+        TypecheckErr(Vec<TypecheckErr>),
+    }
+
+    impl From<Vec<parser::ParseError>> for InterpreterTestErr {
+        fn from(errs: Vec<parser::ParseError>) -> Self {
+            Self::ParseErr(errs)
+        }
+    }
+
+    impl From<Vec<TypecheckErr>> for InterpreterTestErr {
+        fn from(errs: Vec<TypecheckErr>) -> Self {
+            Self::TypecheckErr(errs)
+        }
+    }
 
     #[test]
     fn test_read_write() {
@@ -880,6 +904,41 @@ mod tests {
             let result = interpreter.run_expr(&mut tmp_generator, trexpr).expect("run_expr");
             assert_eq!(interpreter.read_str(result), "string".to_owned());
         }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_simple_while() -> Result<(), InterpreterTestErr> {
+        let expr = parser::parse_expr(
+            r#"
+            {
+                let mut a = 10;
+                let mut b = 0;
+                while a > 0 {
+                    b = b + 1;
+                    a = a - 1;
+                };
+                b
+            }
+        "#,
+        )?;
+
+        let mut tmp_generator = TmpGenerator::default();
+        let level = Level::new(&mut tmp_generator, Some(Label::top()), "f", &[]);
+        let level_label = level.frame.label.clone();
+
+        let env = Env::new(EMPTY_SOURCEMAP.1);
+        {
+            let mut levels = env.levels.borrow_mut();
+            levels.insert(level_label.clone(), level);
+        }
+
+        let expr = env.typecheck_expr(&mut tmp_generator, &level_label, &expr, None)?.expr;
+
+        let mut interpreter = Interpreter::default();
+        let result = interpreter.run_expr(&mut tmp_generator, expr);
+        assert_eq!(result, Some(10));
 
         Ok(())
     }
