@@ -21,7 +21,7 @@ pub struct Frame {
 }
 
 impl Frame {
-    pub fn new(tmp_generator: &mut TmpGenerator, name: impl Into<String>, formals: &[bool]) -> Self {
+    pub fn new(tmp_generator: &TmpGenerator, name: impl Into<String>, formals: &[bool]) -> Self {
         let mut offset: i64 = 0;
         let mut accesses = vec![];
         for &formal in formals {
@@ -50,7 +50,7 @@ impl Frame {
             .collect()
     }
 
-    pub fn alloc_local(&mut self, tmp_generator: &mut TmpGenerator, escapes: bool) -> Access {
+    pub fn alloc_local(&mut self, tmp_generator: &TmpGenerator, escapes: bool) -> Access {
         let escaping_formals_len = self.escaping_formals().len();
         if escapes {
             let access = Access::InFrame(-WORD_SIZE * (self.n_locals + escaping_formals_len) as i64);
@@ -79,7 +79,7 @@ impl Frame {
     }
 
     // TODO: Dedup literals.
-    pub fn string(tmp_generator: &mut TmpGenerator, string: impl Into<String>) -> (ir::Expr, Fragment) {
+    pub fn string(tmp_generator: &TmpGenerator, string: impl Into<String>) -> (ir::Expr, Fragment) {
         let label = tmp_generator.new_label();
         (
             ir::Expr::Label(label.clone()),

@@ -309,7 +309,7 @@ mod tests {
 
     #[test]
     fn test_seq() {
-        let mut tmp_generator = TmpGenerator::default();
+        let tmp_generator = TmpGenerator::default();
 
         let stmt1 = Stmt::Label(tmp_generator.new_label());
         let stmt2 = Stmt::Label(tmp_generator.new_label());

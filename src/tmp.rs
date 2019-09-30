@@ -1,4 +1,5 @@
 use lazy_static::lazy_static;
+use std::{cell::RefCell, rc::Rc};
 
 #[derive(Debug, Copy, Clone)]
 pub enum ReservedTmps {
@@ -49,37 +50,43 @@ impl std::fmt::Display for Label {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct TmpGenerator {
+struct _TmpGenerator {
     current_label_count: usize,
     current_tmp_count: usize,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TmpGenerator(Rc<RefCell<_TmpGenerator>>);
+
 impl Default for TmpGenerator {
     fn default() -> Self {
-        TmpGenerator {
+        TmpGenerator(Rc::new(RefCell::new(_TmpGenerator {
             current_tmp_count: ReservedTmps::Count as usize,
             // 0 is reserved for top-level label
             current_label_count: 1,
-        }
+        })))
     }
 }
 
 impl TmpGenerator {
-    pub fn new_tmp(&mut self) -> Tmp {
-        let tmp_count = self.current_tmp_count;
-        self.current_tmp_count += 1;
+    pub fn new_tmp(&self) -> Tmp {
+        let mut tmp_generator = self.0.borrow_mut();
+        let tmp_count = tmp_generator.current_tmp_count;
+        tmp_generator.current_tmp_count += 1;
         Tmp(tmp_count)
     }
 
-    pub fn new_label(&mut self) -> Label {
-        let label_count = self.current_label_count;
-        self.current_label_count += 1;
+    pub fn new_label(&self) -> Label {
+        let mut tmp_generator = self.0.borrow_mut();
+        let label_count = tmp_generator.current_label_count;
+        tmp_generator.current_label_count += 1;
         Label(format!("L{}", label_count))
     }
 
-    pub fn new_named_label(&mut self, name: &str) -> Label {
-        let label_count = self.current_label_count;
-        self.current_label_count += 1;
+    pub fn new_named_label(&self, name: &str) -> Label {
+        let mut tmp_generator = self.0.borrow_mut();
+        let label_count = tmp_generator.current_label_count;
+        tmp_generator.current_label_count += 1;
         Label(format!("L{}{}", name, label_count))
     }
 }

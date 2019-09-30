@@ -57,7 +57,7 @@ impl PartialEq for Expr {
 impl Eq for Expr {}
 
 impl Expr {
-    pub fn unwrap_expr(self, tmp_generator: &mut TmpGenerator) -> ir::Expr {
+    pub fn unwrap_expr(self, tmp_generator: &TmpGenerator) -> ir::Expr {
         match self {
             Expr::Expr(expr) => expr,
             Expr::Stmt(stmt) => ir::Expr::Seq(Box::new(stmt), Box::new(ir::Expr::Const(0))),
@@ -79,7 +79,7 @@ impl Expr {
         }
     }
 
-    pub fn unwrap_stmt(self, tmp_generator: &mut TmpGenerator) -> ir::Stmt {
+    pub fn unwrap_stmt(self, tmp_generator: &TmpGenerator) -> ir::Stmt {
         match self {
             Expr::Expr(expr) => ir::Stmt::Expr(expr),
             Expr::Stmt(stmt) => stmt,

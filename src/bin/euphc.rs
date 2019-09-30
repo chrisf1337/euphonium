@@ -57,10 +57,10 @@ fn main() -> Result<(), EuphcErr> {
         return Err(EuphcErr::ParseErr);
     }
 
-    let mut env = Env::new(empty_file_id);
-    let mut tmp_generator = TmpGenerator::default();
+    let tmp_generator = TmpGenerator::default();
+    let mut env = Env::new(tmp_generator, empty_file_id);
     for (file_id, decls) in decls {
-        match env.typecheck_decls(&mut tmp_generator, file_id, &decls) {
+        match env.typecheck_decls(file_id, &decls) {
             Ok(()) => (),
             Err(typecheck_errors) => {
                 for err in typecheck_errors {

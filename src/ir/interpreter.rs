@@ -83,7 +83,7 @@ impl Interpreter {
         val
     }
 
-    fn run_expr(&mut self, tmp_generator: &mut TmpGenerator, expr: Expr) -> Option<u64> {
+    fn run_expr(&mut self, tmp_generator: &TmpGenerator, expr: Expr) -> Option<u64> {
         let stmts = expr.unwrap_stmt(tmp_generator).flatten();
         let mut jump_table = HashMap::new();
         for (i, stmt) in stmts.iter().enumerate() {
@@ -343,12 +343,7 @@ impl Interpreter {
         file.write_all(&self.memory).expect("failed to write to file");
     }
 
-    fn alloc_local(
-        &mut self,
-        tmp_generator: &mut TmpGenerator,
-        level: &mut Level,
-        escapes: bool,
-    ) -> (Access, Option<u64>) {
+    fn alloc_local(&mut self, tmp_generator: &TmpGenerator, level: &mut Level, escapes: bool) -> (Access, Option<u64>) {
         let local = level.alloc_local(tmp_generator, escapes);
         let addr = if escapes {
             *self.sp_mut() -= frame::WORD_SIZE as u64;
@@ -564,11 +559,11 @@ mod tests {
 
     #[test]
     fn test_if_ir() {
-        let mut tmp_generator = TmpGenerator::default();
-        let level = Level::new(&mut tmp_generator, Some(Label::top()), "f", &[]);
+        let tmp_generator = TmpGenerator::default();
+        let level = Level::new(&tmp_generator, Some(Label::top()), "f", &[]);
         let level_label = level.frame.label.clone();
 
-        let mut env = Env::new(EMPTY_SOURCEMAP.1);
+        let mut env = Env::new(tmp_generator.clone(), EMPTY_SOURCEMAP.1);
         {
             let mut levels = env.levels.borrow_mut();
             levels.insert(level_label.clone(), level);
@@ -582,10 +577,10 @@ mod tests {
             expr: zspan!(ast::ExprType::Number(0)),
         }))));
         let mut stmt = env
-            .typecheck_expr_mut(&mut tmp_generator, &level_label, &let_expr)
+            .typecheck_expr_mut(&level_label, &let_expr)
             .expect("typecheck failed")
             .expr
-            .unwrap_stmt(&mut tmp_generator);
+            .unwrap_stmt(&tmp_generator);
 
         // if true { a = 1 };
         let if_expr = zspan!(ast::ExprType::If(Box::new(zspan!(ast::If {
@@ -597,25 +592,25 @@ mod tests {
             else_expr: None,
         }))));
         stmt = stmt.appending(
-            env.typecheck_expr(&mut tmp_generator, &level_label, &if_expr)
+            env.typecheck_expr(&level_label, &if_expr)
                 .expect("typecheck failed")
                 .expr
-                .unwrap_stmt(&mut tmp_generator),
+                .unwrap_stmt(&tmp_generator),
         );
 
         let mut interpreter = Interpreter::default();
-        interpreter.run_expr(&mut tmp_generator, Expr::Stmt(stmt));
+        interpreter.run_expr(&tmp_generator, Expr::Stmt(stmt));
         let addr = interpreter.fp() as i64 - frame::WORD_SIZE;
         assert_eq!(interpreter.read_u64(addr as u64), 1);
     }
 
     #[test]
     fn test_if_as_expr_ir() {
-        let mut tmp_generator = TmpGenerator::default();
-        let level = Level::new(&mut tmp_generator, Some(Label::top()), "f", &[]);
+        let tmp_generator = TmpGenerator::default();
+        let level = Level::new(&tmp_generator, Some(Label::top()), "f", &[]);
         let level_label = level.frame.label.clone();
 
-        let mut env = Env::new(EMPTY_SOURCEMAP.1);
+        let mut env = Env::new(tmp_generator.clone(), EMPTY_SOURCEMAP.1);
         {
             let mut levels = env.levels.borrow_mut();
             levels.insert(level_label.clone(), level);
@@ -629,10 +624,10 @@ mod tests {
             expr: zspan!(ast::ExprType::Number(0)),
         }))));
         let mut stmt = env
-            .typecheck_expr_mut(&mut tmp_generator, &level_label, &let_expr)
+            .typecheck_expr_mut(&level_label, &let_expr)
             .expect("typecheck failed")
             .expr
-            .unwrap_stmt(&mut tmp_generator);
+            .unwrap_stmt(&tmp_generator);
 
         // a = if a == 0 { 123 } else { 456 };
         let if_expr = zspan!(ast::ExprType::If(Box::new(zspan!(ast::If {
@@ -650,26 +645,26 @@ mod tests {
         }))));
 
         stmt = stmt.appending(
-            env.typecheck_expr(&mut tmp_generator, &level_label, &assign_expr)
+            env.typecheck_expr(&level_label, &assign_expr)
                 .expect("typecheck failed")
                 .expr
-                .unwrap_stmt(&mut tmp_generator),
+                .unwrap_stmt(&tmp_generator),
         );
         dump_vec(&stmt.flatten());
 
         let mut interpreter = Interpreter::default();
-        interpreter.run_expr(&mut tmp_generator, Expr::Stmt(stmt));
+        interpreter.run_expr(&tmp_generator, Expr::Stmt(stmt));
         let addr = interpreter.fp() as i64 - frame::WORD_SIZE;
         assert_eq!(interpreter.read_u64(addr as u64), 123);
     }
 
     #[test]
     fn test_array_subscript() {
-        let mut tmp_generator = TmpGenerator::default();
-        let level = Level::new(&mut tmp_generator, Some(Label::top()), "f", &[]);
+        let tmp_generator = TmpGenerator::default();
+        let level = Level::new(&tmp_generator, Some(Label::top()), "f", &[]);
         let level_label = level.frame.label.clone();
 
-        let mut env = Env::new(EMPTY_SOURCEMAP.1);
+        let mut env = Env::new(tmp_generator.clone(), EMPTY_SOURCEMAP.1);
         {
             let mut levels = env.levels.borrow_mut();
             levels.insert(level_label.clone(), level);
@@ -686,10 +681,10 @@ mod tests {
             })))),
         }))));
         let mut stmt = env
-            .typecheck_expr_mut(&mut tmp_generator, &level_label, &let_expr)
+            .typecheck_expr_mut(&level_label, &let_expr)
             .expect("typecheck failed")
             .expr
-            .unwrap_stmt(&mut tmp_generator);
+            .unwrap_stmt(&tmp_generator);
 
         // a[0] = 1;
         let assign_expr = zspan!(ast::ExprType::Assign(Box::new(zspan!(ast::Assign {
@@ -700,10 +695,10 @@ mod tests {
             expr: zspan!(ast::ExprType::Number(1)),
         }))));
         stmt = stmt.appending(
-            env.typecheck_expr_mut(&mut tmp_generator, &level_label, &assign_expr)
+            env.typecheck_expr_mut(&level_label, &assign_expr)
                 .expect("typecheck failed")
                 .expr
-                .unwrap_stmt(&mut tmp_generator),
+                .unwrap_stmt(&tmp_generator),
         );
 
         // a[3] = 3;
@@ -715,25 +710,22 @@ mod tests {
             expr: zspan!(ast::ExprType::Number(3)),
         }))));
         stmt = stmt.appending(
-            env.typecheck_expr_mut(&mut tmp_generator, &level_label, &assign_expr)
+            env.typecheck_expr_mut(&level_label, &assign_expr)
                 .expect("typecheck failed")
                 .expr
-                .unwrap_stmt(&mut tmp_generator),
+                .unwrap_stmt(&tmp_generator),
         );
 
         let mut interpreter = Interpreter::default();
-        interpreter.run_expr(&mut tmp_generator, Expr::Stmt(stmt));
+        interpreter.run_expr(&tmp_generator, Expr::Stmt(stmt));
 
         {
             let expr = zspan!(ast::ExprType::LVal(Box::new(zspan!(ast::LVal::Subscript(
                 Box::new(zspan!(ast::LVal::Simple("a".to_owned()))),
                 zspan!(ast::ExprType::Number(0))
             )))));
-            let trexpr = env
-                .typecheck_expr(&mut tmp_generator, &level_label, &expr)
-                .expect("typecheck")
-                .expr;
-            let val = interpreter.run_expr(&mut tmp_generator, trexpr);
+            let trexpr = env.typecheck_expr(&level_label, &expr).expect("typecheck").expr;
+            let val = interpreter.run_expr(&tmp_generator, trexpr);
             assert_eq!(val, Some(1));
         }
 
@@ -742,11 +734,8 @@ mod tests {
                 Box::new(zspan!(ast::LVal::Simple("a".to_owned()))),
                 zspan!(ast::ExprType::Number(1))
             )))));
-            let trexpr = env
-                .typecheck_expr(&mut tmp_generator, &level_label, &expr)
-                .expect("typecheck")
-                .expr;
-            let val = interpreter.run_expr(&mut tmp_generator, trexpr);
+            let trexpr = env.typecheck_expr(&level_label, &expr).expect("typecheck").expr;
+            let val = interpreter.run_expr(&tmp_generator, trexpr);
             assert_eq!(val, Some(123));
         }
 
@@ -755,22 +744,19 @@ mod tests {
                 Box::new(zspan!(ast::LVal::Simple("a".to_owned()))),
                 zspan!(ast::ExprType::Number(3))
             )))));
-            let trexpr = env
-                .typecheck_expr(&mut tmp_generator, &level_label, &expr)
-                .expect("typecheck")
-                .expr;
-            let val = interpreter.run_expr(&mut tmp_generator, trexpr);
+            let trexpr = env.typecheck_expr(&level_label, &expr).expect("typecheck").expr;
+            let val = interpreter.run_expr(&tmp_generator, trexpr);
             assert_eq!(val, Some(3));
         }
     }
 
     #[test]
     fn test_array_bounds_checking_under() {
-        let mut tmp_generator = TmpGenerator::default();
-        let level = Level::new(&mut tmp_generator, Some(Label::top()), "f", &[]);
+        let tmp_generator = TmpGenerator::default();
+        let level = Level::new(&tmp_generator, Some(Label::top()), "f", &[]);
         let level_label = level.frame.label.clone();
 
-        let mut env = Env::new(EMPTY_SOURCEMAP.1);
+        let mut env = Env::new(tmp_generator.clone(), EMPTY_SOURCEMAP.1);
         {
             let mut levels = env.levels.borrow_mut();
             levels.insert(level_label.clone(), level);
@@ -787,10 +773,10 @@ mod tests {
             })))),
         }))));
         let mut stmt = env
-            .typecheck_expr_mut(&mut tmp_generator, &level_label, &let_expr)
+            .typecheck_expr_mut(&level_label, &let_expr)
             .expect("typecheck failed")
             .expr
-            .unwrap_stmt(&mut tmp_generator);
+            .unwrap_stmt(&tmp_generator);
 
         // a[-1];
         let subscript_expr = zspan!(ast::ExprType::LVal(Box::new(zspan!(ast::LVal::Subscript(
@@ -798,14 +784,14 @@ mod tests {
             zspan!(ast::ExprType::Neg(Box::new(zspan!(ast::ExprType::Number(1)))))
         )))));
         stmt = stmt.appending(
-            env.typecheck_expr_mut(&mut tmp_generator, &level_label, &subscript_expr)
+            env.typecheck_expr_mut(&level_label, &subscript_expr)
                 .expect("typecheck failed")
                 .expr
-                .unwrap_stmt(&mut tmp_generator),
+                .unwrap_stmt(&tmp_generator),
         );
 
         let mut interpreter = Interpreter::default();
-        interpreter.run_expr(&mut tmp_generator, Expr::Stmt(stmt));
+        interpreter.run_expr(&tmp_generator, Expr::Stmt(stmt));
         assert!(interpreter.panicked);
 
         // a[10];
@@ -814,20 +800,20 @@ mod tests {
             zspan!(ast::ExprType::Number(10))
         )))));
         let trexpr = env
-            .typecheck_expr_mut(&mut tmp_generator, &level_label, &subscript_expr)
+            .typecheck_expr_mut(&level_label, &subscript_expr)
             .expect("typecheck failed")
             .expr;
-        interpreter.run_expr(&mut tmp_generator, trexpr);
+        interpreter.run_expr(&tmp_generator, trexpr);
         assert!(interpreter.panicked);
     }
 
     #[test]
     fn test_record_expr() -> Result<(), Vec<TypecheckErr>> {
-        let mut tmp_generator = TmpGenerator::default();
-        let level = Level::new(&mut tmp_generator, Some(Label::top()), "f", &[]);
+        let tmp_generator = TmpGenerator::default();
+        let level = Level::new(&tmp_generator, Some(Label::top()), "f", &[]);
         let level_label = level.frame.label.clone();
 
-        let mut env = Env::new(EMPTY_SOURCEMAP.1);
+        let mut env = Env::new(tmp_generator.clone(), EMPTY_SOURCEMAP.1);
         {
             let mut levels = env.levels.borrow_mut();
             levels.insert(level_label.clone(), level);
@@ -867,9 +853,9 @@ mod tests {
             }))))
         }))));
         let stmt = env
-            .typecheck_expr_mut(&mut tmp_generator, &level_label, &assign_expr)?
+            .typecheck_expr_mut(&level_label, &assign_expr)?
             .expr
-            .unwrap_stmt(&mut tmp_generator);
+            .unwrap_stmt(&tmp_generator);
 
         let mut interpreter = Interpreter::default();
         {
@@ -877,7 +863,7 @@ mod tests {
             interpreter.set_string_table(&fragments);
         }
 
-        interpreter.run_expr(&mut tmp_generator, Expr::Stmt(stmt));
+        interpreter.run_expr(&tmp_generator, Expr::Stmt(stmt));
 
         println!("{:?}", interpreter.string_table);
         interpreter.dump_to_file("test_record_expr");
@@ -887,10 +873,8 @@ mod tests {
                 Box::new(zspan!(ast::LVal::Simple("a".to_owned()))),
                 zspan!("a".to_owned())
             )))));
-            let trexpr = env
-                .typecheck_expr(&mut tmp_generator, &level_label, &subscript_expr)?
-                .expr;
-            assert_eq!(interpreter.run_expr(&mut tmp_generator, trexpr).expect("run_expr"), 123);
+            let trexpr = env.typecheck_expr(&level_label, &subscript_expr)?.expr;
+            assert_eq!(interpreter.run_expr(&tmp_generator, trexpr).expect("run_expr"), 123);
         }
 
         {
@@ -898,10 +882,8 @@ mod tests {
                 Box::new(zspan!(ast::LVal::Simple("a".to_owned()))),
                 zspan!("b".to_owned())
             )))));
-            let trexpr = env
-                .typecheck_expr(&mut tmp_generator, &level_label, &subscript_expr)?
-                .expr;
-            let result = interpreter.run_expr(&mut tmp_generator, trexpr).expect("run_expr");
+            let trexpr = env.typecheck_expr(&level_label, &subscript_expr)?.expr;
+            let result = interpreter.run_expr(&tmp_generator, trexpr).expect("run_expr");
             assert_eq!(interpreter.read_str(result), "string".to_owned());
         }
 
@@ -924,20 +906,20 @@ mod tests {
         "#,
         )?;
 
-        let mut tmp_generator = TmpGenerator::default();
-        let level = Level::new(&mut tmp_generator, Some(Label::top()), "f", &[]);
+        let tmp_generator = TmpGenerator::default();
+        let level = Level::new(&tmp_generator, Some(Label::top()), "f", &[]);
         let level_label = level.frame.label.clone();
 
-        let env = Env::new(EMPTY_SOURCEMAP.1);
+        let env = Env::new(tmp_generator.clone(), EMPTY_SOURCEMAP.1);
         {
             let mut levels = env.levels.borrow_mut();
             levels.insert(level_label.clone(), level);
         }
 
-        let expr = env.typecheck_expr(&mut tmp_generator, &level_label, &expr)?.expr;
+        let expr = env.typecheck_expr(&level_label, &expr)?.expr;
 
         let mut interpreter = Interpreter::default();
-        let result = interpreter.run_expr(&mut tmp_generator, expr);
+        let result = interpreter.run_expr(&tmp_generator, expr);
         assert_eq!(result, Some(10));
 
         Ok(())

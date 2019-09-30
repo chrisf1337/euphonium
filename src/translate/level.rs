@@ -12,7 +12,7 @@ pub struct Level {
 
 impl Level {
     pub fn new(
-        tmp_generator: &mut TmpGenerator,
+        tmp_generator: &TmpGenerator,
         parent_label: Option<Label>,
         name: impl Into<String>,
         formals: &[bool],
@@ -51,7 +51,7 @@ impl Level {
             .collect()
     }
 
-    pub fn alloc_local(&mut self, tmp_generator: &mut TmpGenerator, escapes: bool) -> Access {
+    pub fn alloc_local(&mut self, tmp_generator: &TmpGenerator, escapes: bool) -> Access {
         Access {
             level_label: self.frame.label.clone(),
             access: self.frame.alloc_local(tmp_generator, escapes),
