@@ -119,7 +119,7 @@ impl TypecheckErr {
                 format!("arity mismatch\nexpected: {:?}\n  actual: {:?}", expected, actual)
             }
             NotAFn(fun) => {
-                let ty = env.get_var(fun).unwrap();
+                let ty = env.var(fun).unwrap();
                 format!("not a function: {} (has type {:?})", fun, ty)
             }
             NotARecord(ty) => format!("not a record: (has type {:?})", ty.as_ref()),
@@ -394,71 +394,71 @@ impl<'a> Env<'a> {
         self.type_def_spans.insert(name, def_span);
     }
 
-    fn get_var(&self, name: &str) -> Option<&EnvEntry> {
+    fn var(&self, name: &str) -> Option<&EnvEntry> {
         if let Some(var) = self.vars.get(name) {
             Some(var)
         } else if let Some(parent) = self.parent {
-            parent.get_var(name)
+            parent.var(name)
         } else {
             None
         }
     }
 
-    fn get_type(&self, name: &str) -> Option<&Rc<Type>> {
+    fn r#type(&self, name: &str) -> Option<&Rc<Type>> {
         if let Some(ty) = self.types.get(name) {
             Some(ty)
         } else if let Some(parent) = self.parent {
-            parent.get_type(name)
+            parent.r#type(name)
         } else {
             None
         }
     }
 
-    fn get_var_def_span(&self, id: &str) -> Option<FileSpan> {
+    fn var_def_span(&self, id: &str) -> Option<FileSpan> {
         if let Some(span) = self.var_def_spans.get(id) {
             Some(*span)
         } else if let Some(parent) = self.parent {
-            parent.get_var_def_span(id)
+            parent.var_def_span(id)
         } else {
             None
         }
     }
 
-    fn get_type_def_span(&self, id: &str) -> Option<FileSpan> {
+    fn type_def_span(&self, id: &str) -> Option<FileSpan> {
         if let Some(span) = self.type_def_spans.get(id) {
             Some(*span)
         } else if let Some(parent) = self.parent {
-            parent.get_type_def_span(id)
+            parent.type_def_span(id)
         } else {
             None
         }
     }
 
-    fn get_record_field_decl_spans(&self, id: &str) -> Option<&HashMap<String, FileSpan>> {
+    fn record_field_decl_spans(&self, id: &str) -> Option<&HashMap<String, FileSpan>> {
         if let Some(spans) = self.record_field_decl_spans.get(id) {
             Some(spans)
         } else if let Some(parent) = self.parent {
-            parent.get_record_field_decl_spans(id)
+            parent.record_field_decl_spans(id)
         } else {
             None
         }
     }
 
-    fn get_fn_param_decl_spans(&self, id: &str) -> Option<&[FileSpan]> {
+    fn fn_param_decl_spans(&self, id: &str) -> Option<&[FileSpan]> {
         if let Some(spans) = self.fn_param_decl_spans.get(id) {
             Some(spans)
         } else if let Some(parent) = self.parent {
-            parent.get_fn_param_decl_spans(id)
+            parent.fn_param_decl_spans(id)
         } else {
             None
         }
     }
 
-    fn get_enum_case_param_decl_spans(&self, id: &str) -> Option<&HashMap<String, Vec<FileSpan>>> {
+    fn enum_case_param_decl_spans(&self, id: &str) -> Option<&HashMap<String, Vec<FileSpan>>> {
         if let Some(spans) = self.enum_case_param_decl_spans.get(id) {
             Some(spans)
         } else if let Some(parent) = self.parent {
-            parent.get_enum_case_param_decl_spans(id)
+            parent.enum_case_param_decl_spans(id)
         } else {
             None
         }
@@ -483,8 +483,8 @@ impl<'a> Env<'a> {
     fn resolve_type(&self, ty: &Rc<Type>, def_span: FileSpan) -> Result<Rc<Type>> {
         match ty.as_ref() {
             Type::Alias(alias) => {
-                if let Some(resolved_type) = self.get_type(alias) {
-                    let span = self.get_type_def_span(alias).unwrap();
+                if let Some(resolved_type) = self.r#type(alias) {
+                    let span = self.type_def_span(alias).unwrap();
                     self.resolve_type(resolved_type, span)
                 } else {
                     Err(vec![TypecheckErr::new_err(
@@ -517,7 +517,7 @@ impl<'a> Env<'a> {
         if let Some(alias) = self.types.get(ty) {
             if let Some(alias_str) = alias.alias() {
                 if path.contains(&alias_str) {
-                    let span = self.get_type_def_span(ty).unwrap();
+                    let span = self.type_def_span(ty).unwrap();
                     return Err(vec![TypecheckErr::new_err(
                         TypecheckErrType::TypeDeclCycle(ty.to_string(), alias.clone()),
                         span,
@@ -602,7 +602,7 @@ impl<'a> Env<'a> {
     fn check_for_invalid_types(&self) -> Result<()> {
         let mut errors = vec![];
         for (id, ty) in &self.types {
-            match self.validate_type(ty, self.get_type_def_span(id).unwrap()) {
+            match self.validate_type(ty, self.type_def_span(id).unwrap()) {
                 Ok(()) => (),
                 Err(errs) => errors.extend(errs),
             }
@@ -610,12 +610,12 @@ impl<'a> Env<'a> {
         for (id, var) in &self.vars {
             if let Type::Fn(param_types, return_type) = var.ty.as_ref() {
                 for ty in param_types {
-                    match self.validate_type(ty, self.get_var_def_span(id).unwrap()) {
+                    match self.validate_type(ty, self.var_def_span(id).unwrap()) {
                         Ok(()) => (),
                         Err(errs) => errors.extend(errs),
                     }
                 }
-                match self.validate_type(return_type, self.get_var_def_span(id).unwrap()) {
+                match self.validate_type(return_type, self.var_def_span(id).unwrap()) {
                     Ok(()) => (),
                     Err(errs) => errors.extend(errs),
                 }
@@ -734,7 +734,7 @@ impl<'a> Env<'a> {
     fn typecheck_fn_decl_sig(&mut self, fn_decl: &Spanned<FnDecl>) -> Result<Rc<Type>> {
         // Check if there already exists another function with the same name
         if self.vars.contains_key(&fn_decl.id.t) {
-            let span = self.get_var_def_span(&fn_decl.id.t).unwrap();
+            let span = self.var_def_span(&fn_decl.id.t).unwrap();
             return Err(vec![TypecheckErr::new_err(
                 TypecheckErrType::DuplicateFn(fn_decl.id.t.clone()),
                 fn_decl.id.span,
@@ -806,7 +806,7 @@ impl<'a> Env<'a> {
     /// Creates a child env to typecheck the function body.
     fn typecheck_fn_decl_body(&self, fn_decl: &Spanned<FnDecl>) -> Result<()> {
         let (fn_type, formals, label) = {
-            let env_entry = self.get_var(&fn_decl.id.t).unwrap();
+            let env_entry = self.var(&fn_decl.id.t).unwrap();
             let fn_type = env_entry.ty.clone();
             // A level should have already been created by typecheck_fn_decl_sig().
             let label = env_entry.entry_type.fn_label();
@@ -866,7 +866,7 @@ impl<'a> Env<'a> {
             )
             .with_source(Spanned::new(
                 format!("{} was defined here", id.clone()),
-                self.get_type_def_span(&id).unwrap(),
+                self.type_def_span(&id).unwrap(),
             ))]);
         }
 
@@ -1069,7 +1069,7 @@ impl<'a> Env<'a> {
     fn typecheck_lval(&self, lval: &Spanned<LVal>) -> Result<TranslateOutput<LValProperties>> {
         match &lval.t {
             LVal::Simple(var) => {
-                if let Some(env_entry) = self.get_var(var) {
+                if let Some(env_entry) = self.var(var) {
                     let trexpr = if let EnvEntryType::Var(access) = &env_entry.entry_type {
                         let levels = self.levels.borrow();
                         Env::translate_simple_var(&levels, access, &self.level_label)
@@ -1269,7 +1269,7 @@ impl<'a> Env<'a> {
             span,
         }: &Spanned<FnCall>,
     ) -> Result<TranslateOutput<Rc<Type>>> {
-        if let Some(fn_type) = self.get_var(&id.t).map(|x| x.ty.clone()) {
+        if let Some(fn_type) = self.var(&id.t).map(|x| x.ty.clone()) {
             if let Type::Fn(param_types, return_type) = self.resolve_type(&fn_type, id.span)?.as_ref() {
                 if args.len() != param_types.len() {
                     return Err(vec![TypecheckErr::new_err(
@@ -1293,7 +1293,7 @@ impl<'a> Env<'a> {
                                     TypecheckErrType::TypeMismatch(param_type.clone(), ty.clone()),
                                     arg.span,
                                 );
-                                if let Some(decl_spans) = self.get_fn_param_decl_spans(id) {
+                                if let Some(decl_spans) = self.fn_param_decl_spans(id) {
                                     err.source = Some(Spanned::new("declared here".to_owned(), decl_spans[index]));
                                 }
                                 errors.push(err);
@@ -1336,7 +1336,7 @@ impl<'a> Env<'a> {
             ..
         }: &Spanned<Record>,
     ) -> Result<TranslateOutput<Rc<Type>>> {
-        if let Some(ty) = self.get_type(&record_id.t) {
+        if let Some(ty) = self.r#type(&record_id.t) {
             if let Type::Record(_, field_types) = ty.as_ref() {
                 let mut field_assigns_hm = HashMap::new();
                 for field_assign in field_assigns {
@@ -1421,7 +1421,7 @@ impl<'a> Env<'a> {
                             )
                             .with_source(Spanned::new(
                                 format!("{} was declared here", field_id.t),
-                                self.get_record_field_decl_spans(&record_id.t).unwrap()[&field_id.t],
+                                self.record_field_decl_spans(&record_id.t).unwrap()[&field_id.t],
                             )),
                         );
                     }
@@ -1470,7 +1470,7 @@ impl<'a> Env<'a> {
         } = self.typecheck_lval(&assign.lval)?;
         // Make sure we don't mutate an immutable var.
         if let Some(root) = lval_properties.immutable.as_ref() {
-            let def_span = self.get_var_def_span(root).unwrap();
+            let def_span = self.var_def_span(root).unwrap();
             return Err(vec![TypecheckErr::new_err(
                 TypecheckErrType::MutatingImmutable(root.clone()),
                 assign.lval.span,
@@ -1806,7 +1806,7 @@ impl<'a> Env<'a> {
     }
 
     fn typecheck_enum(&self, Spanned { t: expr, .. }: &Spanned<Enum>) -> Result<TranslateOutput<Rc<Type>>> {
-        if let Some(ty) = self.get_type(&expr.enum_id) {
+        if let Some(ty) = self.r#type(&expr.enum_id) {
             if let Type::Enum(_, enum_cases) = ty.as_ref() {
                 if let Some(EnumCase { params, .. }) = enum_cases.get(&expr.case_id.t) {
                     if params.len() != expr.args.len() {
@@ -1831,7 +1831,7 @@ impl<'a> Env<'a> {
                                         TypecheckErrType::TypeMismatch(param_type.clone(), ty.clone()),
                                         arg.span,
                                     );
-                                    if let Some(decl_spans) = self.get_enum_case_param_decl_spans(&expr.enum_id) {
+                                    if let Some(decl_spans) = self.enum_case_param_decl_spans(&expr.enum_id) {
                                         err.source = Some(Spanned::new(
                                             "declared here".to_owned(),
                                             decl_spans[&expr.case_id.t][index],
@@ -2055,10 +2055,10 @@ mod tests {
         assert!(child_env.contains_type("int"));
         assert!(child_env.contains_type("i"));
         assert_eq!(
-            child_env.resolve_type(child_env.get_type("i").unwrap(), zspan!()),
+            child_env.resolve_type(child_env.r#type("i").unwrap(), zspan!()),
             Ok(Rc::new(Type::Int))
         );
-        assert_eq!(child_env.get_var("a"), Some(&var_properties));
+        assert_eq!(child_env.var("a"), Some(&var_properties));
     }
 
     #[test]
