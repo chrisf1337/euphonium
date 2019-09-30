@@ -313,7 +313,7 @@ struct LValProperties {
 #[derive(Debug, Clone)]
 pub struct Env<'a> {
     tmp_generator: TmpGenerator,
-    pub current_file: FileId,
+    pub file_id: FileId,
     parent: Option<&'a Env<'a>>,
     vars: HashMap<String, EnvEntry>,
     types: HashMap<String, Rc<Type>>,
@@ -332,17 +332,17 @@ pub struct Env<'a> {
 }
 
 impl<'a> Env<'a> {
-    pub fn new(tmp_generator: TmpGenerator, current_file: FileId, level_label: Label) -> Self {
+    pub fn new(tmp_generator: TmpGenerator, file_id: FileId, level_label: Label) -> Self {
         let mut types = HashMap::new();
         types.insert("int".to_owned(), Rc::new(Type::Int));
         types.insert("string".to_owned(), Rc::new(Type::String));
         let mut type_def_spans = HashMap::new();
-        type_def_spans.insert("int".to_owned(), FileSpan::new(current_file, Span::initial()));
-        type_def_spans.insert("string".to_owned(), FileSpan::new(current_file, Span::initial()));
+        type_def_spans.insert("int".to_owned(), FileSpan::new(file_id, Span::initial()));
+        type_def_spans.insert("string".to_owned(), FileSpan::new(file_id, Span::initial()));
 
         Env {
             tmp_generator,
-            current_file,
+            file_id,
             parent: None,
             vars: HashMap::new(),
             types,
@@ -365,7 +365,7 @@ impl<'a> Env<'a> {
     fn new_child(&'a self, level_label: Label) -> Env<'a> {
         Env {
             tmp_generator: self.tmp_generator.clone(),
-            current_file: self.current_file,
+            file_id: self.file_id,
             parent: Some(self),
             vars: HashMap::new(),
             types: HashMap::new(),
@@ -658,7 +658,7 @@ impl<'a> Env<'a> {
     }
 
     pub fn typecheck_decls(&mut self, file_id: FileId, decls: &[Decl]) -> Result<()> {
-        self.current_file = file_id;
+        self.file_id = file_id;
         self.first_pass(decls)?;
         self.second_pass(decls)
     }
@@ -1286,7 +1286,7 @@ impl<'a> Env<'a> {
                             // checked for invalid types
                             if self.resolve_type(&ty, arg.span)?
                                 != self
-                                    .resolve_type(param_type, FileSpan::new(self.current_file, Span::initial()))
+                                    .resolve_type(param_type, FileSpan::new(self.file_id, Span::initial()))
                                     .unwrap()
                             {
                                 let mut err = TypecheckErr::new_err(
@@ -1408,7 +1408,7 @@ impl<'a> Env<'a> {
                     let expected_type = self
                         .resolve_type(
                             &field_types[&field_id.t].ty,
-                            FileSpan::new(self.current_file, Span::initial()),
+                            FileSpan::new(self.file_id, Span::initial()),
                         )
                         .unwrap();
                     let TranslateOutput { t: ty, expr: trexpr } = self.typecheck_expr(expr)?;
@@ -1824,7 +1824,7 @@ impl<'a> Env<'a> {
                                 // checked for invalid types
                                 if self.resolve_type(&ty, arg.span)?
                                     != self
-                                        .resolve_type(param_type, FileSpan::new(self.current_file, Span::initial()))
+                                        .resolve_type(param_type, FileSpan::new(self.file_id, Span::initial()))
                                         .unwrap()
                                 {
                                     let mut err = TypecheckErr::new_err(
