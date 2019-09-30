@@ -8,7 +8,12 @@ use codespan_reporting::{
         Config,
     },
 };
-use euphonium::{parser::ParseErrorExt, sourcemap::Sourcemap, tmp::TmpGenerator, typecheck::Env};
+use euphonium::{
+    parser::ParseErrorExt,
+    sourcemap::Sourcemap,
+    tmp::{self, TmpGenerator},
+    typecheck::Env,
+};
 
 #[derive(Debug)]
 enum EuphcErr {
@@ -58,7 +63,7 @@ fn main() -> Result<(), EuphcErr> {
     }
 
     let tmp_generator = TmpGenerator::default();
-    let mut env = Env::new(tmp_generator, empty_file_id);
+    let mut env = Env::new(tmp_generator, empty_file_id, tmp::Label::top());
     for (file_id, decls) in decls {
         match env.typecheck_decls(file_id, &decls) {
             Ok(()) => (),

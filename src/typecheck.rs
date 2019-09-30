@@ -327,11 +327,12 @@ pub struct Env<'a> {
     pub(crate) levels: Rc<RefCell<HashMap<Label, Level>>>,
     pub(crate) fragments: Rc<RefCell<Vec<Fragment>>>,
 
+    level_label: Label,
     break_label: Option<Label>,
 }
 
 impl<'a> Env<'a> {
-    pub fn new(tmp_generator: TmpGenerator, current_file: FileId) -> Self {
+    pub fn new(tmp_generator: TmpGenerator, current_file: FileId, level_label: Label) -> Self {
         let mut types = HashMap::new();
         types.insert("int".to_owned(), Rc::new(Type::Int));
         types.insert("string".to_owned(), Rc::new(Type::String));
@@ -355,14 +356,16 @@ impl<'a> Env<'a> {
                 Label::top() => Level::top(),
             })),
             fragments: Rc::new(RefCell::new(vec![])),
+
+            level_label,
             break_label: None,
         }
     }
 
-    fn new_child(&'a self, current_file: FileId) -> Env<'a> {
+    fn new_child(&'a self, level_label: Label) -> Env<'a> {
         Env {
             tmp_generator: self.tmp_generator.clone(),
-            current_file,
+            current_file: self.current_file,
             parent: Some(self),
             vars: HashMap::new(),
             types: HashMap::new(),
@@ -375,6 +378,8 @@ impl<'a> Env<'a> {
 
             levels: self.levels.clone(),
             fragments: self.fragments.clone(),
+
+            level_label,
             break_label: self.break_label.clone(),
         }
     }
@@ -494,8 +499,8 @@ impl<'a> Env<'a> {
     }
 
     /// `ty` must have already been resolved.
-    fn assert_ty(&self, level_label: &Label, expr: &Expr, ty: &Rc<Type>) -> Result<TranslateOutput<Rc<Type>>> {
-        let translate_output = self.typecheck_expr(level_label, expr)?;
+    fn assert_ty(&self, expr: &Expr, ty: &Rc<Type>) -> Result<TranslateOutput<Rc<Type>>> {
+        let translate_output = self.typecheck_expr(expr)?;
         let expr_type = &translate_output.t;
         let resolved_expr_type = self.resolve_type(expr_type, expr.span)?;
         if ty != &resolved_expr_type {
@@ -712,9 +717,10 @@ impl<'a> Env<'a> {
     }
 
     fn typecheck_decl_first_pass(&mut self, decl: &Decl) -> Result<()> {
+        self.level_label = Label::top();
         match &decl.t {
             DeclType::Fn(fn_decl) => {
-                self.typecheck_fn_decl_sig(&Label::top(), fn_decl)?;
+                self.typecheck_fn_decl_sig(fn_decl)?;
                 Ok(())
             }
             DeclType::Type(type_decl) => {
@@ -725,7 +731,7 @@ impl<'a> Env<'a> {
         }
     }
 
-    fn typecheck_fn_decl_sig(&mut self, level_label: &Label, fn_decl: &Spanned<FnDecl>) -> Result<Rc<Type>> {
+    fn typecheck_fn_decl_sig(&mut self, fn_decl: &Spanned<FnDecl>) -> Result<Rc<Type>> {
         // Check if there already exists another function with the same name
         if self.vars.contains_key(&fn_decl.id.t) {
             let span = self.get_var_def_span(&fn_decl.id.t).unwrap();
@@ -772,7 +778,12 @@ impl<'a> Env<'a> {
         let ty = Rc::new(Type::Fn(param_types, Rc::new(return_type)));
         // FIXME: Don't assume all formals escape
         let formals = vec![true; fn_decl.type_fields.len()];
-        let level = Level::new(&self.tmp_generator, Some(level_label.clone()), &fn_decl.id.t, &formals);
+        let level = Level::new(
+            &self.tmp_generator,
+            Some(self.level_label.clone()),
+            &fn_decl.id.t,
+            &formals,
+        );
 
         let label = level.label().clone();
         {
@@ -794,10 +805,8 @@ impl<'a> Env<'a> {
 
     /// Creates a child env to typecheck the function body.
     fn typecheck_fn_decl_body(&self, fn_decl: &Spanned<FnDecl>) -> Result<()> {
-        let mut new_env = self.new_child(self.current_file);
-
         let (fn_type, formals, label) = {
-            let env_entry = new_env.get_var(&fn_decl.id.t).unwrap();
+            let env_entry = self.get_var(&fn_decl.id.t).unwrap();
             let fn_type = env_entry.ty.clone();
             // A level should have already been created by typecheck_fn_decl_sig().
             let label = env_entry.entry_type.fn_label();
@@ -806,6 +815,7 @@ impl<'a> Env<'a> {
 
             (fn_type, formals, label)
         };
+        let mut new_env = self.new_child(label);
 
         if let Type::Fn(param_types, return_type) = fn_type.as_ref() {
             for ((param_id, span), param_type, formal) in izip!(
@@ -824,7 +834,7 @@ impl<'a> Env<'a> {
                 );
             }
 
-            let body_type = new_env.typecheck_expr(&label, &fn_decl.body)?.t;
+            let body_type = new_env.typecheck_expr(&fn_decl.body)?.t;
             if self.resolve_type(&body_type, fn_decl.body.span)?
                 != self.resolve_type(
                     &return_type,
@@ -904,15 +914,15 @@ impl<'a> Env<'a> {
         Ok(())
     }
 
-    pub(crate) fn typecheck_expr(&self, level_label: &Label, expr: &Expr) -> Result<TranslateOutput<Rc<Type>>> {
+    pub(crate) fn typecheck_expr(&self, expr: &Expr) -> Result<TranslateOutput<Rc<Type>>> {
         match &expr.t {
             ExprType::Seq(exprs, returns) => {
                 let (mut new_env, return_type, trexpr) = {
                     // New scope
-                    let mut new_env = self.new_child(self.current_file);
+                    let mut new_env = self.new_child(self.level_label.clone());
                     let mut stmts = vec![];
                     for expr in &exprs[..exprs.len() - 1] {
-                        let trexpr = new_env.typecheck_expr_mut(level_label, expr)?.expr;
+                        let trexpr = new_env.typecheck_expr_mut(expr)?.expr;
                         // We don't emit any IR for function decls, so ignore them.
                         match &expr.t {
                             ExprType::FnDecl(_) => (),
@@ -927,10 +937,9 @@ impl<'a> Env<'a> {
                         // Here, units are represented with ir::Expr::Const(0), the same as if we
                         // returned the result of a function decl, so we don't have to take that
                         // special case into account.
-                        new_env.typecheck_expr_mut(level_label, last_expr)?
+                        new_env.typecheck_expr_mut(last_expr)?
                     } else {
-                        let TranslateOutput { expr: trexpr, .. } =
-                            new_env.typecheck_expr_mut(level_label, last_expr)?;
+                        let TranslateOutput { expr: trexpr, .. } = new_env.typecheck_expr_mut(last_expr)?;
                         TranslateOutput {
                             t: Rc::new(Type::Unit),
                             expr: translate::Expr::Expr(ir::Expr::Seq(
@@ -972,7 +981,7 @@ impl<'a> Env<'a> {
                     if let ExprType::FnDecl(fn_decl) = &expr.t {
                         new_env.typecheck_fn_decl_body(fn_decl)?;
                     } else {
-                        new_env.typecheck_expr_mut(level_label, expr)?;
+                        new_env.typecheck_expr_mut(expr)?;
                     }
                 }
 
@@ -995,7 +1004,7 @@ impl<'a> Env<'a> {
                 expr: translate::Expr::Expr(ir::Expr::Const(*n as i64)),
             }),
             ExprType::Neg(expr) => {
-                let TranslateOutput { expr, .. } = self.assert_ty(level_label, expr, &Rc::new(Type::Int))?;
+                let TranslateOutput { expr, .. } = self.assert_ty(expr, &Rc::new(Type::Int))?;
                 Ok(TranslateOutput {
                     t: Rc::new(Type::Int),
                     expr: translate::Expr::Expr(ir::Expr::BinOp(
@@ -1005,7 +1014,7 @@ impl<'a> Env<'a> {
                     )),
                 })
             }
-            ExprType::Arith(arith) => self.typecheck_arith(level_label, arith),
+            ExprType::Arith(arith) => self.typecheck_arith(arith),
             ExprType::Unit => Ok(TranslateOutput {
                 t: Rc::new(Type::Unit),
                 expr: translate::Expr::Expr(ir::Expr::Const(0)),
@@ -1027,21 +1036,21 @@ impl<'a> Env<'a> {
                 t: Rc::new(Type::Bool),
                 expr: translate::Expr::Expr(ir::Expr::Const(if *b { 1 } else { 0 })),
             }),
-            ExprType::Not(expr) => self.assert_ty(level_label, expr, &Rc::new(Type::Bool)),
-            ExprType::Bool(bool_expr) => self.typecheck_bool(level_label, bool_expr),
-            ExprType::LVal(lval) => Ok(self.typecheck_lval(level_label, lval)?.map(|lval_props| lval_props.ty)),
+            ExprType::Not(expr) => self.assert_ty(expr, &Rc::new(Type::Bool)),
+            ExprType::Bool(bool_expr) => self.typecheck_bool(bool_expr),
+            ExprType::LVal(lval) => Ok(self.typecheck_lval(lval)?.map(|lval_props| lval_props.ty)),
             ExprType::Let(_) => Err(vec![TypecheckErr::new_err(TypecheckErrType::IllegalLetExpr, expr.span)]),
-            ExprType::FnCall(fn_call) => self.typecheck_fn_call(level_label, fn_call),
-            ExprType::Record(record) => self.typecheck_record(level_label, record),
-            ExprType::Assign(assign) => self.typecheck_assign(level_label, assign),
-            ExprType::Array(array) => self.typecheck_array(level_label, array),
-            ExprType::If(if_expr) => self.typecheck_if(level_label, if_expr),
-            ExprType::Range(range) => self.typecheck_range(level_label, range),
-            ExprType::For(for_expr) => self.typecheck_for(level_label, for_expr),
-            ExprType::While(while_expr) => self.typecheck_while(level_label, while_expr),
-            ExprType::Compare(compare) => self.typecheck_compare(level_label, compare),
-            ExprType::Enum(enum_expr) => self.typecheck_enum(level_label, enum_expr),
-            ExprType::Closure(closure) => self.typecheck_closure(level_label, closure),
+            ExprType::FnCall(fn_call) => self.typecheck_fn_call(fn_call),
+            ExprType::Record(record) => self.typecheck_record(record),
+            ExprType::Assign(assign) => self.typecheck_assign(assign),
+            ExprType::Array(array) => self.typecheck_array(array),
+            ExprType::If(if_expr) => self.typecheck_if(if_expr),
+            ExprType::Range(range) => self.typecheck_range(range),
+            ExprType::For(for_expr) => self.typecheck_for(for_expr),
+            ExprType::While(while_expr) => self.typecheck_while(while_expr),
+            ExprType::Compare(compare) => self.typecheck_compare(compare),
+            ExprType::Enum(enum_expr) => self.typecheck_enum(enum_expr),
+            ExprType::Closure(closure) => self.typecheck_closure(closure),
             ExprType::FnDecl(_) => Err(vec![TypecheckErr::new_err(
                 TypecheckErrType::IllegalFnDeclExpr,
                 expr.span,
@@ -1049,21 +1058,21 @@ impl<'a> Env<'a> {
         }
     }
 
-    pub(crate) fn typecheck_expr_mut(&mut self, level_label: &Label, expr: &Expr) -> Result<TranslateOutput<Rc<Type>>> {
+    pub(crate) fn typecheck_expr_mut(&mut self, expr: &Expr) -> Result<TranslateOutput<Rc<Type>>> {
         match &expr.t {
-            ExprType::Let(let_expr) => self.typecheck_let(level_label, let_expr),
-            ExprType::FnDecl(fn_decl) => self.typecheck_fn_decl_expr(level_label, fn_decl),
-            _ => self.typecheck_expr(level_label, expr),
+            ExprType::Let(let_expr) => self.typecheck_let(let_expr),
+            ExprType::FnDecl(fn_decl) => self.typecheck_fn_decl_expr(fn_decl),
+            _ => self.typecheck_expr(expr),
         }
     }
 
-    fn typecheck_lval(&self, level_label: &Label, lval: &Spanned<LVal>) -> Result<TranslateOutput<LValProperties>> {
+    fn typecheck_lval(&self, lval: &Spanned<LVal>) -> Result<TranslateOutput<LValProperties>> {
         match &lval.t {
             LVal::Simple(var) => {
                 if let Some(env_entry) = self.get_var(var) {
                     let trexpr = if let EnvEntryType::Var(access) = &env_entry.entry_type {
                         let levels = self.levels.borrow();
-                        Env::translate_simple_var(&levels, access, level_label)
+                        Env::translate_simple_var(&levels, access, &self.level_label)
                     } else {
                         // Reaching here means that we're trying to access a function through an
                         // lval. This isn't supported properly right now, so we'll return a
@@ -1088,7 +1097,7 @@ impl<'a> Env<'a> {
                 let TranslateOutput {
                     t: lval_properties,
                     expr: record_trexpr,
-                } = self.typecheck_lval(level_label, var)?;
+                } = self.typecheck_lval(var)?;
                 if let Type::Record(_, fields) = self.resolve_type(&lval_properties.ty, var.span)?.as_ref() {
                     if let Some(RecordField { ty: field_type, index }) = fields.get(&field.t) {
                         // A field is mutable only if the record it belongs to is mutable
@@ -1115,11 +1124,11 @@ impl<'a> Env<'a> {
                 let TranslateOutput {
                     t: lval_properties,
                     expr: lval_trexpr,
-                } = self.typecheck_lval(level_label, var)?;
+                } = self.typecheck_lval(var)?;
                 let TranslateOutput {
                     t: index_type,
                     expr: index_trexpr,
-                } = self.typecheck_expr(level_label, index)?;
+                } = self.typecheck_expr(index)?;
                 if let Type::Array(ty, len) = self.resolve_type(&lval_properties.ty, var.span)?.as_ref() {
                     if self.resolve_type(&index_type, index.span)? == Rc::new(Type::Int) {
                         let index_tmp_trexpr = ir::Expr::Tmp(self.tmp_generator.new_tmp());
@@ -1187,7 +1196,7 @@ impl<'a> Env<'a> {
         }
     }
 
-    fn typecheck_let(&mut self, level_label: &Label, let_expr: &Spanned<Let>) -> Result<TranslateOutput<Rc<Type>>> {
+    fn typecheck_let(&mut self, let_expr: &Spanned<Let>) -> Result<TranslateOutput<Rc<Type>>> {
         let Let {
             pattern,
             ty: ast_ty,
@@ -1197,7 +1206,7 @@ impl<'a> Env<'a> {
         let TranslateOutput {
             t: expr_type,
             expr: assigned_val_trexpr,
-        } = self.typecheck_expr(level_label, expr)?;
+        } = self.typecheck_expr(expr)?;
         if let Some(ast_ty) = ast_ty {
             // Type annotation
             let ty = Rc::new(ast_ty.t.clone().into());
@@ -1220,7 +1229,7 @@ impl<'a> Env<'a> {
             // FIXME: Don't assume all locals escape
             let local = {
                 let mut levels = self.levels.borrow_mut();
-                let level = levels.get_mut(&level_label).unwrap();
+                let level = levels.get_mut(&self.level_label).unwrap();
                 level.alloc_local(&self.tmp_generator, true)
             };
 
@@ -1234,7 +1243,7 @@ impl<'a> Env<'a> {
                 let_expr.span,
             );
             let levels = self.levels.borrow();
-            let assignee_trexpr = Env::translate_simple_var(&levels, &local, level_label);
+            let assignee_trexpr = Env::translate_simple_var(&levels, &local, &self.level_label);
             Ok(TranslateOutput {
                 t: Rc::new(Type::Unit),
                 expr: translate::Expr::Stmt(ir::Stmt::Move(
@@ -1255,7 +1264,6 @@ impl<'a> Env<'a> {
 
     fn typecheck_fn_call(
         &self,
-        level_label: &Label,
         Spanned {
             t: FnCall { id, args },
             span,
@@ -1272,7 +1280,7 @@ impl<'a> Env<'a> {
 
                 let mut errors = vec![];
                 for (index, (arg, param_type)) in args.iter().zip(param_types.iter()).enumerate() {
-                    match self.typecheck_expr(level_label, arg) {
+                    match self.typecheck_expr(arg) {
                         Ok(TranslateOutput { t: ty, .. }) => {
                             // param_type should already be well-defined because we have already
                             // checked for invalid types
@@ -1319,7 +1327,6 @@ impl<'a> Env<'a> {
 
     fn typecheck_record(
         &self,
-        level_label: &Label,
         Spanned {
             t: Record {
                 id: record_id,
@@ -1404,7 +1411,7 @@ impl<'a> Env<'a> {
                             FileSpan::new(self.current_file, Span::initial()),
                         )
                         .unwrap();
-                    let TranslateOutput { t: ty, expr: trexpr } = self.typecheck_expr(level_label, expr)?;
+                    let TranslateOutput { t: ty, expr: trexpr } = self.typecheck_expr(expr)?;
                     let actual_type = self.resolve_type(&ty, expr.span)?;
                     if expected_type != actual_type {
                         errors.push(
@@ -1456,15 +1463,11 @@ impl<'a> Env<'a> {
         }
     }
 
-    fn typecheck_assign(
-        &self,
-        level_label: &Label,
-        Spanned { t: assign, span }: &Spanned<Assign>,
-    ) -> Result<TranslateOutput<Rc<Type>>> {
+    fn typecheck_assign(&self, Spanned { t: assign, span }: &Spanned<Assign>) -> Result<TranslateOutput<Rc<Type>>> {
         let TranslateOutput {
             t: lval_properties,
             expr: assignee_trexpr,
-        } = self.typecheck_lval(level_label, &assign.lval)?;
+        } = self.typecheck_lval(&assign.lval)?;
         // Make sure we don't mutate an immutable var.
         if let Some(root) = lval_properties.immutable.as_ref() {
             let def_span = self.get_var_def_span(root).unwrap();
@@ -1478,7 +1481,7 @@ impl<'a> Env<'a> {
         let TranslateOutput {
             t: assigned_val_ty,
             expr: assigned_val_trexpr,
-        } = self.typecheck_expr(level_label, &assign.expr)?;
+        } = self.typecheck_expr(&assign.expr)?;
         let resolved_actual_ty = self.resolve_type(&assigned_val_ty, assign.expr.span)?;
         let resolved_expected_ty = self.resolve_type(&lval_properties.ty, assign.lval.span)?;
         if resolved_expected_ty != resolved_actual_ty {
@@ -1520,15 +1523,11 @@ impl<'a> Env<'a> {
         }
     }
 
-    fn typecheck_array(
-        &self,
-        level_label: &Label,
-        Spanned { t: array, .. }: &Spanned<Array>,
-    ) -> Result<TranslateOutput<Rc<Type>>> {
+    fn typecheck_array(&self, Spanned { t: array, .. }: &Spanned<Array>) -> Result<TranslateOutput<Rc<Type>>> {
         let TranslateOutput {
             t: elem_type,
             expr: init_val_trexpr,
-        } = self.typecheck_expr(level_label, &array.initial_value)?;
+        } = self.typecheck_expr(&array.initial_value)?;
         let len = Self::eval_arith_const_expr(&array.len)?;
         if len < 0 {
             return Err(vec![TypecheckErr::new_err(
@@ -1562,19 +1561,12 @@ impl<'a> Env<'a> {
         })
     }
 
-    fn typecheck_if(
-        &self,
-        level_label: &Label,
-        Spanned { t: expr, span }: &Spanned<If>,
-    ) -> Result<TranslateOutput<Rc<Type>>> {
+    fn typecheck_if(&self, Spanned { t: expr, span }: &Spanned<If>) -> Result<TranslateOutput<Rc<Type>>> {
         let true_label = self.tmp_generator.new_label();
         let false_label = self.tmp_generator.new_label();
         let join_label = self.tmp_generator.new_label();
         let result = self.tmp_generator.new_tmp();
-        let cond_gen = self
-            .assert_ty(level_label, &expr.cond, &Rc::new(Type::Bool))?
-            .expr
-            .unwrap_cond();
+        let cond_gen = self.assert_ty(&expr.cond, &Rc::new(Type::Bool))?.expr.unwrap_cond();
 
         let mut injected_labels = None;
         let mut then_expr_was_cond = false;
@@ -1583,7 +1575,7 @@ impl<'a> Env<'a> {
         let TranslateOutput {
             t: then_expr_type,
             expr: translated_then_expr,
-        } = self.typecheck_expr(level_label, &expr.then_expr)?;
+        } = self.typecheck_expr(&expr.then_expr)?;
         let then_instr = match translated_then_expr {
             translate::Expr::Stmt(stmt) => {
                 // If the then expression is a statement, don't bother unwrapping into an Expr::Expr and just run it
@@ -1605,7 +1597,7 @@ impl<'a> Env<'a> {
             let TranslateOutput {
                 t: else_expr_type,
                 expr: translated_else_expr,
-            } = self.typecheck_expr(level_label, else_expr)?;
+            } = self.typecheck_expr(else_expr)?;
             if self.resolve_type(&then_expr_type, expr.then_expr.span)?
                 != self.resolve_type(&else_expr_type, else_expr.span)?
             {
@@ -1699,29 +1691,21 @@ impl<'a> Env<'a> {
         })
     }
 
-    fn typecheck_range(
-        &self,
-        level_label: &Label,
-        Spanned { t: expr, .. }: &Spanned<Range>,
-    ) -> Result<TranslateOutput<Rc<Type>>> {
-        self.assert_ty(level_label, &expr.start, &Rc::new(Type::Int))?;
-        self.assert_ty(level_label, &expr.end, &Rc::new(Type::Int))?;
+    fn typecheck_range(&self, Spanned { t: expr, .. }: &Spanned<Range>) -> Result<TranslateOutput<Rc<Type>>> {
+        self.assert_ty(&expr.start, &Rc::new(Type::Int))?;
+        self.assert_ty(&expr.end, &Rc::new(Type::Int))?;
         Ok(TranslateOutput {
             t: Rc::new(Type::Iterator(Rc::new(Type::Int))),
             expr: translate::Expr::Expr(ir::Expr::Const(0)),
         })
     }
 
-    fn typecheck_for(
-        &self,
-        level_label: &Label,
-        Spanned { t: expr, .. }: &Spanned<For>,
-    ) -> Result<TranslateOutput<Rc<Type>>> {
-        self.assert_ty(level_label, &expr.range, &Rc::new(Type::Iterator(Rc::new(Type::Int))))?;
-        let mut child_env = self.new_child(self.current_file);
+    fn typecheck_for(&self, Spanned { t: expr, .. }: &Spanned<For>) -> Result<TranslateOutput<Rc<Type>>> {
+        self.assert_ty(&expr.range, &Rc::new(Type::Iterator(Rc::new(Type::Int))))?;
+        let mut child_env = self.new_child(self.level_label.clone());
         let local = {
             let mut levels = child_env.levels.borrow_mut();
-            let level = levels.get_mut(&level_label).unwrap();
+            let level = levels.get_mut(&self.level_label).unwrap();
             level.alloc_local(&self.tmp_generator, true)
         };
 
@@ -1735,21 +1719,17 @@ impl<'a> Env<'a> {
             },
             expr.index.span,
         );
-        child_env.assert_ty(level_label, &expr.body, &Rc::new(Type::Unit))?;
+        child_env.assert_ty(&expr.body, &Rc::new(Type::Unit))?;
         Ok(TranslateOutput {
             t: Rc::new(Type::Unit),
             expr: translate::Expr::Expr(ir::Expr::Const(0)),
         })
     }
 
-    fn typecheck_while(
-        &self,
-        level_label: &Label,
-        Spanned { t: expr, .. }: &Spanned<While>,
-    ) -> Result<TranslateOutput<Rc<Type>>> {
-        let cond = self.assert_ty(level_label, &expr.cond, &Rc::new(Type::Bool))?.expr;
+    fn typecheck_while(&self, Spanned { t: expr, .. }: &Spanned<While>) -> Result<TranslateOutput<Rc<Type>>> {
+        let cond = self.assert_ty(&expr.cond, &Rc::new(Type::Bool))?.expr;
         let body = self
-            .assert_ty(level_label, &expr.body, &Rc::new(Type::Unit))?
+            .assert_ty(&expr.body, &Rc::new(Type::Unit))?
             .expr
             .unwrap_stmt(&self.tmp_generator);
 
@@ -1773,13 +1753,9 @@ impl<'a> Env<'a> {
         })
     }
 
-    fn typecheck_arith(
-        &self,
-        level_label: &Label,
-        Spanned { t: expr, .. }: &Spanned<Arith>,
-    ) -> Result<TranslateOutput<Rc<Type>>> {
-        let TranslateOutput { expr: l_expr, .. } = self.assert_ty(level_label, &expr.l, &Rc::new(Type::Int))?;
-        let TranslateOutput { expr: r_expr, .. } = self.assert_ty(level_label, &expr.r, &Rc::new(Type::Int))?;
+    fn typecheck_arith(&self, Spanned { t: expr, .. }: &Spanned<Arith>) -> Result<TranslateOutput<Rc<Type>>> {
+        let TranslateOutput { expr: l_expr, .. } = self.assert_ty(&expr.l, &Rc::new(Type::Int))?;
+        let TranslateOutput { expr: r_expr, .. } = self.assert_ty(&expr.r, &Rc::new(Type::Int))?;
         Ok(TranslateOutput {
             t: Rc::new(Type::Int),
             expr: translate::Expr::Expr(ir::Expr::BinOp(
@@ -1790,26 +1766,18 @@ impl<'a> Env<'a> {
         })
     }
 
-    fn typecheck_bool(
-        &self,
-        level_label: &Label,
-        Spanned { t: expr, .. }: &Spanned<Bool>,
-    ) -> Result<TranslateOutput<Rc<Type>>> {
-        self.assert_ty(level_label, &expr.l, &Rc::new(Type::Bool))?;
-        self.assert_ty(level_label, &expr.r, &Rc::new(Type::Bool))?;
+    fn typecheck_bool(&self, Spanned { t: expr, .. }: &Spanned<Bool>) -> Result<TranslateOutput<Rc<Type>>> {
+        self.assert_ty(&expr.l, &Rc::new(Type::Bool))?;
+        self.assert_ty(&expr.r, &Rc::new(Type::Bool))?;
         Ok(TranslateOutput {
             t: Rc::new(Type::Bool),
             expr: translate::Expr::Expr(ir::Expr::Const(0)),
         })
     }
 
-    fn typecheck_compare(
-        &self,
-        level_label: &Label,
-        Spanned { t: expr, span }: &Spanned<Compare>,
-    ) -> Result<TranslateOutput<Rc<Type>>> {
-        let TranslateOutput { t: l_ty, expr: l_expr } = self.typecheck_expr(level_label, &expr.l)?;
-        let TranslateOutput { t: r_ty, expr: r_expr } = self.typecheck_expr(level_label, &expr.r)?;
+    fn typecheck_compare(&self, Spanned { t: expr, span }: &Spanned<Compare>) -> Result<TranslateOutput<Rc<Type>>> {
+        let TranslateOutput { t: l_ty, expr: l_expr } = self.typecheck_expr(&expr.l)?;
+        let TranslateOutput { t: r_ty, expr: r_expr } = self.typecheck_expr(&expr.r)?;
         let left_type = self.resolve_type(&l_ty, expr.l.span)?;
         let right_type = self.resolve_type(&r_ty, expr.r.span)?;
         if left_type != right_type {
@@ -1837,11 +1805,7 @@ impl<'a> Env<'a> {
         })
     }
 
-    fn typecheck_enum(
-        &self,
-        level_label: &Label,
-        Spanned { t: expr, .. }: &Spanned<Enum>,
-    ) -> Result<TranslateOutput<Rc<Type>>> {
+    fn typecheck_enum(&self, Spanned { t: expr, .. }: &Spanned<Enum>) -> Result<TranslateOutput<Rc<Type>>> {
         if let Some(ty) = self.get_type(&expr.enum_id) {
             if let Type::Enum(_, enum_cases) = ty.as_ref() {
                 if let Some(EnumCase { params, .. }) = enum_cases.get(&expr.case_id.t) {
@@ -1854,7 +1818,7 @@ impl<'a> Env<'a> {
 
                     let mut errors = vec![];
                     for (index, (arg, param_type)) in expr.args.iter().zip(params.iter()).enumerate() {
-                        match self.typecheck_expr(level_label, arg) {
+                        match self.typecheck_expr(arg) {
                             Ok(TranslateOutput { t: ty, .. }) => {
                                 // param_type should already be well-defined because we have already
                                 // checked for invalid types
@@ -1908,12 +1872,9 @@ impl<'a> Env<'a> {
         }
     }
 
-    fn typecheck_closure(
-        &self,
-        level_label: &Label,
-        Spanned { t: expr, .. }: &Spanned<Closure>,
-    ) -> Result<TranslateOutput<Rc<Type>>> {
-        let child_env = self.new_child(self.current_file);
+    fn typecheck_closure(&self, Spanned { t: expr, .. }: &Spanned<Closure>) -> Result<TranslateOutput<Rc<Type>>> {
+        // FIXME: We need to create a new level for the closure?
+        let child_env = self.new_child(self.level_label.clone());
         Self::check_for_duplicates(
             &expr.type_fields,
             |type_field| &type_field.id.t,
@@ -1952,7 +1913,7 @@ impl<'a> Env<'a> {
             }
         }
 
-        let return_type = child_env.typecheck_expr(level_label, &expr.body)?.t;
+        let return_type = child_env.typecheck_expr(&expr.body)?.t;
         if let Err(errs) = child_env.resolve_type(&return_type, expr.body.span) {
             errors.extend(errs);
         }
@@ -1966,14 +1927,10 @@ impl<'a> Env<'a> {
         })
     }
 
-    fn typecheck_fn_decl_expr(
-        &mut self,
-        level_label: &Label,
-        fn_decl: &Spanned<FnDecl>,
-    ) -> Result<TranslateOutput<Rc<Type>>> {
+    fn typecheck_fn_decl_expr(&mut self, fn_decl: &Spanned<FnDecl>) -> Result<TranslateOutput<Rc<Type>>> {
         // At this point, we have already typechecked all type decls, so we can validate the param
         // and return types.
-        if let Type::Fn(param_types, return_type) = self.typecheck_fn_decl_sig(level_label, fn_decl)?.as_ref() {
+        if let Type::Fn(param_types, return_type) = self.typecheck_fn_decl_sig(fn_decl)?.as_ref() {
             let mut errors = vec![];
             for (param_index, param_type) in param_types.iter().enumerate() {
                 if let Err(errs) = self.validate_type(param_type, fn_decl.type_fields[param_index].span) {
@@ -2061,7 +2018,7 @@ mod tests {
 
     #[test]
     fn test_resolve_type() {
-        let mut env = Env::new(TmpGenerator::default(), EMPTY_SOURCEMAP.1);
+        let mut env = Env::new(TmpGenerator::default(), EMPTY_SOURCEMAP.1, Label::top());
         env.insert_type("a".to_owned(), Type::Alias("b".to_owned()), zspan!());
         env.insert_type("b".to_owned(), Type::Alias("c".to_owned()), zspan!());
         env.insert_type("c".to_owned(), Type::Int, zspan!());
@@ -2082,7 +2039,7 @@ mod tests {
 
     #[test]
     fn test_child_env() {
-        let mut env = Env::new(TmpGenerator::default(), EMPTY_SOURCEMAP.1);
+        let mut env = Env::new(TmpGenerator::default(), EMPTY_SOURCEMAP.1, Label::top());
         let var_properties = EnvEntry {
             ty: Rc::new(Type::Int),
             immutable: true,
@@ -2092,7 +2049,7 @@ mod tests {
             }),
         };
         env.insert_var("a".to_owned(), var_properties.clone(), zspan!());
-        let mut child_env = env.new_child(env.current_file);
+        let mut child_env = env.new_child(env.level_label.clone());
         child_env.insert_type("i".to_owned(), Type::Alias("int".to_owned()), zspan!());
 
         assert!(child_env.contains_type("int"));
@@ -2113,9 +2070,9 @@ mod tests {
             op: zspan!(BoolOp::And),
             r: zspan!(ExprType::BoolLiteral(true)),
         }))));
-        let env = Env::new(TmpGenerator::default(), EMPTY_SOURCEMAP.1);
+        let env = Env::new(TmpGenerator::default(), EMPTY_SOURCEMAP.1, level_label);
         assert_eq!(
-            env.typecheck_expr(&level_label, &expr).map(TranslateOutput::unwrap),
+            env.typecheck_expr(&expr).map(TranslateOutput::unwrap),
             Ok(Rc::new(Type::Bool))
         );
     }
@@ -2133,9 +2090,9 @@ mod tests {
             op: zspan!(BoolOp::And),
             r: zspan!(ExprType::BoolLiteral(true)),
         }))));
-        let env = Env::new(TmpGenerator::default(), EMPTY_SOURCEMAP.1);
+        let env = Env::new(TmpGenerator::default(), EMPTY_SOURCEMAP.1, level_label);
         assert_eq!(
-            env.typecheck_expr(&level_label, &expr),
+            env.typecheck_expr(&expr),
             Err(vec![TypecheckErr::new_err(
                 TypecheckErrType::TypeMismatch(Rc::new(Type::Bool), Rc::new(Type::Int)),
                 zspan!(),
@@ -2147,11 +2104,11 @@ mod tests {
     fn test_typecheck_lval_undefined_var() {
         let level_label = Label::top();
 
-        let env = Env::new(TmpGenerator::default(), EMPTY_SOURCEMAP.1);
+        let env = Env::new(TmpGenerator::default(), EMPTY_SOURCEMAP.1, level_label);
         let lval = zspan!(LVal::Simple("a".to_owned()));
 
         assert_eq!(
-            env.typecheck_lval(&level_label, &lval).unwrap_err()[0].t.ty,
+            env.typecheck_lval(&lval).unwrap_err()[0].t.ty,
             TypecheckErrType::UndefinedVar("a".to_owned())
         );
     }
@@ -2162,7 +2119,7 @@ mod tests {
         let level = Level::new(&tmp_generator, Some(Label::top()), "f", &[]);
         let level_label = level.frame.label.clone();
 
-        let mut env = Env::new(TmpGenerator::default(), EMPTY_SOURCEMAP.1);
+        let mut env = Env::new(TmpGenerator::default(), EMPTY_SOURCEMAP.1, level_label.clone());
         {
             let mut levels = env.levels.borrow_mut();
             levels.insert(level_label.clone(), level);
@@ -2188,7 +2145,7 @@ mod tests {
             zspan!("f".to_owned())
         ));
         assert_eq!(
-            env.typecheck_lval(&level_label, &lval).map(TranslateOutput::unwrap),
+            env.typecheck_lval(&lval).map(TranslateOutput::unwrap),
             Ok(LValProperties {
                 ty: Rc::new(Type::Int),
                 immutable: None,
@@ -2202,7 +2159,7 @@ mod tests {
         let level = Level::new(&tmp_generator, Some(Label::top()), "f", &[]);
         let level_label = level.frame.label.clone();
 
-        let mut env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1);
+        let mut env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1, level_label.clone());
         {
             let mut levels = env.levels.borrow_mut();
             levels.insert(level_label.clone(), level);
@@ -2225,7 +2182,7 @@ mod tests {
             zspan!("g".to_owned())
         ));
         assert_eq!(
-            env.typecheck_lval(&level_label, &lval).map(TranslateOutput::unwrap),
+            env.typecheck_lval(&lval).map(TranslateOutput::unwrap),
             Err(vec![TypecheckErr::new_err(
                 TypecheckErrType::UndefinedField("g".to_owned()),
                 zspan!(),
@@ -2239,7 +2196,7 @@ mod tests {
         let level = Level::new(&tmp_generator, Some(Label::top()), "f", &[]);
         let level_label = level.frame.label.clone();
 
-        let mut env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1);
+        let mut env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1, level_label.clone());
         {
             let mut levels = env.levels.borrow_mut();
             levels.insert(level_label.clone(), level);
@@ -2262,7 +2219,7 @@ mod tests {
             zspan!("g".to_owned())
         ));
         assert_eq!(
-            env.typecheck_lval(&level_label, &lval).map(TranslateOutput::unwrap),
+            env.typecheck_lval(&lval).map(TranslateOutput::unwrap),
             Err(vec![TypecheckErr::new_err(
                 TypecheckErrType::UndefinedField("g".to_owned()),
                 zspan!()
@@ -2276,7 +2233,7 @@ mod tests {
         let level = Level::new(&tmp_generator, Some(Label::top()), "f", &[]);
         let level_label = level.frame.label.clone();
 
-        let mut env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1);
+        let mut env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1, level_label.clone());
         {
             let mut levels = env.levels.borrow_mut();
             levels.insert(level_label.clone(), level);
@@ -2299,7 +2256,7 @@ mod tests {
             zspan!(ExprType::Number(0))
         ));
         assert_eq!(
-            env.typecheck_lval(&level_label, &lval).map(TranslateOutput::unwrap),
+            env.typecheck_lval(&lval).map(TranslateOutput::unwrap),
             Ok(LValProperties {
                 ty: Rc::new(Type::Int),
                 immutable: Some("x".to_owned())
@@ -2313,10 +2270,10 @@ mod tests {
         let level = Level::new(&tmp_generator, Some(Label::top()), "f", &[]);
         let level_label = level.frame.label.clone();
 
-        let mut env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1);
+        let mut env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1, level_label.clone());
         {
             let mut levels = env.levels.borrow_mut();
-            levels.insert(level_label.clone(), level);
+            levels.insert(level_label, level);
         }
         let let_expr = zspan!(Let {
             pattern: zspan!(Pattern::String("x".to_owned())),
@@ -2325,7 +2282,7 @@ mod tests {
             expr: zspan!(ExprType::Number(0))
         });
         assert_eq!(
-            env.typecheck_let(&level_label, &let_expr).map(TranslateOutput::unwrap),
+            env.typecheck_let(&let_expr).map(TranslateOutput::unwrap),
             Ok(Rc::new(Type::Unit))
         );
         assert_eq!(env.vars["x"].ty, Rc::new(Type::Int));
@@ -2338,7 +2295,7 @@ mod tests {
         let tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
-        let mut env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1);
+        let mut env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1, level_label);
         let let_expr = zspan!(Let {
             pattern: zspan!(Pattern::String("x".to_owned())),
             immutable: zspan!(true),
@@ -2346,7 +2303,7 @@ mod tests {
             expr: zspan!(ExprType::Number(0))
         });
         assert_eq!(
-            env.typecheck_let(&level_label, &let_expr).unwrap_err()[0].t.ty,
+            env.typecheck_let(&let_expr).unwrap_err()[0].t.ty,
             TypecheckErrType::TypeMismatch(Rc::new(Type::String), Rc::new(Type::Int))
         );
     }
@@ -2356,13 +2313,13 @@ mod tests {
         let tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
-        let env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1);
+        let env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1, level_label);
         let fn_call_expr = zspan!(FnCall {
             id: zspan!("f".to_owned()),
             args: vec![],
         });
         assert_eq!(
-            env.typecheck_fn_call(&level_label, &fn_call_expr).unwrap_err()[0].t.ty,
+            env.typecheck_fn_call(&fn_call_expr).unwrap_err()[0].t.ty,
             TypecheckErrType::UndefinedFn("f".to_owned())
         );
     }
@@ -2373,7 +2330,7 @@ mod tests {
         let level_label = Label::top();
         let label_f = tmp_generator.new_label();
 
-        let mut env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1);
+        let mut env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1, level_label);
         env.insert_var(
             "f".to_owned(),
             EnvEntry {
@@ -2388,7 +2345,7 @@ mod tests {
             args: vec![],
         });
         assert_eq!(
-            env.typecheck_fn_call(&level_label, &fn_call_expr).unwrap_err()[0].t.ty,
+            env.typecheck_fn_call(&fn_call_expr).unwrap_err()[0].t.ty,
             TypecheckErrType::NotAFn("f".to_owned())
         );
     }
@@ -2399,7 +2356,7 @@ mod tests {
         let level_label = Label::top();
         let label_f = tmp_generator.new_label();
 
-        let mut env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1);
+        let mut env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1, level_label);
         env.insert_var(
             "f".to_owned(),
             EnvEntry {
@@ -2414,7 +2371,7 @@ mod tests {
             args: vec![zspan!(ExprType::Number(0))],
         });
         assert_eq!(
-            env.typecheck_fn_call(&level_label, &fn_call_expr).unwrap_err()[0].t.ty,
+            env.typecheck_fn_call(&fn_call_expr).unwrap_err()[0].t.ty,
             TypecheckErrType::ArityMismatch(0, 1)
         );
     }
@@ -2425,7 +2382,7 @@ mod tests {
         let level_label = Label::top();
         let label_f = tmp_generator.new_label();
 
-        let mut env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1);
+        let mut env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1, level_label);
         env.insert_var(
             "f".to_owned(),
             EnvEntry {
@@ -2443,7 +2400,7 @@ mod tests {
         });
 
         assert_eq!(
-            env.typecheck_fn_call(&level_label, &fn_call).unwrap_err()[0].t.ty,
+            env.typecheck_fn_call(&fn_call).unwrap_err()[0].t.ty,
             TypecheckErrType::TypeMismatch(Rc::new(Type::Int), Rc::new(Type::String))
         )
     }
@@ -2454,7 +2411,7 @@ mod tests {
         let level_label = Label::top();
         let label_f = tmp_generator.new_label();
 
-        let mut env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1);
+        let mut env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1, level_label);
         env.insert_type("a".to_owned(), Type::Alias("int".to_owned()), zspan!());
         env.insert_var(
             "f".to_owned(),
@@ -2470,7 +2427,7 @@ mod tests {
             args: vec![]
         });
         assert_eq!(
-            env.typecheck_fn_call(&level_label, &fn_call).unwrap().unwrap(),
+            env.typecheck_fn_call(&fn_call).unwrap().unwrap(),
             Rc::new(Type::Alias("a".to_owned()))
         );
     }
@@ -2480,7 +2437,7 @@ mod tests {
         let tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
-        let mut env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1);
+        let mut env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1, level_label);
         let type_decl = zspan!(TypeDecl {
             id: zspan!("a".to_owned()),
             ty: zspan!(ast::TypeDeclType::Type(zspan!("int".to_owned()))),
@@ -2492,7 +2449,7 @@ mod tests {
             expr: zspan!(ExprType::Number(0)),
         });
         let _ = env.typecheck_type_decl(&type_decl);
-        assert!(env.typecheck_let(&level_label, &let_expr).is_ok());
+        assert!(env.typecheck_let(&let_expr).is_ok());
     }
 
     #[test]
@@ -2500,7 +2457,7 @@ mod tests {
         let tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
-        let mut env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1);
+        let mut env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1, level_label);
         let type_decl = zspan!(TypeDecl {
             id: zspan!("a".to_owned()),
             ty: zspan!(ast::TypeDeclType::Type(zspan!("int".to_owned()))),
@@ -2513,7 +2470,7 @@ mod tests {
         });
         let _ = env.typecheck_type_decl(&type_decl);
         assert_eq!(
-            env.typecheck_let(&level_label, &let_expr).unwrap_err()[0].t.ty,
+            env.typecheck_let(&let_expr).unwrap_err()[0].t.ty,
             TypecheckErrType::TypeMismatch(Rc::new(Type::Alias("a".to_owned())), Rc::new(Type::String))
         );
     }
@@ -2524,10 +2481,10 @@ mod tests {
         let level = Level::new(&tmp_generator, Some(Label::top()), "f", &[]);
         let level_label = level.frame.label.clone();
 
-        let mut env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1);
+        let mut env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1, level_label.clone());
         {
             let mut levels = env.levels.borrow_mut();
-            levels.insert(level_label.clone(), level);
+            levels.insert(level_label, level);
         }
 
         let type_decl = zspan!(TypeDecl {
@@ -2542,9 +2499,9 @@ mod tests {
         });
         let expr = zspan!(ExprType::LVal(Box::new(zspan!(LVal::Simple("i".to_owned())))));
         env.typecheck_type_decl(&type_decl).expect("typecheck type decl");
-        env.typecheck_let(&level_label, &var_def).expect("typecheck var def");
+        env.typecheck_let(&var_def).expect("typecheck var def");
         assert_eq!(
-            env.typecheck_expr_mut(&level_label, &expr).unwrap().unwrap(),
+            env.typecheck_expr_mut(&expr).unwrap().unwrap(),
             Rc::new(Type::Alias("i".to_owned()))
         );
     }
@@ -2553,7 +2510,7 @@ mod tests {
     fn test_recursive_typedef() {
         let tmp_generator = TmpGenerator::default();
 
-        let mut env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1);
+        let mut env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1, Label::top());
         let type_decl = zspan!(DeclType::Type(zspan!(TypeDecl {
             id: zspan!("i".to_owned()),
             ty: zspan!(ast::TypeDeclType::Record(vec![zspan!(TypeField {
@@ -2566,7 +2523,7 @@ mod tests {
 
     #[test]
     fn test_check_for_type_decl_cycles_err1() {
-        let mut env = Env::new(TmpGenerator::default(), EMPTY_SOURCEMAP.1);
+        let mut env = Env::new(TmpGenerator::default(), EMPTY_SOURCEMAP.1, Label::top());
         env.insert_type("a".to_owned(), Type::Alias("a".to_owned()), zspan!());
         assert_eq!(
             env.check_for_type_decl_cycles("a", vec![]).unwrap_err()[0].t.ty,
@@ -2576,7 +2533,7 @@ mod tests {
 
     #[test]
     fn test_check_for_type_decl_cycles_err2() {
-        let mut env = Env::new(TmpGenerator::default(), EMPTY_SOURCEMAP.1);
+        let mut env = Env::new(TmpGenerator::default(), EMPTY_SOURCEMAP.1, Label::top());
         env.insert_type("a".to_owned(), Type::Alias("b".to_owned()), zspan!());
         env.insert_type("b".to_owned(), Type::Alias("c".to_owned()), zspan!());
         env.insert_type("c".to_owned(), Type::Alias("a".to_owned()), zspan!());
@@ -2588,7 +2545,7 @@ mod tests {
 
     #[test]
     fn test_check_for_type_decl_cycles() {
-        let mut env = Env::new(TmpGenerator::default(), EMPTY_SOURCEMAP.1);
+        let mut env = Env::new(TmpGenerator::default(), EMPTY_SOURCEMAP.1, Label::top());
         env.insert_type("a".to_owned(), Type::Alias("b".to_owned()), zspan!());
         env.insert_type("b".to_owned(), Type::Alias("c".to_owned()), zspan!());
         assert_eq!(env.check_for_type_decl_cycles("a", vec![]), Ok(()));
@@ -2596,7 +2553,7 @@ mod tests {
 
     #[test]
     fn test_duplicate_type_decl() {
-        let mut env = Env::new(TmpGenerator::default(), EMPTY_SOURCEMAP.1);
+        let mut env = Env::new(TmpGenerator::default(), EMPTY_SOURCEMAP.1, Label::top());
         env.typecheck_type_decl(&zspan!(ast::TypeDecl {
             id: zspan!("a".to_owned()),
             ty: zspan!(ast::TypeDeclType::Unit)
@@ -2620,7 +2577,7 @@ mod tests {
         let tmp_generator = TmpGenerator::default();
         let label_f = tmp_generator.new_label();
 
-        let mut env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1);
+        let mut env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1, Label::top());
         env.insert_var(
             "f".to_owned(),
             EnvEntry {
@@ -2640,7 +2597,7 @@ mod tests {
     fn test_typecheck_first_pass() {
         let tmp_generator = TmpGenerator::default();
 
-        let mut env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1);
+        let mut env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1, Label::top());
         let result = env.first_pass(&[
             Decl::new(
                 DeclType::Type(zspan!(TypeDecl {
@@ -2673,7 +2630,7 @@ mod tests {
         let tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
-        let mut env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1);
+        let mut env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1, level_label);
         let fn_decl1 = zspan!(FnDecl {
             id: zspan!("f".to_owned()),
             type_fields: vec![],
@@ -2686,11 +2643,11 @@ mod tests {
             return_type: Some(zspan!(ast::Type::Type(zspan!("int".to_owned())))),
             body: zspan!(ExprType::Number(0))
         });
-        env.typecheck_fn_decl_sig(&level_label, &fn_decl1)
+        env.typecheck_fn_decl_sig(&fn_decl1)
             .expect("typecheck function signature");
 
         assert_eq!(
-            env.typecheck_fn_decl_sig(&level_label, &fn_decl2).unwrap_err()[0].t.ty,
+            env.typecheck_fn_decl_sig(&fn_decl2).unwrap_err()[0].t.ty,
             TypecheckErrType::DuplicateFn("f".to_owned())
         );
     }
@@ -2700,7 +2657,7 @@ mod tests {
         let tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
-        let mut env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1);
+        let mut env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1, level_label);
         let fn_decl = zspan!(FnDecl {
             id: zspan!("f".to_owned()),
             type_fields: vec![
@@ -2718,7 +2675,7 @@ mod tests {
         });
 
         assert_eq!(
-            env.typecheck_fn_decl_sig(&level_label, &fn_decl).unwrap_err()[0].t.ty,
+            env.typecheck_fn_decl_sig(&fn_decl).unwrap_err()[0].t.ty,
             TypecheckErrType::DuplicateParam("a".to_owned())
         );
     }
@@ -2727,7 +2684,7 @@ mod tests {
     fn test_typecheck_fn_decl() {
         let tmp_generator = TmpGenerator::default();
 
-        let mut env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1);
+        let mut env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1, Label::top());
         let fn_decl = zspan!(FnDecl {
             id: zspan!("f".to_owned()),
             type_fields: vec![zspan!(TypeField {
@@ -2739,7 +2696,7 @@ mod tests {
         });
 
         assert_eq!(
-            env.typecheck_fn_decl_sig(&Label::top(), &fn_decl),
+            env.typecheck_fn_decl_sig(&fn_decl),
             Ok(Rc::new(Type::Fn(vec![Rc::new(Type::Int)], Rc::new(Type::Unit))))
         );
         env.typecheck_fn_decl_body(&fn_decl).expect("typecheck fn decl body");
@@ -2760,7 +2717,7 @@ mod tests {
 
     #[test]
     fn test_validate_type() {
-        let mut env = Env::new(TmpGenerator::default(), EMPTY_SOURCEMAP.1);
+        let mut env = Env::new(TmpGenerator::default(), EMPTY_SOURCEMAP.1, Label::top());
         let mut record_fields = HashMap::new();
         record_fields.insert(
             "f".to_owned(),
@@ -2789,7 +2746,7 @@ mod tests {
         let tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
-        let mut env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1);
+        let mut env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1, level_label);
         let record_type = Type::Record(
             "r".to_owned(),
             hashmap! {
@@ -2802,7 +2759,7 @@ mod tests {
             field_assigns: vec![]
         });
         assert_eq!(
-            env.typecheck_record(&level_label, &record).unwrap_err()[0].t.ty,
+            env.typecheck_record(&record).unwrap_err()[0].t.ty,
             TypecheckErrType::MissingFields(vec!["a".to_owned()])
         );
     }
@@ -2812,7 +2769,7 @@ mod tests {
         let tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
-        let mut env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1);
+        let mut env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1, level_label);
         let record_type = Type::Record("r".to_owned(), HashMap::new());
         env.insert_type("r".to_owned(), record_type, zspan!());
         let record = zspan!(Record {
@@ -2823,7 +2780,7 @@ mod tests {
             })]
         });
         assert_eq!(
-            env.typecheck_record(&level_label, &record).unwrap_err()[0].t.ty,
+            env.typecheck_record(&record).unwrap_err()[0].t.ty,
             TypecheckErrType::InvalidFields(vec!["b".to_owned()])
         );
     }
@@ -2833,7 +2790,7 @@ mod tests {
         let tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
-        let mut env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1);
+        let mut env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1, level_label);
         let record_type = Type::Record(
             "r".to_owned(),
             hashmap! {
@@ -2864,7 +2821,7 @@ mod tests {
         });
 
         assert_eq!(
-            env.typecheck_record(&level_label, &record).unwrap_err()[0].t.ty,
+            env.typecheck_record(&record).unwrap_err()[0].t.ty,
             TypecheckErrType::DuplicateField("a".to_owned())
         );
     }
@@ -2874,7 +2831,7 @@ mod tests {
         let tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
-        let mut env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1);
+        let mut env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1, level_label);
         let record_type = Type::Record(
             "r".to_owned(),
             hashmap! {
@@ -2904,10 +2861,7 @@ mod tests {
             ]
         });
 
-        assert_eq!(
-            env.typecheck_record(&level_label, &record).unwrap().unwrap(),
-            Rc::new(record_type)
-        );
+        assert_eq!(env.typecheck_record(&record).unwrap().unwrap(), Rc::new(record_type));
     }
 
     #[test]
@@ -2915,7 +2869,7 @@ mod tests {
         let tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
-        let mut env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1);
+        let mut env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1, level_label);
         let record_type = Type::Record(
             "r".to_owned(),
             hashmap! {
@@ -2934,7 +2888,7 @@ mod tests {
         });
 
         assert_eq!(
-            env.typecheck_record(&level_label, &record).unwrap_err()[0].t.ty,
+            env.typecheck_record(&record).unwrap_err()[0].t.ty,
             TypecheckErrType::TypeMismatch(Rc::new(Type::Int), Rc::new(Type::String))
         );
     }
@@ -2943,7 +2897,7 @@ mod tests {
     fn test_typecheck_fn_independent() {
         let tmp_generator = TmpGenerator::default();
 
-        let mut env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1);
+        let mut env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1, Label::top());
         let fn_expr1 = zspan!(ExprType::Seq(
             vec![zspan!(ExprType::Let(Box::new(zspan!(Let {
                 pattern: zspan!(Pattern::String("a".to_owned())),
@@ -2978,7 +2932,7 @@ mod tests {
     fn test_typecheck_fn_body() {
         let tmp_generator = TmpGenerator::default();
 
-        let mut env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1);
+        let mut env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1, Label::top());
         let fn_expr = zspan!(ExprType::Arith(Box::new(zspan!(Arith {
             l: zspan!(ExprType::LVal(Box::new(zspan!(LVal::Simple("a".to_owned()))))),
             op: zspan!(ast::ArithOp::Add),
@@ -3009,10 +2963,10 @@ mod tests {
         let level = Level::new(&tmp_generator, Some(Label::top()), "f", &[]);
         let level_label = level.frame.label.clone();
 
-        let env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1);
+        let env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1, level_label.clone());
         {
             let mut levels = env.levels.borrow_mut();
-            levels.insert(level_label.clone(), level);
+            levels.insert(level_label, level);
         }
         let seq_expr1 = zspan!(ExprType::Seq(
             vec![zspan!(ExprType::Let(Box::new(zspan!(Let {
@@ -3025,9 +2979,9 @@ mod tests {
         ));
         let seq_expr2 = zspan!(ExprType::LVal(Box::new(zspan!(LVal::Simple("a".to_owned())))));
 
-        env.typecheck_expr(&level_label, &seq_expr1).expect("typecheck expr");
+        env.typecheck_expr(&seq_expr1).expect("typecheck expr");
         assert_eq!(
-            env.typecheck_expr(&level_label, &seq_expr2).unwrap_err()[0].t.ty,
+            env.typecheck_expr(&seq_expr2).unwrap_err()[0].t.ty,
             TypecheckErrType::UndefinedVar("a".to_owned())
         );
     }
@@ -3038,7 +2992,7 @@ mod tests {
         let level = Level::new(&tmp_generator, Some(Label::top()), "f", &[]);
         let level_label = level.frame.label.clone();
 
-        let mut env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1);
+        let mut env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1, level_label.clone());
         {
             let mut levels = env.levels.borrow_mut();
             levels.insert(level_label.clone(), level);
@@ -3062,7 +3016,7 @@ mod tests {
         ));
 
         assert_eq!(
-            env.typecheck_expr(&level_label, &seq).map(TranslateOutput::unwrap),
+            env.typecheck_expr(&seq).map(TranslateOutput::unwrap),
             Ok(Rc::new(Type::String))
         );
     }
@@ -3073,7 +3027,7 @@ mod tests {
         let level = Level::new(&tmp_generator, Some(Label::top()), "f", &[]);
         let level_label = level.frame.label.clone();
 
-        let env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1);
+        let env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1, level_label.clone());
         {
             let mut levels = env.levels.borrow_mut();
             levels.insert(level_label.clone(), level);
@@ -3091,7 +3045,7 @@ mod tests {
         }))));
 
         assert_eq!(
-            env.typecheck_expr(&level_label, &expr).unwrap_err()[0].t.ty,
+            env.typecheck_expr(&expr).unwrap_err()[0].t.ty,
             TypecheckErrType::IllegalLetExpr
         );
     }
@@ -3102,7 +3056,7 @@ mod tests {
         let level = Level::new(&tmp_generator, Some(Label::top()), "f", &[]);
         let level_label = level.frame.label.clone();
 
-        let mut env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1);
+        let mut env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1, level_label.clone());
         {
             let mut levels = env.levels.borrow_mut();
             levels.insert(level_label.clone(), level);
@@ -3122,14 +3076,11 @@ mod tests {
         );
 
         assert_eq!(
-            env.typecheck_assign(
-                &level_label,
-                &zspan!(Assign {
-                    lval: zspan!(LVal::Simple("a".to_owned())),
-                    expr: zspan!(ExprType::Number(0))
-                }),
-            )
-            .unwrap_err()[0]
+            env.typecheck_assign(&zspan!(Assign {
+                lval: zspan!(LVal::Simple("a".to_owned())),
+                expr: zspan!(ExprType::Number(0))
+            }),)
+                .unwrap_err()[0]
                 .t
                 .ty,
             TypecheckErrType::MutatingImmutable("a".to_owned())
@@ -3142,7 +3093,7 @@ mod tests {
         let level = Level::new(&tmp_generator, Some(Label::top()), "f", &[]);
         let level_label = level.frame.label.clone();
 
-        let mut env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1);
+        let mut env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1, level_label.clone());
         {
             let mut levels = env.levels.borrow_mut();
             levels.insert(level_label.clone(), level);
@@ -3172,17 +3123,14 @@ mod tests {
         );
 
         assert_eq!(
-            env.typecheck_assign(
-                &level_label,
-                &zspan!(Assign {
-                    lval: zspan!(LVal::Field(
-                        Box::new(zspan!(LVal::Simple("r".to_owned()))),
-                        zspan!("a".to_owned())
-                    )),
-                    expr: zspan!(ExprType::Number(0))
-                }),
-            )
-            .unwrap_err()[0]
+            env.typecheck_assign(&zspan!(Assign {
+                lval: zspan!(LVal::Field(
+                    Box::new(zspan!(LVal::Simple("r".to_owned()))),
+                    zspan!("a".to_owned())
+                )),
+                expr: zspan!(ExprType::Number(0))
+            }),)
+                .unwrap_err()[0]
                 .t
                 .ty,
             TypecheckErrType::MutatingImmutable("r".to_owned())
@@ -3195,7 +3143,7 @@ mod tests {
         let level = Level::new(&tmp_generator, Some(Label::top()), "f", &[]);
         let level_label = level.frame.label.clone();
 
-        let mut env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1);
+        let mut env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1, level_label.clone());
         {
             let mut levels = env.levels.borrow_mut();
             levels.insert(level_label.clone(), level);
@@ -3225,17 +3173,14 @@ mod tests {
         );
 
         assert_eq!(
-            env.typecheck_assign(
-                &level_label,
-                &zspan!(Assign {
-                    lval: zspan!(LVal::Field(
-                        Box::new(zspan!(LVal::Simple("r".to_owned()))),
-                        zspan!("a".to_owned())
-                    )),
-                    expr: zspan!(ExprType::Unit)
-                }),
-            )
-            .unwrap_err()[0]
+            env.typecheck_assign(&zspan!(Assign {
+                lval: zspan!(LVal::Field(
+                    Box::new(zspan!(LVal::Simple("r".to_owned()))),
+                    zspan!("a".to_owned())
+                )),
+                expr: zspan!(ExprType::Unit)
+            }),)
+                .unwrap_err()[0]
                 .t
                 .ty,
             TypecheckErrType::TypeMismatch(Rc::new(Type::Int), Rc::new(Type::Unit))
@@ -3248,7 +3193,7 @@ mod tests {
         let level = Level::new(&tmp_generator, Some(Label::top()), "f", &[]);
         let level_label = level.frame.label.clone();
 
-        let mut env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1);
+        let mut env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1, level_label.clone());
         {
             let mut levels = env.levels.borrow_mut();
             levels.insert(level_label.clone(), level);
@@ -3278,17 +3223,14 @@ mod tests {
         );
 
         assert_eq!(
-            env.typecheck_assign(
-                &level_label,
-                &zspan!(Assign {
-                    lval: zspan!(LVal::Field(
-                        Box::new(zspan!(LVal::Simple("r".to_owned()))),
-                        zspan!("a".to_owned())
-                    )),
-                    expr: zspan!(ExprType::Number(0))
-                }),
-            )
-            .map(TranslateOutput::unwrap),
+            env.typecheck_assign(&zspan!(Assign {
+                lval: zspan!(LVal::Field(
+                    Box::new(zspan!(LVal::Simple("r".to_owned()))),
+                    zspan!("a".to_owned())
+                )),
+                expr: zspan!(ExprType::Number(0))
+            }),)
+                .map(TranslateOutput::unwrap),
             Ok(Rc::new(Type::Unit))
         );
     }
@@ -3299,7 +3241,7 @@ mod tests {
         let level = Level::new(&tmp_generator, Some(Label::top()), "f", &[]);
         let level_label = level.frame.label.clone();
 
-        let mut env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1);
+        let mut env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1, level_label.clone());
         {
             let mut levels = env.levels.borrow_mut();
             levels.insert(level_label.clone(), level);
@@ -3320,17 +3262,14 @@ mod tests {
         );
 
         assert_eq!(
-            env.typecheck_assign(
-                &level_label,
-                &zspan!(Assign {
-                    lval: zspan!(LVal::Subscript(
-                        Box::new(zspan!(LVal::Simple("a".to_owned()))),
-                        zspan!(ExprType::Number(0))
-                    )),
-                    expr: zspan!(ExprType::Number(0))
-                }),
-            )
-            .unwrap_err()[0]
+            env.typecheck_assign(&zspan!(Assign {
+                lval: zspan!(LVal::Subscript(
+                    Box::new(zspan!(LVal::Simple("a".to_owned()))),
+                    zspan!(ExprType::Number(0))
+                )),
+                expr: zspan!(ExprType::Number(0))
+            }),)
+                .unwrap_err()[0]
                 .t
                 .ty,
             TypecheckErrType::MutatingImmutable("a".to_owned())
@@ -3343,7 +3282,7 @@ mod tests {
         let level = Level::new(&tmp_generator, Some(Label::top()), "f", &[]);
         let level_label = level.frame.label.clone();
 
-        let mut env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1);
+        let mut env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1, level_label.clone());
         {
             let mut levels = env.levels.borrow_mut();
             levels.insert(level_label.clone(), level);
@@ -3364,17 +3303,14 @@ mod tests {
         );
 
         assert_eq!(
-            env.typecheck_assign(
-                &level_label,
-                &zspan!(Assign {
-                    lval: zspan!(LVal::Subscript(
-                        Box::new(zspan!(LVal::Simple("a".to_owned()))),
-                        zspan!(ExprType::Number(0))
-                    )),
-                    expr: zspan!(ExprType::String("s".to_owned()))
-                }),
-            )
-            .unwrap_err()[0]
+            env.typecheck_assign(&zspan!(Assign {
+                lval: zspan!(LVal::Subscript(
+                    Box::new(zspan!(LVal::Simple("a".to_owned()))),
+                    zspan!(ExprType::Number(0))
+                )),
+                expr: zspan!(ExprType::String("s".to_owned()))
+            }),)
+                .unwrap_err()[0]
                 .t
                 .ty,
             TypecheckErrType::TypeMismatch(Rc::new(Type::Int), Rc::new(Type::String))
@@ -3387,7 +3323,7 @@ mod tests {
         let level = Level::new(&tmp_generator, Some(Label::top()), "f", &[]);
         let level_label = level.frame.label.clone();
 
-        let mut env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1);
+        let mut env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1, level_label.clone());
         {
             let mut levels = env.levels.borrow_mut();
             levels.insert(level_label.clone(), level);
@@ -3407,17 +3343,14 @@ mod tests {
         );
 
         assert_eq!(
-            env.typecheck_assign(
-                &level_label,
-                &zspan!(Assign {
-                    lval: zspan!(LVal::Subscript(
-                        Box::new(zspan!(LVal::Simple("a".to_owned()))),
-                        zspan!(ExprType::Number(0))
-                    )),
-                    expr: zspan!(ExprType::Number(0))
-                }),
-            )
-            .map(TranslateOutput::unwrap),
+            env.typecheck_assign(&zspan!(Assign {
+                lval: zspan!(LVal::Subscript(
+                    Box::new(zspan!(LVal::Simple("a".to_owned()))),
+                    zspan!(ExprType::Number(0))
+                )),
+                expr: zspan!(ExprType::Number(0))
+            }),)
+                .map(TranslateOutput::unwrap),
             Ok(Rc::new(Type::Unit))
         );
     }
@@ -3427,7 +3360,7 @@ mod tests {
         let tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
-        let mut env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1);
+        let mut env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1, level_label);
         let fn_type = Type::Fn(vec![], Rc::new(Type::Unit));
         env.insert_var(
             "f".to_owned(),
@@ -3439,13 +3372,10 @@ mod tests {
             zspan!(),
         );
 
-        assert!(dbg!(env.typecheck_assign(
-            &level_label,
-            &zspan!(Assign {
-                lval: zspan!(LVal::Simple("f".to_owned())),
-                expr: zspan!(ExprType::Number(0))
-            }),
-        ))
+        assert!(dbg!(env.typecheck_assign(&zspan!(Assign {
+            lval: zspan!(LVal::Simple("f".to_owned())),
+            expr: zspan!(ExprType::Number(0))
+        }),))
         .is_err());
     }
 
@@ -3454,15 +3384,14 @@ mod tests {
         let tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
-        let env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1);
+        let env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1, level_label);
         let array_expr = zspan!(Array {
             initial_value: zspan!(ExprType::Number(0)),
             len: zspan!(ExprType::Number(3))
         });
 
         assert_eq!(
-            env.typecheck_array(&level_label, &array_expr)
-                .map(TranslateOutput::unwrap),
+            env.typecheck_array(&array_expr).map(TranslateOutput::unwrap),
             Ok(Rc::new(Type::Array(Rc::new(Type::Int), 3)))
         );
     }
@@ -3472,7 +3401,7 @@ mod tests {
         let tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
-        let env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1);
+        let env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1, level_label);
         let array_expr = zspan!(Array {
             initial_value: zspan!(ExprType::Number(0)),
             len: zspan!(ExprType::Arith(Box::new(zspan!(Arith {
@@ -3483,8 +3412,7 @@ mod tests {
         });
 
         assert_eq!(
-            env.typecheck_array(&level_label, &array_expr)
-                .map(TranslateOutput::unwrap),
+            env.typecheck_array(&array_expr).map(TranslateOutput::unwrap),
             Ok(Rc::new(Type::Array(Rc::new(Type::Int), 3)))
         );
     }
@@ -3494,14 +3422,14 @@ mod tests {
         let tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
-        let env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1);
+        let env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1, level_label);
         let array_expr = zspan!(Array {
             initial_value: zspan!(ExprType::Number(0)),
             len: zspan!(ExprType::Neg(Box::new(zspan!(ExprType::Number(3)))))
         });
 
         assert_eq!(
-            env.typecheck_array(&level_label, &array_expr).unwrap_err()[0].t.ty,
+            env.typecheck_array(&array_expr).unwrap_err()[0].t.ty,
             TypecheckErrType::NegativeArrayLen(-3)
         );
     }
@@ -3511,7 +3439,7 @@ mod tests {
         let tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
-        let env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1);
+        let env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1, level_label);
         let fn_call = ExprType::FnCall(Box::new(zspan!(FnCall {
             id: zspan!("f".to_owned()),
             args: vec![]
@@ -3522,7 +3450,7 @@ mod tests {
         });
 
         assert_eq!(
-            env.typecheck_array(&level_label, &array_expr).unwrap_err()[0].t.ty,
+            env.typecheck_array(&array_expr).unwrap_err()[0].t.ty,
             TypecheckErrType::NonConstantArithExpr(fn_call)
         );
     }
@@ -3532,7 +3460,7 @@ mod tests {
         let tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
-        let env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1);
+        let env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1, level_label);
         let if_expr = zspan!(If {
             cond: zspan!(ExprType::BoolLiteral(true)),
             then_expr: zspan!(ExprType::Unit),
@@ -3540,7 +3468,7 @@ mod tests {
         });
 
         assert_eq!(
-            env.typecheck_if(&level_label, &if_expr).map(TranslateOutput::unwrap),
+            env.typecheck_if(&if_expr).map(TranslateOutput::unwrap),
             Ok(Rc::new(Type::Unit))
         );
     }
@@ -3550,7 +3478,7 @@ mod tests {
         let tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
-        let env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1);
+        let env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1, level_label);
         let if_expr = zspan!(If {
             cond: zspan!(ExprType::BoolLiteral(true)),
             then_expr: zspan!(ExprType::Number(0)),
@@ -3558,7 +3486,7 @@ mod tests {
         });
 
         assert_eq!(
-            env.typecheck_if(&level_label, &if_expr).unwrap_err()[0].t.ty,
+            env.typecheck_if(&if_expr).unwrap_err()[0].t.ty,
             TypecheckErrType::TypeMismatch(Rc::new(Type::Unit), Rc::new(Type::Int))
         );
     }
@@ -3568,7 +3496,7 @@ mod tests {
         let tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
-        let env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1);
+        let env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1, level_label);
         let if_expr = zspan!(If {
             cond: zspan!(ExprType::BoolLiteral(true)),
             then_expr: zspan!(ExprType::Number(0)),
@@ -3576,7 +3504,7 @@ mod tests {
         });
 
         assert_eq!(
-            env.typecheck_if(&level_label, &if_expr).map(TranslateOutput::unwrap),
+            env.typecheck_if(&if_expr).map(TranslateOutput::unwrap),
             Ok(Rc::new(Type::Int))
         );
     }
@@ -3586,7 +3514,7 @@ mod tests {
         let tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
-        let env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1);
+        let env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1, level_label);
         let if_expr = zspan!(If {
             cond: zspan!(ExprType::BoolLiteral(true)),
             then_expr: zspan!(ExprType::Number(0)),
@@ -3594,7 +3522,7 @@ mod tests {
         });
 
         assert_eq!(
-            env.typecheck_if(&level_label, &if_expr).unwrap_err()[0].t.ty,
+            env.typecheck_if(&if_expr).unwrap_err()[0].t.ty,
             TypecheckErrType::TypeMismatch(Rc::new(Type::Int), Rc::new(Type::String))
         );
     }
@@ -3604,14 +3532,14 @@ mod tests {
         let tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
-        let env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1);
+        let env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1, level_label);
         let range = zspan!(Range {
             start: zspan!(ExprType::Number(0)),
             end: zspan!(ExprType::Number(1)),
         });
 
         assert_eq!(
-            env.typecheck_range(&level_label, &range).map(TranslateOutput::unwrap),
+            env.typecheck_range(&range).map(TranslateOutput::unwrap),
             Ok(Rc::new(Type::Iterator(Rc::new(Type::Int))))
         );
     }
@@ -3621,14 +3549,14 @@ mod tests {
         let tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
-        let env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1);
+        let env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1, level_label);
         let range = zspan!(Range {
             start: zspan!(ExprType::Number(0)),
             end: zspan!(ExprType::String("a".to_owned())),
         });
 
         assert_eq!(
-            env.typecheck_range(&level_label, &range).unwrap_err()[0].t.ty,
+            env.typecheck_range(&range).unwrap_err()[0].t.ty,
             TypecheckErrType::TypeMismatch(Rc::new(Type::Int), Rc::new(Type::String))
         );
     }
@@ -3639,10 +3567,10 @@ mod tests {
         let level = Level::new(&tmp_generator, Some(Label::top()), "f", &[]);
         let level_label = level.frame.label.clone();
 
-        let env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1);
+        let env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1, level_label.clone());
         {
             let mut levels = env.levels.borrow_mut();
-            levels.insert(level_label.clone(), level);
+            levels.insert(level_label, level);
         }
 
         let for_expr = zspan!(For {
@@ -3658,7 +3586,7 @@ mod tests {
         });
 
         assert_eq!(
-            env.typecheck_for(&level_label, &for_expr).map(TranslateOutput::unwrap),
+            env.typecheck_for(&for_expr).map(TranslateOutput::unwrap),
             Ok(Rc::new(Type::Unit))
         );
     }
@@ -3668,7 +3596,7 @@ mod tests {
         let tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
-        let env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1);
+        let env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1, level_label);
         let for_expr = zspan!(For {
             index: zspan!("i".to_owned()),
             range: zspan!(ExprType::Number(0)),
@@ -3679,7 +3607,7 @@ mod tests {
         });
 
         assert_eq!(
-            env.typecheck_for(&level_label, &for_expr).unwrap_err()[0].t.ty,
+            env.typecheck_for(&for_expr).unwrap_err()[0].t.ty,
             TypecheckErrType::TypeMismatch(Rc::new(Type::Iterator(Rc::new(Type::Int))), Rc::new(Type::Int))
         );
     }
@@ -3690,10 +3618,10 @@ mod tests {
         let level = Level::new(&tmp_generator, Some(Label::top()), "f", &[]);
         let level_label = level.frame.label.clone();
 
-        let env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1);
+        let env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1, level_label.clone());
         {
             let mut levels = env.levels.borrow_mut();
-            levels.insert(level_label.clone(), level);
+            levels.insert(level_label, level);
         }
 
         let for_expr = zspan!(For {
@@ -3709,7 +3637,7 @@ mod tests {
         });
 
         assert_eq!(
-            env.typecheck_for(&level_label, &for_expr).unwrap_err()[0].t.ty,
+            env.typecheck_for(&for_expr).unwrap_err()[0].t.ty,
             TypecheckErrType::TypeMismatch(Rc::new(Type::Unit), Rc::new(Type::Int))
         );
     }
@@ -3719,15 +3647,14 @@ mod tests {
         let tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
-        let env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1);
+        let env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1, level_label);
         let while_expr = zspan!(While {
             cond: zspan!(ExprType::BoolLiteral(true)),
             body: zspan!(ExprType::Seq(vec![zspan!(ExprType::Unit)], false))
         });
 
         assert_eq!(
-            env.typecheck_while(&level_label, &while_expr)
-                .map(TranslateOutput::unwrap),
+            env.typecheck_while(&while_expr).map(TranslateOutput::unwrap),
             Ok(Rc::new(Type::Unit))
         );
     }
@@ -3737,13 +3664,13 @@ mod tests {
         let tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
-        let env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1);
+        let env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1, level_label);
         let while_expr = zspan!(While {
             cond: zspan!(ExprType::Number(0)),
             body: zspan!(ExprType::Seq(vec![zspan!(ExprType::Unit)], false))
         });
         assert_eq!(
-            env.typecheck_while(&level_label, &while_expr).unwrap_err()[0].t.ty,
+            env.typecheck_while(&while_expr).unwrap_err()[0].t.ty,
             TypecheckErrType::TypeMismatch(Rc::new(Type::Bool), Rc::new(Type::Int))
         );
     }
@@ -3753,14 +3680,14 @@ mod tests {
         let tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
-        let env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1);
+        let env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1, level_label);
         let while_expr = zspan!(While {
             cond: zspan!(ExprType::BoolLiteral(true)),
             body: zspan!(ExprType::Seq(vec![zspan!(ExprType::Number(0))], true))
         });
 
         assert_eq!(
-            env.typecheck_while(&level_label, &while_expr).unwrap_err()[0].t.ty,
+            env.typecheck_while(&while_expr).unwrap_err()[0].t.ty,
             TypecheckErrType::TypeMismatch(Rc::new(Type::Unit), Rc::new(Type::Int))
         );
     }
@@ -3770,7 +3697,7 @@ mod tests {
         let tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
-        let env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1);
+        let env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1, level_label);
         let compare = zspan!(Compare {
             l: zspan!(ExprType::BoolLiteral(true)),
             op: zspan!(CompareOp::Eq),
@@ -3778,8 +3705,7 @@ mod tests {
         });
 
         assert_eq!(
-            env.typecheck_compare(&level_label, &compare)
-                .map(TranslateOutput::unwrap),
+            env.typecheck_compare(&compare).map(TranslateOutput::unwrap),
             Ok(Rc::new(Type::Bool))
         );
     }
@@ -3789,7 +3715,7 @@ mod tests {
         let tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
-        let env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1);
+        let env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1, level_label);
         let compare = zspan!(Compare {
             l: zspan!(ExprType::Number(0)),
             op: zspan!(CompareOp::Eq),
@@ -3797,7 +3723,7 @@ mod tests {
         });
 
         assert_eq!(
-            env.typecheck_compare(&level_label, &compare).unwrap_err()[0].t.ty,
+            env.typecheck_compare(&compare).unwrap_err()[0].t.ty,
             TypecheckErrType::TypeMismatch(Rc::new(Type::Int), Rc::new(Type::Bool))
         );
     }
@@ -3807,7 +3733,7 @@ mod tests {
         let tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
-        let mut env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1);
+        let mut env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1, level_label);
         env.insert_type(
             "e".to_owned(),
             Type::Enum(
@@ -3829,7 +3755,7 @@ mod tests {
         });
 
         assert_eq!(
-            env.typecheck_enum(&level_label, &enum_expr).unwrap_err()[0].t.ty,
+            env.typecheck_enum(&enum_expr).unwrap_err()[0].t.ty,
             TypecheckErrType::ArityMismatch(1, 0)
         );
     }
@@ -3839,7 +3765,7 @@ mod tests {
         let tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
-        let mut env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1);
+        let mut env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1, level_label);
         env.insert_type(
             "e".to_owned(),
             Type::Enum(
@@ -3861,7 +3787,7 @@ mod tests {
         });
 
         assert_eq!(
-            env.typecheck_enum(&level_label, &enum_expr).unwrap_err()[0].t.ty,
+            env.typecheck_enum(&enum_expr).unwrap_err()[0].t.ty,
             TypecheckErrType::TypeMismatch(Rc::new(Type::Int), Rc::new(Type::String))
         );
     }
@@ -3872,7 +3798,7 @@ mod tests {
         let tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
-        let env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1);
+        let env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1, level_label);
         let closure = zspan!(Closure {
             type_fields: vec![zspan!(TypeField {
                 id: zspan!("a".to_owned()),
@@ -3882,8 +3808,7 @@ mod tests {
         });
 
         assert_eq!(
-            env.typecheck_closure(&level_label, &closure)
-                .map(TranslateOutput::unwrap),
+            env.typecheck_closure(&closure).map(TranslateOutput::unwrap),
             Ok(Rc::new(Type::Fn(vec![Rc::new(Type::Int)], Rc::new(Type::Int))))
         );
     }
@@ -3895,7 +3820,7 @@ mod tests {
         let level = Level::new(&tmp_generator, Some(Label::top()), "f", &[]);
         let level_label = level.frame.label.clone();
 
-        let mut env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1);
+        let mut env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1, level_label.clone());
         {
             let mut levels = env.levels.borrow_mut();
             levels.insert(level_label.clone(), level);
@@ -3921,8 +3846,7 @@ mod tests {
         });
 
         assert_eq!(
-            env.typecheck_closure(&level_label, &closure)
-                .map(TranslateOutput::unwrap),
+            env.typecheck_closure(&closure).map(TranslateOutput::unwrap),
             Ok(Rc::new(Type::Fn(vec![Rc::new(Type::Int)], Rc::new(Type::String))))
         );
     }
@@ -3932,7 +3856,7 @@ mod tests {
         let tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
-        let env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1);
+        let env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1, level_label);
         let closure = zspan!(Closure {
             type_fields: vec![
                 zspan!(TypeField {
@@ -3948,7 +3872,7 @@ mod tests {
         });
 
         assert_eq!(
-            env.typecheck_closure(&level_label, &closure).unwrap_err()[0].t.ty,
+            env.typecheck_closure(&closure).unwrap_err()[0].t.ty,
             TypecheckErrType::DuplicateParam("a".to_owned())
         );
     }
@@ -3959,10 +3883,10 @@ mod tests {
         let level = Level::new(&tmp_generator, Some(Label::top()), "f", &[]);
         let level_label = level.frame.label.clone();
 
-        let env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1);
+        let env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1, level_label.clone());
         {
             let mut levels = env.levels.borrow_mut();
-            levels.insert(level_label.clone(), level);
+            levels.insert(level_label, level);
         }
 
         let fn_decl1 = zspan!(ExprType::FnDecl(Box::new(zspan!(FnDecl {
@@ -3997,11 +3921,8 @@ mod tests {
         }))));
 
         assert_eq!(
-            env.typecheck_expr(
-                &level_label,
-                &zspan!(ExprType::Seq(vec![fn_decl1, let_expr, fn_decl2], false)),
-            )
-            .map(TranslateOutput::unwrap),
+            env.typecheck_expr(&zspan!(ExprType::Seq(vec![fn_decl1, let_expr, fn_decl2], false)),)
+                .map(TranslateOutput::unwrap),
             Ok(Rc::new(Type::Unit))
         );
     }
@@ -4012,10 +3933,10 @@ mod tests {
         let level = Level::new(&tmp_generator, Some(Label::top()), "f", &[]);
         let level_label = level.frame.label.clone();
 
-        let env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1);
+        let env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1, level_label.clone());
         {
             let mut levels = env.levels.borrow_mut();
-            levels.insert(level_label.clone(), level);
+            levels.insert(level_label, level);
         }
         let fn_decl1 = zspan!(ExprType::FnDecl(Box::new(zspan!(FnDecl {
             id: zspan!("f".to_owned()),
@@ -4034,7 +3955,7 @@ mod tests {
         }))));
 
         assert_eq!(
-            env.typecheck_expr(&level_label, &zspan!(ExprType::Seq(vec![fn_decl1, let_expr], false)),)
+            env.typecheck_expr(&zspan!(ExprType::Seq(vec![fn_decl1, let_expr], false)),)
                 .unwrap_err()[0]
                 .t
                 .ty,
@@ -4114,10 +4035,10 @@ mod tests {
         let level = Level::new(&tmp_generator, Some(Label::top()), "f", &[]);
         let level_label = level.frame.label.clone();
 
-        let mut env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1);
+        let mut env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1, level_label.clone());
         {
             let mut levels = env.levels.borrow_mut();
-            levels.insert(level_label.clone(), level);
+            levels.insert(level_label, level);
         }
 
         let assign_expr = zspan!(ast::ExprType::Let(Box::new(zspan!(ast::Let {
@@ -4127,7 +4048,7 @@ mod tests {
             expr: zspan!(ast::ExprType::Continue),
         }))));
         assert_eq!(
-            env.typecheck_expr_mut(&level_label, &assign_expr).unwrap_err()[0].t.ty,
+            env.typecheck_expr_mut(&assign_expr).unwrap_err()[0].t.ty,
             TypecheckErrType::IllegalBreakOrContinue
         );
     }
