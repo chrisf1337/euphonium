@@ -308,7 +308,7 @@ mod tests {
     }
 
     #[test]
-    fn test_seq() {
+    fn seq() {
         let tmp_generator = TmpGenerator::default();
 
         let stmt1 = Stmt::Label(tmp_generator.new_label());
@@ -330,7 +330,7 @@ mod tests {
     }
 
     #[test]
-    fn test_flatten() {
+    fn flatten() {
         let stmts = Stmt::Move(
             Expr::BinOp(
                 Box::new(Expr::Seq(

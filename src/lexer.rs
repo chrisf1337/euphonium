@@ -514,21 +514,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_lex_identifier() {
+    fn lex_identifier() {
         let mut lexer = Lexer::new("asdf");
         assert_eq!(lexer.lex_identifier(), (0, Tok::Identifier("asdf".to_owned()), 4));
         assert_eq!(lexer.next(), None);
     }
 
     #[test]
-    fn test_lex_keyword() {
+    fn lex_keyword() {
         let mut lexer = Lexer::new("type");
         assert_eq!(lexer.lex_identifier(), (0, Tok::Type, 4));
         assert_eq!(lexer.next(), None);
     }
 
     #[test]
-    fn test_lex_symbol() {
+    fn lex_symbol() {
         let mut lexer = Lexer::new("&&");
         assert_eq!(lexer.lex_symbol(), Ok((0, Tok::And, 2)));
         assert_eq!(lexer.next(), None);
@@ -540,7 +540,7 @@ mod tests {
     }
 
     #[test]
-    fn test_lex_whitespace_and_identifier() {
+    fn lex_whitespace_and_identifier() {
         let mut lexer = Lexer::new("    asdf");
         lexer.lex_whitespace();
         assert_eq!(lexer.lex_identifier(), (4, Tok::Identifier("asdf".to_owned()), 8));
@@ -548,7 +548,7 @@ mod tests {
     }
 
     #[test]
-    fn test_lex_number() {
+    fn lex_number() {
         let mut lexer = Lexer::new("123");
         assert_eq!(lexer.lex_number(), Ok((0, Tok::Number(123), 3)));
         assert_eq!(lexer.next(), None);
@@ -562,7 +562,7 @@ mod tests {
     }
 
     #[test]
-    fn test_lex_string() {
+    fn lex_string() {
         let mut lexer = Lexer::new("\"asdf\"");
         assert_eq!(lexer.lex_string(), Ok((0, Tok::String("asdf".to_owned()), 6)));
         assert_eq!(lexer.next(), None);

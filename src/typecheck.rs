@@ -2017,7 +2017,7 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     #[test]
-    fn test_resolve_type() {
+    fn resolve_type() {
         let mut env = Env::new(TmpGenerator::default(), EMPTY_SOURCEMAP.1, Label::top());
         env.insert_type("a".to_owned(), Type::Alias("b".to_owned()), zspan!());
         env.insert_type("b".to_owned(), Type::Alias("c".to_owned()), zspan!());
@@ -2038,7 +2038,7 @@ mod tests {
     }
 
     #[test]
-    fn test_child_env() {
+    fn child_env() {
         let mut env = Env::new(TmpGenerator::default(), EMPTY_SOURCEMAP.1, Label::top());
         let var_properties = EnvEntry {
             ty: Rc::new(Type::Int),
@@ -2062,7 +2062,7 @@ mod tests {
     }
 
     #[test]
-    fn test_typecheck_bool_expr() {
+    fn typecheck_bool_expr() {
         let level_label = Label::top();
 
         let expr = zspan!(ExprType::Bool(Box::new(zspan!(Bool {
@@ -2078,7 +2078,7 @@ mod tests {
     }
 
     #[test]
-    fn test_typecheck_bool_expr_source() {
+    fn typecheck_bool_expr_source() {
         let level_label = Label::top();
 
         let expr = zspan!(ExprType::Bool(Box::new(zspan!(Bool {
@@ -2101,7 +2101,7 @@ mod tests {
     }
 
     #[test]
-    fn test_typecheck_lval_undefined_var() {
+    fn typecheck_lval_undefined_var() {
         let level_label = Label::top();
 
         let env = Env::new(TmpGenerator::default(), EMPTY_SOURCEMAP.1, level_label);
@@ -2114,7 +2114,7 @@ mod tests {
     }
 
     #[test]
-    fn test_typecheck_lval_record_field() {
+    fn typecheck_lval_record_field() {
         let tmp_generator = TmpGenerator::default();
         let level = Level::new(&tmp_generator, Some(Label::top()), "f", &[]);
         let level_label = level.frame.label.clone();
@@ -2154,7 +2154,7 @@ mod tests {
     }
 
     #[test]
-    fn test_typecheck_lval_record_field_err1() {
+    fn typecheck_lval_record_field_err1() {
         let tmp_generator = TmpGenerator::default();
         let level = Level::new(&tmp_generator, Some(Label::top()), "f", &[]);
         let level_label = level.frame.label.clone();
@@ -2191,7 +2191,7 @@ mod tests {
     }
 
     #[test]
-    fn test_typecheck_lval_record_field_err2() {
+    fn typecheck_lval_record_field_err2() {
         let tmp_generator = TmpGenerator::default();
         let level = Level::new(&tmp_generator, Some(Label::top()), "f", &[]);
         let level_label = level.frame.label.clone();
@@ -2228,7 +2228,7 @@ mod tests {
     }
 
     #[test]
-    fn test_typecheck_array_subscript() {
+    fn typecheck_array_subscript() {
         let tmp_generator = TmpGenerator::default();
         let level = Level::new(&tmp_generator, Some(Label::top()), "f", &[]);
         let level_label = level.frame.label.clone();
@@ -2265,7 +2265,7 @@ mod tests {
     }
 
     #[test]
-    fn test_typecheck_let_type_annotation() {
+    fn typecheck_let_type_annotation() {
         let tmp_generator = TmpGenerator::default();
         let level = Level::new(&tmp_generator, Some(Label::top()), "f", &[]);
         let level_label = level.frame.label.clone();
@@ -2291,7 +2291,7 @@ mod tests {
     }
 
     #[test]
-    fn test_typecheck_let_type_annotation_err() {
+    fn typecheck_let_type_annotation_err() {
         let tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
@@ -2309,7 +2309,7 @@ mod tests {
     }
 
     #[test]
-    fn test_typecheck_fn_call_undefined_err() {
+    fn typecheck_fn_call_undefined_err() {
         let tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
@@ -2325,7 +2325,7 @@ mod tests {
     }
 
     #[test]
-    fn test_typecheck_fn_call_not_fn_err() {
+    fn typecheck_fn_call_not_fn_err() {
         let tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
         let label_f = tmp_generator.new_label();
@@ -2351,7 +2351,7 @@ mod tests {
     }
 
     #[test]
-    fn test_typecheck_fn_call_arity_mismatch() {
+    fn typecheck_fn_call_arity_mismatch() {
         let tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
         let label_f = tmp_generator.new_label();
@@ -2377,7 +2377,7 @@ mod tests {
     }
 
     #[test]
-    fn test_typecheck_fn_call_arg_type_mismatch() {
+    fn typecheck_fn_call_arg_type_mismatch() {
         let tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
         let label_f = tmp_generator.new_label();
@@ -2406,7 +2406,7 @@ mod tests {
     }
 
     #[test]
-    fn test_typecheck_fn_call_returns_aliased_type() {
+    fn typecheck_fn_call_returns_aliased_type() {
         let tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
         let label_f = tmp_generator.new_label();
@@ -2433,7 +2433,7 @@ mod tests {
     }
 
     #[test]
-    fn test_typecheck_typedef() {
+    fn typecheck_typedef() {
         let tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
@@ -2453,7 +2453,7 @@ mod tests {
     }
 
     #[test]
-    fn test_typecheck_typedef_err() {
+    fn typecheck_typedef_err() {
         let tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
@@ -2476,7 +2476,7 @@ mod tests {
     }
 
     #[test]
-    fn test_typecheck_expr_typedef() {
+    fn typecheck_expr_typedef() {
         let tmp_generator = TmpGenerator::default();
         let level = Level::new(&tmp_generator, Some(Label::top()), "f", &[]);
         let level_label = level.frame.label.clone();
@@ -2507,7 +2507,7 @@ mod tests {
     }
 
     #[test]
-    fn test_recursive_typedef() {
+    fn recursive_typedef() {
         let tmp_generator = TmpGenerator::default();
 
         let mut env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1, Label::top());
@@ -2522,7 +2522,7 @@ mod tests {
     }
 
     #[test]
-    fn test_check_for_type_decl_cycles_err1() {
+    fn check_for_type_decl_cycles_err1() {
         let mut env = Env::new(TmpGenerator::default(), EMPTY_SOURCEMAP.1, Label::top());
         env.insert_type("a".to_owned(), Type::Alias("a".to_owned()), zspan!());
         assert_eq!(
@@ -2532,7 +2532,7 @@ mod tests {
     }
 
     #[test]
-    fn test_check_for_type_decl_cycles_err2() {
+    fn check_for_type_decl_cycles_err2() {
         let mut env = Env::new(TmpGenerator::default(), EMPTY_SOURCEMAP.1, Label::top());
         env.insert_type("a".to_owned(), Type::Alias("b".to_owned()), zspan!());
         env.insert_type("b".to_owned(), Type::Alias("c".to_owned()), zspan!());
@@ -2544,7 +2544,7 @@ mod tests {
     }
 
     #[test]
-    fn test_check_for_type_decl_cycles() {
+    fn check_for_type_decl_cycles() {
         let mut env = Env::new(TmpGenerator::default(), EMPTY_SOURCEMAP.1, Label::top());
         env.insert_type("a".to_owned(), Type::Alias("b".to_owned()), zspan!());
         env.insert_type("b".to_owned(), Type::Alias("c".to_owned()), zspan!());
@@ -2552,7 +2552,7 @@ mod tests {
     }
 
     #[test]
-    fn test_duplicate_type_decl() {
+    fn duplicate_type_decl() {
         let mut env = Env::new(TmpGenerator::default(), EMPTY_SOURCEMAP.1, Label::top());
         env.typecheck_type_decl(&zspan!(ast::TypeDecl {
             id: zspan!("a".to_owned()),
@@ -2573,7 +2573,7 @@ mod tests {
     }
 
     #[test]
-    fn test_check_for_invalid_types_in_fn_sig() {
+    fn check_for_invalid_types_in_fn_sig() {
         let tmp_generator = TmpGenerator::default();
         let label_f = tmp_generator.new_label();
 
@@ -2594,7 +2594,7 @@ mod tests {
     }
 
     #[test]
-    fn test_typecheck_first_pass() {
+    fn typecheck_first_pass() {
         let tmp_generator = TmpGenerator::default();
 
         let mut env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1, Label::top());
@@ -2626,7 +2626,7 @@ mod tests {
     }
 
     #[test]
-    fn test_typecheck_fn_decl_duplicate() {
+    fn typecheck_fn_decl_duplicate() {
         let tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
@@ -2653,7 +2653,7 @@ mod tests {
     }
 
     #[test]
-    fn test_typecheck_fn_decl_duplicate_param() {
+    fn typecheck_fn_decl_duplicate_param() {
         let tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
@@ -2681,7 +2681,7 @@ mod tests {
     }
 
     #[test]
-    fn test_typecheck_fn_decl() {
+    fn typecheck_fn_decl() {
         let tmp_generator = TmpGenerator::default();
 
         let mut env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1, Label::top());
@@ -2716,7 +2716,7 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_type() {
+    fn validate_type() {
         let mut env = Env::new(TmpGenerator::default(), EMPTY_SOURCEMAP.1, Label::top());
         let mut record_fields = HashMap::new();
         record_fields.insert(
@@ -2742,7 +2742,7 @@ mod tests {
     }
 
     #[test]
-    fn test_typecheck_record_missing_fields() {
+    fn typecheck_record_missing_fields() {
         let tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
@@ -2765,7 +2765,7 @@ mod tests {
     }
 
     #[test]
-    fn test_typecheck_record_invalid_fields() {
+    fn typecheck_record_invalid_fields() {
         let tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
@@ -2786,7 +2786,7 @@ mod tests {
     }
 
     #[test]
-    fn test_typecheck_record_duplicate_field() {
+    fn typecheck_record_duplicate_field() {
         let tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
@@ -2827,7 +2827,7 @@ mod tests {
     }
 
     #[test]
-    fn test_typecheck_record() {
+    fn typecheck_record() {
         let tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
@@ -2865,7 +2865,7 @@ mod tests {
     }
 
     #[test]
-    fn test_typecheck_record_field_type_mismatch() {
+    fn typecheck_record_field_type_mismatch() {
         let tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
@@ -2894,7 +2894,7 @@ mod tests {
     }
 
     #[test]
-    fn test_typecheck_fn_independent() {
+    fn typecheck_fn_independent() {
         let tmp_generator = TmpGenerator::default();
 
         let mut env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1, Label::top());
@@ -2929,7 +2929,7 @@ mod tests {
     }
 
     #[test]
-    fn test_typecheck_fn_body() {
+    fn typecheck_fn_body() {
         let tmp_generator = TmpGenerator::default();
 
         let mut env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1, Label::top());
@@ -2958,7 +2958,7 @@ mod tests {
     }
 
     #[test]
-    fn test_typecheck_seq_independent() {
+    fn typecheck_seq_independent() {
         let tmp_generator = TmpGenerator::default();
         let level = Level::new(&tmp_generator, Some(Label::top()), "f", &[]);
         let level_label = level.frame.label.clone();
@@ -2987,7 +2987,7 @@ mod tests {
     }
 
     #[test]
-    fn test_typecheck_seq_captures_value() {
+    fn typecheck_seq_captures_value() {
         let tmp_generator = TmpGenerator::default();
         let level = Level::new(&tmp_generator, Some(Label::top()), "f", &[]);
         let level_label = level.frame.label.clone();
@@ -3022,7 +3022,7 @@ mod tests {
     }
 
     #[test]
-    fn test_illegal_let_expr() {
+    fn illegal_let_expr() {
         let tmp_generator = TmpGenerator::default();
         let level = Level::new(&tmp_generator, Some(Label::top()), "f", &[]);
         let level_label = level.frame.label.clone();
@@ -3051,7 +3051,7 @@ mod tests {
     }
 
     #[test]
-    fn test_assign_immut_err() {
+    fn assign_immut_err() {
         let tmp_generator = TmpGenerator::default();
         let level = Level::new(&tmp_generator, Some(Label::top()), "f", &[]);
         let level_label = level.frame.label.clone();
@@ -3088,7 +3088,7 @@ mod tests {
     }
 
     #[test]
-    fn test_assign_record_field_immut_err() {
+    fn assign_record_field_immut_err() {
         let tmp_generator = TmpGenerator::default();
         let level = Level::new(&tmp_generator, Some(Label::top()), "f", &[]);
         let level_label = level.frame.label.clone();
@@ -3138,7 +3138,7 @@ mod tests {
     }
 
     #[test]
-    fn test_assign_record_field_type_mismatch() {
+    fn assign_record_field_type_mismatch() {
         let tmp_generator = TmpGenerator::default();
         let level = Level::new(&tmp_generator, Some(Label::top()), "f", &[]);
         let level_label = level.frame.label.clone();
@@ -3188,7 +3188,7 @@ mod tests {
     }
 
     #[test]
-    fn test_assign_record_field_type() {
+    fn assign_record_field_type() {
         let tmp_generator = TmpGenerator::default();
         let level = Level::new(&tmp_generator, Some(Label::top()), "f", &[]);
         let level_label = level.frame.label.clone();
@@ -3236,7 +3236,7 @@ mod tests {
     }
 
     #[test]
-    fn test_assign_array_immut_err() {
+    fn assign_array_immut_err() {
         let tmp_generator = TmpGenerator::default();
         let level = Level::new(&tmp_generator, Some(Label::top()), "f", &[]);
         let level_label = level.frame.label.clone();
@@ -3277,7 +3277,7 @@ mod tests {
     }
 
     #[test]
-    fn test_assign_array_type_mismatch() {
+    fn assign_array_type_mismatch() {
         let tmp_generator = TmpGenerator::default();
         let level = Level::new(&tmp_generator, Some(Label::top()), "f", &[]);
         let level_label = level.frame.label.clone();
@@ -3318,7 +3318,7 @@ mod tests {
     }
 
     #[test]
-    fn test_assign_array() {
+    fn assign_array() {
         let tmp_generator = TmpGenerator::default();
         let level = Level::new(&tmp_generator, Some(Label::top()), "f", &[]);
         let level_label = level.frame.label.clone();
@@ -3356,7 +3356,7 @@ mod tests {
     }
 
     #[test]
-    fn test_translate_assign_to_fn() {
+    fn translate_assign_to_fn() {
         let tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
@@ -3380,7 +3380,7 @@ mod tests {
     }
 
     #[test]
-    fn test_typecheck_array() {
+    fn typecheck_array() {
         let tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
@@ -3397,7 +3397,7 @@ mod tests {
     }
 
     #[test]
-    fn test_typecheck_array_const_expr_len() {
+    fn typecheck_array_const_expr_len() {
         let tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
@@ -3418,7 +3418,7 @@ mod tests {
     }
 
     #[test]
-    fn test_typecheck_array_negative_len_err() {
+    fn typecheck_array_negative_len_err() {
         let tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
@@ -3435,7 +3435,7 @@ mod tests {
     }
 
     #[test]
-    fn test_typecheck_array_non_constant_expr_err() {
+    fn typecheck_array_non_constant_expr_err() {
         let tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
@@ -3456,7 +3456,7 @@ mod tests {
     }
 
     #[test]
-    fn test_typecheck_if_then() {
+    fn typecheck_if_then() {
         let tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
@@ -3474,7 +3474,7 @@ mod tests {
     }
 
     #[test]
-    fn test_typecheck_if_then_type_mismatch() {
+    fn typecheck_if_then_type_mismatch() {
         let tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
@@ -3492,7 +3492,7 @@ mod tests {
     }
 
     #[test]
-    fn test_typecheck_if_then_else() {
+    fn typecheck_if_then_else() {
         let tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
@@ -3510,7 +3510,7 @@ mod tests {
     }
 
     #[test]
-    fn test_typecheck_if_then_else_type_mismatch() {
+    fn typecheck_if_then_else_type_mismatch() {
         let tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
@@ -3528,7 +3528,7 @@ mod tests {
     }
 
     #[test]
-    fn test_typecheck_range() {
+    fn typecheck_range() {
         let tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
@@ -3545,7 +3545,7 @@ mod tests {
     }
 
     #[test]
-    fn test_typecheck_range_type_mismatch() {
+    fn typecheck_range_type_mismatch() {
         let tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
@@ -3562,7 +3562,7 @@ mod tests {
     }
 
     #[test]
-    fn test_typecheck_for() {
+    fn typecheck_for() {
         let tmp_generator = TmpGenerator::default();
         let level = Level::new(&tmp_generator, Some(Label::top()), "f", &[]);
         let level_label = level.frame.label.clone();
@@ -3592,7 +3592,7 @@ mod tests {
     }
 
     #[test]
-    fn test_typecheck_for_range_type_mismatch() {
+    fn typecheck_for_range_type_mismatch() {
         let tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
@@ -3613,7 +3613,7 @@ mod tests {
     }
 
     #[test]
-    fn test_typecheck_for_body_type_mismatch() {
+    fn typecheck_for_body_type_mismatch() {
         let tmp_generator = TmpGenerator::default();
         let level = Level::new(&tmp_generator, Some(Label::top()), "f", &[]);
         let level_label = level.frame.label.clone();
@@ -3643,7 +3643,7 @@ mod tests {
     }
 
     #[test]
-    fn test_typecheck_while() {
+    fn typecheck_while() {
         let tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
@@ -3660,7 +3660,7 @@ mod tests {
     }
 
     #[test]
-    fn test_typecheck_while_cond_type_mismatch() {
+    fn typecheck_while_cond_type_mismatch() {
         let tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
@@ -3676,7 +3676,7 @@ mod tests {
     }
 
     #[test]
-    fn test_typecheck_while_body_type_mismatch() {
+    fn typecheck_while_body_type_mismatch() {
         let tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
@@ -3693,7 +3693,7 @@ mod tests {
     }
 
     #[test]
-    fn test_typecheck_compare() {
+    fn typecheck_compare() {
         let tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
@@ -3711,7 +3711,7 @@ mod tests {
     }
 
     #[test]
-    fn test_typecheck_compare_type_mismatch() {
+    fn typecheck_compare_type_mismatch() {
         let tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
@@ -3729,7 +3729,7 @@ mod tests {
     }
 
     #[test]
-    fn test_typecheck_enum_arity_mismatch() {
+    fn typecheck_enum_arity_mismatch() {
         let tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
@@ -3761,7 +3761,7 @@ mod tests {
     }
 
     #[test]
-    fn test_typecheck_enum_type_mismatch() {
+    fn typecheck_enum_type_mismatch() {
         let tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
@@ -3794,7 +3794,7 @@ mod tests {
 
     #[test]
     #[should_panic] // FIXME
-    fn test_typecheck_closure() {
+    fn typecheck_closure() {
         let tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
@@ -3815,7 +3815,7 @@ mod tests {
 
     #[test]
     #[should_panic] // FIXME
-    fn test_typecheck_closure_captures_value() {
+    fn typecheck_closure_captures_value() {
         let tmp_generator = TmpGenerator::default();
         let level = Level::new(&tmp_generator, Some(Label::top()), "f", &[]);
         let level_label = level.frame.label.clone();
@@ -3852,7 +3852,7 @@ mod tests {
     }
 
     #[test]
-    fn test_typecheck_closure_duplicate_param() {
+    fn typecheck_closure_duplicate_param() {
         let tmp_generator = TmpGenerator::default();
         let level_label = Label::top();
 
@@ -3878,7 +3878,7 @@ mod tests {
     }
 
     #[test]
-    fn test_typecheck_fn_decl_exprs_in_seq_recursive() {
+    fn typecheck_fn_decl_exprs_in_seq_recursive() {
         let tmp_generator = TmpGenerator::default();
         let level = Level::new(&tmp_generator, Some(Label::top()), "f", &[]);
         let level_label = level.frame.label.clone();
@@ -3928,7 +3928,7 @@ mod tests {
     }
 
     #[test]
-    fn test_typecheck_fn_decl_exprs_in_seq_captures_correctly() {
+    fn typecheck_fn_decl_exprs_in_seq_captures_correctly() {
         let tmp_generator = TmpGenerator::default();
         let level = Level::new(&tmp_generator, Some(Label::top()), "f", &[]);
         let level_label = level.frame.label.clone();
@@ -3964,7 +3964,7 @@ mod tests {
     }
 
     #[test]
-    fn test_add_static_link() {
+    fn add_static_link() {
         let mut tmp_generator = TmpGenerator::default();
         let level = Level::new(&mut tmp_generator, Some(Label::top()), "f", &[]);
 
@@ -3973,7 +3973,7 @@ mod tests {
     }
 
     #[test]
-    fn test_follows_static_links() {
+    fn follows_static_links() {
         {
             let mut tmp_generator = TmpGenerator::default();
             let frame = Frame::new(&mut tmp_generator, "f", &[true]);
@@ -4030,7 +4030,7 @@ mod tests {
     }
 
     #[test]
-    fn test_illegal_break_continue_expr() {
+    fn illegal_break_continue_expr() {
         let tmp_generator = TmpGenerator::default();
         let level = Level::new(&tmp_generator, Some(Label::top()), "f", &[]);
         let level_label = level.frame.label.clone();

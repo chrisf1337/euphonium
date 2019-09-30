@@ -415,7 +415,7 @@ mod tests {
     }
 
     #[test]
-    fn test_read_write() {
+    fn read_write() {
         let mut interpreter = Interpreter::default();
         interpreter.write_u64(0x12345, 0);
         assert_eq!(interpreter.read_u64(0), 0x12345);
@@ -431,7 +431,7 @@ mod tests {
     }
 
     #[test]
-    fn test_deref() {
+    fn deref() {
         let mut interpreter = Interpreter::default();
         interpreter.write_u64(0x54321, 0x234);
         interpreter.write_u64(0x234, 0x123);
@@ -448,7 +448,7 @@ mod tests {
     }
 
     #[test]
-    fn test_translate_simple_var() {
+    fn translate_simple_var() {
         let mut tmp_generator = TmpGenerator::default();
         let mut interpreter = Interpreter::default();
         let mut level = Level::new(&mut tmp_generator, Some(Label::top()), "f", &[]);
@@ -468,7 +468,7 @@ mod tests {
     }
 
     #[test]
-    fn test_translate_pointer_offset() {
+    fn translate_pointer_offset() {
         let mut tmp_generator = TmpGenerator::default();
         let mut interpreter = Interpreter::default();
         let mut level = Level::new(&mut tmp_generator, Some(Label::top()), "f", &[]);
@@ -519,7 +519,7 @@ mod tests {
     }
 
     #[test]
-    fn test_move() {
+    fn r#move() {
         let mut interpreter = Interpreter::default();
         *interpreter.sp_mut() -= frame::WORD_SIZE as u64;
         interpreter.interpret_stmt(&ir::Stmt::Move(
@@ -530,7 +530,7 @@ mod tests {
     }
 
     #[test]
-    fn test_cjump() {
+    fn cjump() {
         let mut tmp_generator = TmpGenerator::default();
         let t_label = tmp_generator.new_label();
         let f_label = tmp_generator.new_label();
@@ -558,7 +558,7 @@ mod tests {
     }
 
     #[test]
-    fn test_if_ir() {
+    fn if_ir() {
         let tmp_generator = TmpGenerator::default();
         let level = Level::new(&tmp_generator, Some(Label::top()), "f", &[]);
         let level_label = level.frame.label.clone();
@@ -605,7 +605,7 @@ mod tests {
     }
 
     #[test]
-    fn test_if_as_expr_ir() {
+    fn if_as_expr_ir() {
         let tmp_generator = TmpGenerator::default();
         let level = Level::new(&tmp_generator, Some(Label::top()), "f", &[]);
         let level_label = level.frame.label.clone();
@@ -659,7 +659,7 @@ mod tests {
     }
 
     #[test]
-    fn test_array_subscript() {
+    fn array_subscript() {
         let tmp_generator = TmpGenerator::default();
         let level = Level::new(&tmp_generator, Some(Label::top()), "f", &[]);
         let level_label = level.frame.label.clone();
@@ -751,7 +751,7 @@ mod tests {
     }
 
     #[test]
-    fn test_array_bounds_checking_under() {
+    fn array_bounds_checking_under() {
         let tmp_generator = TmpGenerator::default();
         let level = Level::new(&tmp_generator, Some(Label::top()), "f", &[]);
         let level_label = level.frame.label.clone();
@@ -805,7 +805,7 @@ mod tests {
     }
 
     #[test]
-    fn test_record_expr() -> Result<(), Vec<TypecheckErr>> {
+    fn record_expr() -> Result<(), Vec<TypecheckErr>> {
         let tmp_generator = TmpGenerator::default();
         let level = Level::new(&tmp_generator, Some(Label::top()), "f", &[]);
         let level_label = level.frame.label.clone();
@@ -885,7 +885,7 @@ mod tests {
     }
 
     #[test]
-    fn test_simple_while() -> Result<(), InterpreterTestErr> {
+    fn simple_while() -> Result<(), InterpreterTestErr> {
         let expr = parser::parse_expr(
             r#"
             {

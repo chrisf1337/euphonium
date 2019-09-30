@@ -20,7 +20,7 @@ mod tests {
     use crate::{ast::*, utils::EMPTY_SOURCEMAP};
 
     #[test]
-    fn test_tydecls() -> parser::Result<()> {
+    fn tydecls() -> parser::Result<()> {
         let decls: Vec<_DeclType> =
             parser::parse_program(EMPTY_SOURCEMAP.1, include_str!("../test-euph-files/test_tydecls.euph"))?
                 .into_iter()
@@ -64,7 +64,7 @@ mod tests {
     }
 
     #[test]
-    fn test_exprs() -> parser::Result<()> {
+    fn exprs() -> parser::Result<()> {
         let decls: Vec<_DeclType> =
             parser::parse_program(EMPTY_SOURCEMAP.1, include_str!("../test-euph-files/test_exprs.euph"))?
                 .into_iter()
@@ -192,7 +192,7 @@ mod tests {
     }
 
     #[test]
-    fn test_parser() -> parser::Result<()> {
+    fn parser() -> parser::Result<()> {
         let decls: Vec<_DeclType> =
             parser::parse_program(EMPTY_SOURCEMAP.1, include_str!("../test-euph-files/test1.euph"))?
                 .into_iter()
@@ -251,7 +251,7 @@ mod tests {
     }
 
     #[test]
-    fn test_enum_exprs() -> parser::Result<()> {
+    fn enum_exprs() -> parser::Result<()> {
         let decls: Vec<_DeclType> = parser::parse_program(
             EMPTY_SOURCEMAP.1,
             include_str!("../test-euph-files/test_enum_exprs.euph"),
@@ -288,7 +288,7 @@ mod tests {
     }
 
     #[test]
-    fn test_parser_array_negative_index_err() {
+    fn parser_array_negative_index_err() {
         let decls = parser::parse_program(EMPTY_SOURCEMAP.1, "type a = [int; -3]");
         assert!(decls.is_err());
     }

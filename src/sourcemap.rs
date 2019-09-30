@@ -55,7 +55,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_add_file() {
+    fn add_file() {
         let mut sourcemap = Sourcemap::default();
         dbg!(sourcemap
             .add_file("test/test_exprs.euph", "fn f() = {};")
