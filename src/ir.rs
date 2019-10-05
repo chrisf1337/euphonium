@@ -184,6 +184,7 @@ pub enum BinOp {
     RShift,
     ArithRShift,
     Xor,
+    Mod,
 }
 
 impl fmt::Debug for BinOp {
@@ -199,6 +200,7 @@ impl fmt::Debug for BinOp {
             BinOp::RShift => write!(f, ">>"),
             BinOp::ArithRShift => write!(f, "A>>"),
             BinOp::Xor => write!(f, "^"),
+            BinOp::Mod => write!(f, "%"),
         }
     }
 }
@@ -210,6 +212,7 @@ impl From<ast::ArithOp> for BinOp {
             ast::ArithOp::Sub => BinOp::Sub,
             ast::ArithOp::Mul => BinOp::Mul,
             ast::ArithOp::Div => BinOp::Div,
+            ast::ArithOp::Mod => BinOp::Mod,
         }
     }
 }

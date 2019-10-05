@@ -329,6 +329,7 @@ pub struct Env<'a> {
 
     level_label: Label,
     break_label: Option<Label>,
+    continue_label: Option<Label>,
 }
 
 impl<'a> Env<'a> {
@@ -359,6 +360,7 @@ impl<'a> Env<'a> {
 
             level_label,
             break_label: None,
+            continue_label: None,
         }
     }
 
@@ -379,8 +381,17 @@ impl<'a> Env<'a> {
             levels: self.levels.clone(),
             fragments: self.fragments.clone(),
 
-            level_label,
-            break_label: self.break_label.clone(),
+            level_label: level_label.clone(),
+            break_label: if level_label == self.level_label {
+                self.break_label.clone()
+            } else {
+                None
+            },
+            continue_label: if level_label == self.level_label {
+                self.continue_label.clone()
+            } else {
+                None
+            },
         }
     }
 
@@ -1019,17 +1030,36 @@ impl<'a> Env<'a> {
                 t: Rc::new(Type::Unit),
                 expr: translate::Expr::Expr(ir::Expr::Const(0)),
             }),
-            ExprType::Continue | ExprType::Break => {
-                if self.break_label == None {
+            ExprType::Continue => {
+                if let Some(continue_label) = self.continue_label.as_ref() {
+                    Ok(TranslateOutput {
+                        t: Rc::new(Type::Unit),
+                        expr: translate::Expr::Stmt(ir::Stmt::Jump(
+                            ir::Expr::Label(continue_label.clone()),
+                            vec![continue_label.clone()],
+                        )),
+                    })
+                } else {
                     Err(vec![TypecheckErr::new_err(
                         TypecheckErrType::IllegalBreakOrContinue,
                         expr.span,
                     )])
-                } else {
+                }
+            }
+            ExprType::Break => {
+                if let Some(break_label) = self.break_label.as_ref() {
                     Ok(TranslateOutput {
                         t: Rc::new(Type::Unit),
-                        expr: translate::Expr::Expr(ir::Expr::Const(0)),
+                        expr: translate::Expr::Stmt(ir::Stmt::Jump(
+                            ir::Expr::Label(break_label.clone()),
+                            vec![break_label.clone()],
+                        )),
                     })
+                } else {
+                    Err(vec![TypecheckErr::new_err(
+                        TypecheckErrType::IllegalBreakOrContinue,
+                        expr.span,
+                    )])
                 }
             }
             ExprType::BoolLiteral(b) => Ok(TranslateOutput {
@@ -1514,6 +1544,7 @@ impl<'a> Env<'a> {
                     ArithOp::Sub => Ok(l - r),
                     ArithOp::Mul => Ok(l * r),
                     ArithOp::Div => Ok(l / r),
+                    ArithOp::Mod => Ok(l % r),
                 }
             }
             _ => Err(vec![TypecheckErr::new_err(
@@ -1728,15 +1759,19 @@ impl<'a> Env<'a> {
 
     fn typecheck_while(&self, Spanned { t: expr, .. }: &Spanned<While>) -> Result<TranslateOutput<Rc<Type>>> {
         let cond = self.assert_ty(&expr.cond, &Rc::new(Type::Bool))?.expr;
-        let body = self
-            .assert_ty(&expr.body, &Rc::new(Type::Unit))?
-            .expr
-            .unwrap_stmt(&self.tmp_generator);
 
         let test_label = self.tmp_generator.new_label();
         let done_label = self.tmp_generator.new_label();
         let cond_true_label = self.tmp_generator.new_label();
         let gen_stmt = cond.unwrap_cond();
+
+        let mut child_env = self.new_child(self.level_label.clone());
+        child_env.continue_label = Some(test_label.clone());
+        child_env.break_label = Some(done_label.clone());
+        let body = child_env
+            .assert_ty(&expr.body, &Rc::new(Type::Unit))?
+            .expr
+            .unwrap_stmt(&self.tmp_generator);
 
         let stmts = ir::Stmt::seq(vec![
             ir::Stmt::Label(test_label.clone()),

@@ -149,7 +149,8 @@ impl Interpreter {
                     ir::BinOp::Sub => l.wrapping_sub(r),
                     ir::BinOp::Mul => l.wrapping_mul(r),
                     ir::BinOp::Div => l.wrapping_div(r),
-                    _ => unimplemented!(),
+                    ir::BinOp::Mod => l % r,
+                    _ => unimplemented!("{:?}", op),
                 }
             }
             ir::Expr::Mem(expr) => {
@@ -916,6 +917,80 @@ mod tests {
         let result = interpreter.run_expr(&tmp_generator, expr);
         assert_eq!(result, Some(10));
 
+        Ok(())
+    }
+
+    #[test]
+    fn while_break() -> Result<(), InterpreterTestErr> {
+        let expr = parser::parse_expr(
+            r#"
+            {
+                let mut a = 0;
+                while true {
+                    a = a + 1;
+                    if a == 10 {
+                        break;
+                    };
+                };
+                a
+            }
+        "#,
+        )?;
+
+        let tmp_generator = TmpGenerator::default();
+        let level = Level::new(&tmp_generator, Some(Label::top()), "f", &[]);
+        let level_label = level.frame.label.clone();
+
+        let env = Env::new(tmp_generator.clone(), EMPTY_SOURCEMAP.1, level_label.clone());
+        {
+            let mut levels = env.levels.borrow_mut();
+            levels.insert(level_label, level);
+        }
+
+        let expr = env.typecheck_expr(&expr)?.expr;
+
+        let mut interpreter = Interpreter::default();
+        let result = interpreter.run_expr(&tmp_generator, expr);
+        assert_eq!(result, Some(10));
+        Ok(())
+    }
+
+    #[test]
+    fn while_continue() -> Result<(), InterpreterTestErr> {
+        let expr = parser::parse_expr(
+            r#"
+            {
+                let mut a = 0;
+                let mut b = true;
+                while true {
+                    a = a + 1;
+                    if b {
+                        b = false;
+                        continue;
+                    } else {
+                        break;
+                    };
+                };
+                a
+            }
+        "#,
+        )?;
+
+        let tmp_generator = TmpGenerator::default();
+        let level = Level::new(&tmp_generator, Some(Label::top()), "f", &[]);
+        let level_label = level.frame.label.clone();
+
+        let env = Env::new(tmp_generator.clone(), EMPTY_SOURCEMAP.1, level_label.clone());
+        {
+            let mut levels = env.levels.borrow_mut();
+            levels.insert(level_label, level);
+        }
+
+        let expr = env.typecheck_expr(&expr)?.expr;
+
+        let mut interpreter = Interpreter::default();
+        let result = interpreter.run_expr(&tmp_generator, expr);
+        assert_eq!(result, Some(2));
         Ok(())
     }
 }

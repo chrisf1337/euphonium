@@ -312,6 +312,12 @@ Factor: ast::Expr = {
         ast::Expr::new(ast::ExprType::Arith(Box::new(ast::Spanned::new(ast::Arith { l, op, r }, span))),
             span)
     },
+    <l:Factor> <op: Spanned<"%">> <r:TermOrNeg> => {
+        let span = l.span.merge(r.span);
+        let op = op.map(|_| ast::ArithOp::Mod);
+        ast::Expr::new(ast::ExprType::Arith(Box::new(ast::Spanned::new(ast::Arith { l, op, r }, span))),
+            span)
+    },
     <l:Factor> <op: Spanned<"&&">> <r:TermOrNeg> => {
         let span = l.span.merge(r.span);
         let op = op.map(|_| ast::BoolOp::And);
