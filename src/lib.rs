@@ -8,6 +8,7 @@ mod fragment;
 mod frame;
 mod ir;
 pub mod lexer;
+mod log;
 pub mod parser;
 pub mod sourcemap;
 pub mod tmp;

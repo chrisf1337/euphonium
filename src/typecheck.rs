@@ -6,6 +6,7 @@ use crate::{
     fragment::{FnFragment, Fragment},
     frame::{self, Frame},
     ir,
+    log::TYPECHECK_LOG,
     tmp::{self, Label, TmpGenerator},
     translate::{self, Access, Level},
 };
@@ -13,6 +14,7 @@ use codespan::{FileId, Span};
 use codespan_reporting;
 use itertools::izip;
 use maplit::hashmap;
+use slog::warn;
 use std::{
     cell::RefCell,
     collections::{HashMap, HashSet},
@@ -1350,6 +1352,7 @@ impl<'a> Env<'a> {
                     return Err(errors);
                 }
 
+                warn!(TYPECHECK_LOG, "unimplemented");
                 Ok(TranslateOutput {
                     t: return_type.clone(),
                     expr: translate::Expr::Expr(ir::Expr::Const(0)),
