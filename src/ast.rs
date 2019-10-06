@@ -404,7 +404,7 @@ pub struct Bool {
 }
 
 impl Bool {
-    fn into_if(self) -> If {
+    pub fn into_if(self) -> If {
         let lspan = self.l.span;
         match self.op.t {
             BoolOp::And => If {
@@ -474,21 +474,21 @@ impl From<Compare> for _Compare {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Range {
-    pub start: Expr,
-    pub end: Expr,
+    pub lower: Expr,
+    pub upper: Expr,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct _Range {
-    pub start: _ExprType,
-    pub end: _ExprType,
+    pub lower: _ExprType,
+    pub upper: _ExprType,
 }
 
 impl From<Range> for _Range {
     fn from(range: Range) -> _Range {
         _Range {
-            start: range.start.t.into(),
-            end: range.end.t.into(),
+            lower: range.lower.t.into(),
+            upper: range.upper.t.into(),
         }
     }
 }

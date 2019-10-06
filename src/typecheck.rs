@@ -68,6 +68,7 @@ pub enum TypecheckErrType {
     NotAnArray(Rc<Type>),
     NotAnEnum(Rc<Type>),
     NotAnEnumCase(String),
+    NotARangeLiteral,
     UndefinedVar(String),
     UndefinedFn(String),
     UndefinedField(String),
@@ -96,16 +97,22 @@ pub type TypecheckErr = Spanned<_TypecheckErr>;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct _TypecheckErr {
     pub ty: TypecheckErrType,
-    pub source: Option<Spanned<String>>,
+    pub secondary_messages: Vec<Spanned<String>>,
 }
 
 impl TypecheckErr {
     fn new_err(ty: TypecheckErrType, span: FileSpan) -> Self {
-        TypecheckErr::new(_TypecheckErr { ty, source: None }, span)
+        TypecheckErr::new(
+            _TypecheckErr {
+                ty,
+                secondary_messages: vec![],
+            },
+            span,
+        )
     }
 
-    fn with_source(mut self, source: Spanned<String>) -> Self {
-        self.source = Some(source);
+    fn with_secondary_messages(mut self, messages: impl IntoIterator<Item = Spanned<String>>) -> Self {
+        self.secondary_messages = messages.into_iter().collect();
         self
     }
 
@@ -122,10 +129,11 @@ impl TypecheckErr {
                 let ty = env.var(fun).unwrap();
                 format!("not a function: {} (has type {:?})", fun, ty)
             }
-            NotARecord(ty) => format!("not a record: (has type {:?})", ty.as_ref()),
-            NotAnArray(ty) => format!("not an array: (has type {:?})", ty.as_ref()),
-            NotAnEnum(ty) => format!("not an enum: (has type {:?})", ty.as_ref()),
+            NotARecord(ty) => format!("not a record (has type {:?})", ty.as_ref()),
+            NotAnArray(ty) => format!("not an array (has type {:?})", ty.as_ref()),
+            NotAnEnum(ty) => format!("not an enum (has type {:?})", ty.as_ref()),
             NotAnEnumCase(case_id) => format!("not an enum case: {}", case_id),
+            NotARangeLiteral => "not a range literal".to_owned(),
             UndefinedVar(var) => format!("undefined variable: {}", var),
             UndefinedFn(fun) => format!("undefined function: {}", fun),
             UndefinedField(field) => format!("undefined field: {}", field),
@@ -150,12 +158,13 @@ impl TypecheckErr {
 
         let primary_label = codespan_reporting::diagnostic::Label::new(self.span.file_id, self.span.span, &msg);
         let mut diagnostic = codespan_reporting::diagnostic::Diagnostic::new_error(&msg, primary_label);
-        if let Some(source) = self.t.source.as_ref() {
-            diagnostic = diagnostic.with_secondary_labels(vec![codespan_reporting::diagnostic::Label::new(
-                source.span.file_id,
-                source.span.span,
-                &source.t,
-            )]);
+        if !self.secondary_messages.is_empty() {
+            diagnostic = diagnostic.with_secondary_labels(
+                self.secondary_messages
+                    .iter()
+                    .map(|msg| codespan_reporting::diagnostic::Label::new(msg.span.file_id, msg.span.span, &msg.t))
+                    .collect::<Vec<codespan_reporting::diagnostic::Label>>(),
+            );
         }
         diagnostic
     }
@@ -750,10 +759,10 @@ impl<'a> Env<'a> {
                 TypecheckErrType::DuplicateFn(fn_decl.id.t.clone()),
                 fn_decl.id.span,
             )
-            .with_source(Spanned::new(
+            .with_secondary_messages(vec![Spanned::new(
                 format!("{} was defined here", fn_decl.id.t.clone()),
                 span,
-            ))]);
+            )])]);
         }
 
         let param_decl_spans = Self::check_for_duplicates(
@@ -764,10 +773,10 @@ impl<'a> Env<'a> {
                     TypecheckErrType::DuplicateParam(type_field.id.t.clone()),
                     type_field.span,
                 )
-                .with_source(Spanned::new(
+                .with_secondary_messages(vec![Spanned::new(
                     format!("{} was declared here", type_field.id.t.clone()),
                     span,
-                ))
+                )])
             },
         )?
         .values()
@@ -875,10 +884,10 @@ impl<'a> Env<'a> {
                 TypecheckErrType::DuplicateType(id.clone()),
                 decl.span,
             )
-            .with_source(Spanned::new(
+            .with_secondary_messages(vec![Spanned::new(
                 format!("{} was defined here", id.clone()),
                 self.type_def_span(&id).unwrap(),
-            ))]);
+            )])]);
         }
 
         let ty = Type::from_type_decl(decl.t.clone());
@@ -890,7 +899,10 @@ impl<'a> Env<'a> {
                     |field, span| {
                         let field_id = field.id.t.clone();
                         TypecheckErr::new_err(TypecheckErrType::DuplicateField(field_id.clone()), field.span)
-                            .with_source(Spanned::new(format!("{} was declared here", field_id), span))
+                            .with_secondary_messages(vec![Spanned::new(
+                                format!("{} was declared here", field_id),
+                                span,
+                            )])
                     },
                 )?
                 .into_iter()
@@ -906,7 +918,7 @@ impl<'a> Env<'a> {
                     |case, span| {
                         let case_id = case.id.t.clone();
                         TypecheckErr::new_err(TypecheckErrType::DuplicateEnumCase(case_id.clone()), case.span)
-                            .with_source(Spanned::new(format!("{} was declared here", case_id), span))
+                            .with_secondary_messages(vec![Spanned::new(format!("{} was declared here", case_id), span)])
                     },
                 )?;
 
@@ -1324,7 +1336,8 @@ impl<'a> Env<'a> {
                                     arg.span,
                                 );
                                 if let Some(decl_spans) = self.fn_param_decl_spans(id) {
-                                    err.source = Some(Spanned::new("declared here".to_owned(), decl_spans[index]));
+                                    err.secondary_messages =
+                                        vec![Spanned::new("declared here".to_owned(), decl_spans[index])];
                                 }
                                 errors.push(err);
                             }
@@ -1417,10 +1430,10 @@ impl<'a> Env<'a> {
                             TypecheckErrType::DuplicateField(field_assign.id.t.clone()),
                             field_assign.span,
                         )
-                        .with_source(Spanned::new(
+                        .with_secondary_messages(vec![Spanned::new(
                             format!("{} was defined here", field_assign.id.t.clone()),
                             span,
-                        ))
+                        )])
                     },
                 )?;
 
@@ -1449,10 +1462,10 @@ impl<'a> Env<'a> {
                                 TypecheckErrType::TypeMismatch(expected_type.clone(), actual_type.clone()),
                                 *span,
                             )
-                            .with_source(Spanned::new(
+                            .with_secondary_messages(vec![Spanned::new(
                                 format!("{} was declared here", field_id.t),
                                 self.record_field_decl_spans(&record_id.t).unwrap()[&field_id.t],
-                            )),
+                            )]),
                         );
                     }
 
@@ -1505,7 +1518,10 @@ impl<'a> Env<'a> {
                 TypecheckErrType::MutatingImmutable(root.clone()),
                 assign.lval.span,
             )
-            .with_source(Spanned::new(format!("{} was defined here", root.clone()), def_span))]);
+            .with_secondary_messages(vec![Spanned::new(
+                format!("{} was defined here", root.clone()),
+                def_span,
+            )])]);
         }
 
         let TranslateOutput {
@@ -1636,13 +1652,13 @@ impl<'a> Env<'a> {
                     TypecheckErrType::TypeMismatch(then_expr_type.clone(), else_expr_type.clone()),
                     *span,
                 )
-                .with_source(Spanned::new(
+                .with_secondary_messages(vec![Spanned::new(
                     format!(
                         "then branch has type {:?}, but else branch has type {:?}",
                         then_expr_type, else_expr_type
                     ),
                     *span,
-                ))]);
+                )])]);
             } else {
                 Some(match translated_else_expr {
                     translate::Expr::Stmt(stmt) => {
@@ -1723,8 +1739,8 @@ impl<'a> Env<'a> {
     }
 
     fn typecheck_range(&self, Spanned { t: expr, .. }: &Spanned<Range>) -> Result<TranslateOutput<Rc<Type>>> {
-        self.assert_ty(&expr.start, &Rc::new(Type::Int))?;
-        self.assert_ty(&expr.end, &Rc::new(Type::Int))?;
+        self.assert_ty(&expr.lower, &Rc::new(Type::Int))?;
+        self.assert_ty(&expr.upper, &Rc::new(Type::Int))?;
         Ok(TranslateOutput {
             t: Rc::new(Type::Iterator(Rc::new(Type::Int))),
             expr: translate::Expr::Expr(ir::Expr::Const(0)),
@@ -1733,36 +1749,107 @@ impl<'a> Env<'a> {
 
     fn typecheck_for(&self, Spanned { t: expr, .. }: &Spanned<For>) -> Result<TranslateOutput<Rc<Type>>> {
         self.assert_ty(&expr.range, &Rc::new(Type::Iterator(Rc::new(Type::Int))))?;
-        let mut child_env = self.new_child(self.level_label.clone());
-        let local = {
-            let mut levels = child_env.levels.borrow_mut();
-            let level = levels.get_mut(&self.level_label).unwrap();
-            level.alloc_local(&self.tmp_generator, true)
-        };
+        // Only support range literals in for loops for now
+        if let ExprType::Range(range_expr) = &expr.range.t {
+            let TranslateOutput { expr: lower_trexpr, .. } = self.typecheck_expr(&range_expr.lower)?;
+            let lower_ir_expr = lower_trexpr.unwrap_expr(&self.tmp_generator);
+            let TranslateOutput { expr: upper_trexpr, .. } = self.typecheck_expr(&range_expr.upper)?;
+            let upper_ir_expr = upper_trexpr.unwrap_expr(&self.tmp_generator);
 
-        child_env.insert_var(
-            expr.index.t.clone(),
-            EnvEntry {
-                ty: Rc::new(Type::Int),
-                immutable: false,
-                // FIXME
-                entry_type: EnvEntryType::Var(local),
-            },
-            expr.index.span,
-        );
-        child_env.assert_ty(&expr.body, &Rc::new(Type::Unit))?;
-        Ok(TranslateOutput {
-            t: Rc::new(Type::Unit),
-            expr: translate::Expr::Expr(ir::Expr::Const(0)),
-        })
+            let mut child_env = self.new_child(self.level_label.clone());
+            let (index_local, end_local) = {
+                let mut levels = child_env.levels.borrow_mut();
+                let level = levels.get_mut(&self.level_label).unwrap();
+                (
+                    level.alloc_local(&self.tmp_generator, true),
+                    level.alloc_local(&self.tmp_generator, true),
+                )
+            };
+
+            let levels = self.levels.borrow();
+            let index_trexpr = Env::translate_simple_var(&levels, &index_local, &self.level_label);
+            let index_expr = index_trexpr.unwrap_expr(&self.tmp_generator);
+            let index_expr_ = index_expr.clone(); // ???
+
+            let pre_stmts = vec![
+                ir::Stmt::Move(index_expr.clone(), lower_ir_expr.clone()),
+                ir::Stmt::Move(
+                    Env::translate_simple_var(&levels, &end_local, &self.level_label).unwrap_expr(&self.tmp_generator),
+                    upper_ir_expr.clone(),
+                ),
+            ];
+            let gen_stmt = Rc::new(move |true_label, false_label| {
+                ir::Stmt::CJump(
+                    index_expr_.clone(),
+                    ir::CompareOp::Lt,
+                    upper_ir_expr.clone(),
+                    true_label,
+                    false_label,
+                )
+            });
+            let test_label = self.tmp_generator.new_label();
+            let continue_label = self.tmp_generator.new_label();
+            let done_label = self.tmp_generator.new_label();
+            let cond_true_label = self.tmp_generator.new_label();
+
+            child_env.continue_label = Some(continue_label.clone());
+            child_env.break_label = Some(done_label.clone());
+            child_env.insert_var(
+                expr.index.t.clone(),
+                EnvEntry {
+                    ty: Rc::new(Type::Int),
+                    immutable: false,
+                    // FIXME
+                    entry_type: EnvEntryType::Var(index_local),
+                },
+                expr.index.span,
+            );
+
+            let body = child_env
+                .assert_ty(&expr.body, &Rc::new(Type::Unit))?
+                .expr
+                .unwrap_stmt(&self.tmp_generator);
+
+            let mut stmts = pre_stmts;
+            stmts.extend_from_slice(&[
+                ir::Stmt::Label(test_label.clone()),
+                gen_stmt(cond_true_label.clone(), done_label.clone()),
+                ir::Stmt::Label(cond_true_label),
+                body,
+                ir::Stmt::Label(continue_label.clone()),
+                ir::Stmt::Move(
+                    index_expr.clone(),
+                    ir::Expr::BinOp(
+                        Box::new(index_expr.clone()),
+                        ir::BinOp::Add,
+                        Box::new(ir::Expr::Const(1)),
+                    ),
+                ),
+                ir::Stmt::Jump(ir::Expr::Label(test_label.clone()), vec![test_label]),
+                ir::Stmt::Label(done_label),
+            ]);
+
+            Ok(TranslateOutput {
+                t: Rc::new(Type::Unit),
+                expr: translate::Expr::Stmt(ir::Stmt::seq(stmts)),
+            })
+        } else {
+            Err(vec![TypecheckErr::new_err(
+                TypecheckErrType::NotARangeLiteral,
+                expr.range.span,
+            )
+            .with_secondary_messages(vec![Spanned::new(
+                "only range literals are supported in for loops for now".to_owned(),
+                expr.range.span,
+            )])])
+        }
     }
 
     fn typecheck_while(&self, Spanned { t: expr, .. }: &Spanned<While>) -> Result<TranslateOutput<Rc<Type>>> {
-        let cond = self.assert_ty(&expr.cond, &Rc::new(Type::Bool))?.expr;
-
         let test_label = self.tmp_generator.new_label();
         let done_label = self.tmp_generator.new_label();
         let cond_true_label = self.tmp_generator.new_label();
+        let cond = self.assert_ty(&expr.cond, &Rc::new(Type::Bool))?.expr;
         let gen_stmt = cond.unwrap_cond();
 
         let mut child_env = self.new_child(self.level_label.clone());
@@ -1781,7 +1868,6 @@ impl<'a> Env<'a> {
             ir::Stmt::Jump(ir::Expr::Label(test_label.clone()), vec![test_label]),
             ir::Stmt::Label(done_label),
         ]);
-
         Ok(TranslateOutput {
             t: Rc::new(Type::Unit),
             expr: translate::Expr::Stmt(stmts),
@@ -1801,12 +1887,14 @@ impl<'a> Env<'a> {
         })
     }
 
-    fn typecheck_bool(&self, Spanned { t: expr, .. }: &Spanned<Bool>) -> Result<TranslateOutput<Rc<Type>>> {
+    fn typecheck_bool(&self, Spanned { t: expr, span }: &Spanned<Bool>) -> Result<TranslateOutput<Rc<Type>>> {
+        // We should still typecheck each element individually to get more informative error messages.
         self.assert_ty(&expr.l, &Rc::new(Type::Bool))?;
         self.assert_ty(&expr.r, &Rc::new(Type::Bool))?;
+        let if_expr = expr.clone().into_if();
         Ok(TranslateOutput {
             t: Rc::new(Type::Bool),
-            expr: translate::Expr::Expr(ir::Expr::Const(0)),
+            expr: self.typecheck_if(&Spanned::new(if_expr, *span))?.expr,
         })
     }
 
@@ -1822,8 +1910,8 @@ impl<'a> Env<'a> {
             )]);
         }
 
-        let l_expr = l_expr.unwrap_expr(&self.tmp_generator).clone();
-        let r_expr = r_expr.unwrap_expr(&self.tmp_generator).clone();
+        let l_expr = l_expr.unwrap_expr(&self.tmp_generator);
+        let r_expr = r_expr.unwrap_expr(&self.tmp_generator);
 
         let expr = if left_type == Rc::new(Type::String) {
             translate::Expr::Expr(Frame::external_call("__strcmp", vec![l_expr, r_expr]))
@@ -1867,10 +1955,10 @@ impl<'a> Env<'a> {
                                         arg.span,
                                     );
                                     if let Some(decl_spans) = self.enum_case_param_decl_spans(&expr.enum_id) {
-                                        err.source = Some(Spanned::new(
+                                        err.secondary_messages = vec![Spanned::new(
                                             "declared here".to_owned(),
                                             decl_spans[&expr.case_id.t][index],
-                                        ));
+                                        )];
                                     }
                                     errors.push(err);
                                 }
@@ -1918,10 +2006,10 @@ impl<'a> Env<'a> {
                     TypecheckErrType::DuplicateParam(type_field.id.t.clone()),
                     type_field.span,
                 )
-                .with_source(Spanned::new(
+                .with_secondary_messages(vec![Spanned::new(
                     format!("{} was declared here", type_field.id.t.clone()),
                     span,
-                ))
+                )])
             },
         )?;
 
@@ -3569,8 +3657,8 @@ mod tests {
 
         let env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1, level_label);
         let range = zspan!(Range {
-            start: zspan!(ExprType::Number(0)),
-            end: zspan!(ExprType::Number(1)),
+            lower: zspan!(ExprType::Number(0)),
+            upper: zspan!(ExprType::Number(1)),
         });
 
         assert_eq!(
@@ -3586,8 +3674,8 @@ mod tests {
 
         let env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1, level_label);
         let range = zspan!(Range {
-            start: zspan!(ExprType::Number(0)),
-            end: zspan!(ExprType::String("a".to_owned())),
+            lower: zspan!(ExprType::Number(0)),
+            upper: zspan!(ExprType::String("a".to_owned())),
         });
 
         assert_eq!(
@@ -3611,8 +3699,8 @@ mod tests {
         let for_expr = zspan!(For {
             index: zspan!("i".to_owned()),
             range: zspan!(ExprType::Range(Box::new(zspan!(Range {
-                start: zspan!(ExprType::Number(0)),
-                end: zspan!(ExprType::Number(1)),
+                lower: zspan!(ExprType::Number(0)),
+                upper: zspan!(ExprType::Number(1)),
             })))),
             body: zspan!(ExprType::Seq(
                 vec![zspan!(ExprType::LVal(Box::new(zspan!(LVal::Simple("i".to_owned())))))],
@@ -3662,8 +3750,8 @@ mod tests {
         let for_expr = zspan!(For {
             index: zspan!("i".to_owned()),
             range: zspan!(ExprType::Range(Box::new(zspan!(Range {
-                start: zspan!(ExprType::Number(0)),
-                end: zspan!(ExprType::Number(1)),
+                lower: zspan!(ExprType::Number(0)),
+                upper: zspan!(ExprType::Number(1)),
             })))),
             body: zspan!(ExprType::Seq(
                 vec![zspan!(ExprType::LVal(Box::new(zspan!(LVal::Simple("i".to_owned())))))],

@@ -993,4 +993,106 @@ mod tests {
         assert_eq!(result, Some(2));
         Ok(())
     }
+
+    #[test]
+    fn simple_for() -> Result<(), InterpreterTestErr> {
+        let expr = parser::parse_expr(
+            r#"
+            {
+                let mut a = 0;
+                for i in 0..10 {
+                    a = a + i;
+                };
+                a
+            }
+        "#,
+        )?;
+
+        let tmp_generator = TmpGenerator::default();
+        let level = Level::new(&tmp_generator, Some(Label::top()), "f", &[]);
+        let level_label = level.frame.label.clone();
+
+        let env = Env::new(tmp_generator.clone(), EMPTY_SOURCEMAP.1, level_label.clone());
+        {
+            let mut levels = env.levels.borrow_mut();
+            levels.insert(level_label, level);
+        }
+
+        let expr = env.typecheck_expr(&expr)?.expr;
+
+        let mut interpreter = Interpreter::default();
+        let result = interpreter.run_expr(&tmp_generator, expr);
+        assert_eq!(result, Some(45));
+        Ok(())
+    }
+
+    #[test]
+    fn for_continue() -> Result<(), InterpreterTestErr> {
+        let expr = parser::parse_expr(
+            r#"
+            {
+                let mut a = 0;
+                for i in 0..10 {
+                    if i % 2 == 0 {
+                        continue;
+                    };
+                    a = a + i;
+                };
+                a
+            }
+        "#,
+        )?;
+
+        let tmp_generator = TmpGenerator::default();
+        let level = Level::new(&tmp_generator, Some(Label::top()), "f", &[]);
+        let level_label = level.frame.label.clone();
+
+        let env = Env::new(tmp_generator.clone(), EMPTY_SOURCEMAP.1, level_label.clone());
+        {
+            let mut levels = env.levels.borrow_mut();
+            levels.insert(level_label, level);
+        }
+
+        let expr = env.typecheck_expr(&expr)?.expr;
+
+        let mut interpreter = Interpreter::default();
+        let result = interpreter.run_expr(&tmp_generator, expr);
+        assert_eq!(result, Some(1 + 3 + 5 + 7 + 9));
+        Ok(())
+    }
+
+    #[test]
+    fn for_break() -> Result<(), InterpreterTestErr> {
+        let expr = parser::parse_expr(
+            r#"
+            {
+                let mut a = 0;
+                for i in 1..10 {
+                    if i % 3 == 0 {
+                        break;
+                    };
+                    a = a + i;
+                };
+                a
+            }
+        "#,
+        )?;
+
+        let tmp_generator = TmpGenerator::default();
+        let level = Level::new(&tmp_generator, Some(Label::top()), "f", &[]);
+        let level_label = level.frame.label.clone();
+
+        let env = Env::new(tmp_generator.clone(), EMPTY_SOURCEMAP.1, level_label.clone());
+        {
+            let mut levels = env.levels.borrow_mut();
+            levels.insert(level_label, level);
+        }
+
+        let expr = env.typecheck_expr(&expr)?.expr;
+
+        let mut interpreter = Interpreter::default();
+        let result = interpreter.run_expr(&tmp_generator, expr);
+        assert_eq!(result, Some(1 + 2));
+        Ok(())
+    }
 }

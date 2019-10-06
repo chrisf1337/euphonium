@@ -146,8 +146,8 @@ mod tests {
                             len: _ExprType::Number(3),
                         })),
                         _ExprType::Range(Box::new(_Range {
-                            start: _ExprType::Seq(vec![_ExprType::Number(1)], true),
-                            end: _ExprType::Number(2)
+                            lower: _ExprType::Seq(vec![_ExprType::Number(1)], true),
+                            upper: _ExprType::Number(2)
                         })),
                         _ExprType::Closure(Box::new(_Closure {
                             type_fields: vec![],
