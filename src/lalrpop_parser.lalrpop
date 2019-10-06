@@ -206,7 +206,7 @@ pub Expr: ast::Expr = {
 };
 
 ExprTypeOrLetOrAssign: ast::Expr = {
-    CompareExpr,
+    RangeExpr,
     Spanned<_Let> => {
         let span = <>.span;
         <>.map(|l| ast::ExprType::Let(Box::new(ast::Spanned::new(l, span))))
@@ -214,53 +214,13 @@ ExprTypeOrLetOrAssign: ast::Expr = {
     <l:@L> <expr:Assign> <r:@R> => ast::Expr::new(ast::ExprType::Assign(Box::new(expr)), ast::FileSpan::new(file_id, Span::new(l, r))),
 }
 
-CompareExpr: ast::Expr = {
-    <l:CompareExpr> <op: Spanned<"==">> <r:RangeExpr> => {
-        let span = l.span.merge(r.span);
-        let op = op.map(|_| ast::CompareOp::Eq);
-        ast::Expr::new(ast::ExprType::Compare(Box::new(ast::Spanned::new(ast::Compare { l, op, r }, span))),
-            span)
-    },
-    <l:CompareExpr> <op: Spanned<"!=">> <r:RangeExpr> => {
-        let span = l.span.merge(r.span);
-        let op = op.map(|_| ast::CompareOp::Ne);
-        ast::Expr::new(ast::ExprType::Compare(Box::new(ast::Spanned::new(ast::Compare { l, op, r }, span))),
-            span)
-    },
-    <l:CompareExpr> <op: Spanned<">">> <r:RangeExpr> => {
-        let span = l.span.merge(r.span);
-        let op = op.map(|_| ast::CompareOp::Gt);
-        ast::Expr::new(ast::ExprType::Compare(Box::new(ast::Spanned::new(ast::Compare { l, op, r }, span))),
-            span)
-    },
-    <l:CompareExpr> <op: Spanned<">=">> <r:RangeExpr> => {
-        let span = l.span.merge(r.span);
-        let op = op.map(|_| ast::CompareOp::Ge);
-        ast::Expr::new(ast::ExprType::Compare(Box::new(ast::Spanned::new(ast::Compare { l, op, r }, span))),
-            span)
-    },
-    <l:CompareExpr> <op: Spanned<"<">> <r:RangeExpr> => {
-        let span = l.span.merge(r.span);
-        let op = op.map(|_| ast::CompareOp::Lt);
-        ast::Expr::new(ast::ExprType::Compare(Box::new(ast::Spanned::new(ast::Compare { l, op, r }, span))),
-            span)
-    },
-    <l:CompareExpr> <op: Spanned<"<=">> <r:RangeExpr> => {
-        let span = l.span.merge(r.span);
-        let op = op.map(|_| ast::CompareOp::Le);
-        ast::Expr::new(ast::ExprType::Compare(Box::new(ast::Spanned::new(ast::Compare { l, op, r }, span))),
-            span)
-    },
-    RangeExpr,
-};
-
 RangeExpr: ast::Expr = {
     <l:OpExpr> ".." <r:OpExpr> => {
         let span = l.span.merge(r.span);
         ast::Expr::new(ast::ExprType::Range(Box::new(ast::Spanned::new(
             ast::Range {
-                start: l,
-                end: r
+                lower: l,
+                upper: r
             },
             span))),
         span)
@@ -269,22 +229,76 @@ RangeExpr: ast::Expr = {
 };
 
 OpExpr: ast::Expr = {
-    <l:OpExpr> <op: Spanned<"+">> <r:Factor> => {
+    <l:OpExpr> <op: Spanned<"||">> <r:OpExpr2> => {
+        let span = l.span.merge(r.span);
+        let op = op.map(|_| ast::BoolOp::Or);
+        ast::Expr::new(ast::ExprType::Bool(Box::new(ast::Spanned::new(ast::Bool { l, op, r }, span))),
+            span)
+    },
+    OpExpr2,
+};
+
+OpExpr2: ast::Expr = {
+    <l:OpExpr2> <op: Spanned<"&&">> <r:CompareExpr> => {
+        let span = l.span.merge(r.span);
+        let op = op.map(|_| ast::BoolOp::And);
+        ast::Expr::new(ast::ExprType::Bool(Box::new(ast::Spanned::new(ast::Bool { l, op, r }, span))),
+            span)
+    },
+    CompareExpr
+};
+
+CompareExpr: ast::Expr = {
+    <l:CompareExpr> <op: Spanned<"==">> <r:OpExpr1> => {
+        let span = l.span.merge(r.span);
+        let op = op.map(|_| ast::CompareOp::Eq);
+        ast::Expr::new(ast::ExprType::Compare(Box::new(ast::Spanned::new(ast::Compare { l, op, r }, span))),
+            span)
+    },
+    <l:CompareExpr> <op: Spanned<"!=">> <r:OpExpr1> => {
+        let span = l.span.merge(r.span);
+        let op = op.map(|_| ast::CompareOp::Ne);
+        ast::Expr::new(ast::ExprType::Compare(Box::new(ast::Spanned::new(ast::Compare { l, op, r }, span))),
+            span)
+    },
+    <l:CompareExpr> <op: Spanned<">">> <r:OpExpr1> => {
+        let span = l.span.merge(r.span);
+        let op = op.map(|_| ast::CompareOp::Gt);
+        ast::Expr::new(ast::ExprType::Compare(Box::new(ast::Spanned::new(ast::Compare { l, op, r }, span))),
+            span)
+    },
+    <l:CompareExpr> <op: Spanned<">=">> <r:OpExpr1> => {
+        let span = l.span.merge(r.span);
+        let op = op.map(|_| ast::CompareOp::Ge);
+        ast::Expr::new(ast::ExprType::Compare(Box::new(ast::Spanned::new(ast::Compare { l, op, r }, span))),
+            span)
+    },
+    <l:CompareExpr> <op: Spanned<"<">> <r:OpExpr1> => {
+        let span = l.span.merge(r.span);
+        let op = op.map(|_| ast::CompareOp::Lt);
+        ast::Expr::new(ast::ExprType::Compare(Box::new(ast::Spanned::new(ast::Compare { l, op, r }, span))),
+            span)
+    },
+    <l:CompareExpr> <op: Spanned<"<=">> <r:OpExpr1> => {
+        let span = l.span.merge(r.span);
+        let op = op.map(|_| ast::CompareOp::Le);
+        ast::Expr::new(ast::ExprType::Compare(Box::new(ast::Spanned::new(ast::Compare { l, op, r }, span))),
+            span)
+    },
+    OpExpr1,
+};
+
+OpExpr1: ast::Expr = {
+    <l:OpExpr1> <op: Spanned<"+">> <r:Factor> => {
         let span = l.span.merge(r.span);
         let op = op.map(|_| ast::ArithOp::Add);
         ast::Expr::new(ast::ExprType::Arith(Box::new(ast::Spanned::new(ast::Arith { l, op, r }, span))),
             span)
     },
-    <l:OpExpr> <op: Spanned<"-">> <r:Factor> => {
+    <l:OpExpr1> <op: Spanned<"-">> <r:Factor> => {
         let span = l.span.merge(r.span);
         let op = op.map(|_| ast::ArithOp::Sub);
         ast::Expr::new(ast::ExprType::Arith(Box::new(ast::Spanned::new(ast::Arith { l, op, r }, span))),
-            span)
-    },
-    <l:OpExpr> <op: Spanned<"||">> <r:Factor> => {
-        let span = l.span.merge(r.span);
-        let op = op.map(|_| ast::BoolOp::Or);
-        ast::Expr::new(ast::ExprType::Bool(Box::new(ast::Spanned::new(ast::Bool { l, op, r }, span))),
             span)
     },
     Factor,
@@ -316,12 +330,6 @@ Factor: ast::Expr = {
         let span = l.span.merge(r.span);
         let op = op.map(|_| ast::ArithOp::Mod);
         ast::Expr::new(ast::ExprType::Arith(Box::new(ast::Spanned::new(ast::Arith { l, op, r }, span))),
-            span)
-    },
-    <l:Factor> <op: Spanned<"&&">> <r:TermOrNeg> => {
-        let span = l.span.merge(r.span);
-        let op = op.map(|_| ast::BoolOp::And);
-        ast::Expr::new(ast::ExprType::Bool(Box::new(ast::Spanned::new(ast::Bool { l, op, r }, span))),
             span)
     },
     TermOrNeg,
