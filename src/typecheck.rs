@@ -848,7 +848,10 @@ impl<'a> Env<'a> {
             TypeInfo::unit()
         };
 
-        let ty = TypeInfo::new(Rc::new(Type::Fn(param_types.clone(), return_type)), 0);
+        let ty = TypeInfo::new(
+            Rc::new(Type::Fn(param_types.clone(), return_type)),
+            std::mem::size_of::<u64>(),
+        );
         // FIXME: Don't assume all formals escape
         let formals: Vec<(usize, bool)> = param_types.iter().map(|param_type| (param_type.size(), true)).collect();
         let level = Level::new(
@@ -1323,11 +1326,12 @@ impl<'a> Env<'a> {
             } else {
                 expr_type
             };
+            let resolved_type = self.resolve_type(&ty, expr.span)?;
             // FIXME: Don't assume all locals escape
             let local = {
                 let mut levels = self.levels.borrow_mut();
                 let level = levels.get_mut(&self.level_label).unwrap();
-                level.alloc_local(&self.tmp_generator, ty.size(), true)
+                level.alloc_local(&self.tmp_generator, resolved_type.size(), true)
             };
 
             self.insert_var(
@@ -2216,6 +2220,8 @@ mod tests {
     #[test]
     fn child_env() {
         let mut env = Env::new(TmpGenerator::default(), EMPTY_SOURCEMAP.1, Label::top());
+        env.convert_pre_types();
+
         let var_properties = EnvEntry {
             ty: TypeInfo::int(),
             immutable: true,
@@ -2228,6 +2234,7 @@ mod tests {
             }),
         };
         env.insert_var("a".to_owned(), var_properties.clone(), zspan!());
+
         let mut child_env = env.new_child(env.level_label.clone());
         child_env.insert_type(
             "i".to_owned(),
@@ -2358,7 +2365,7 @@ mod tests {
 
         env.insert_pre_type("r".to_owned(), _Type::Record("r".to_owned(), HashMap::new()), zspan!());
         env.convert_pre_types();
-        let ty = env.r#type("r").unwrap();
+        let ty = env.r#type("r").unwrap().clone();
 
         env.insert_var(
             "x".to_owned(),
@@ -2595,7 +2602,7 @@ mod tests {
         let mut env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1, level_label);
         env.insert_pre_type("f", _Type::Fn(vec![Rc::new(_Type::Int)], Rc::new(_Type::Int)), zspan!());
         env.convert_pre_types();
-        let ty = env.r#type("f").unwrap();
+        let ty = env.r#type("f").unwrap().clone();
 
         env.insert_var(
             "f".to_owned(),
@@ -2630,7 +2637,7 @@ mod tests {
         env.insert_pre_type("f", _Type::Fn(vec![], Rc::new(_Type::Alias("a".to_owned()))), zspan!());
         env.convert_pre_types();
 
-        let ty = env.r#type("f").unwrap();
+        let ty = env.r#type("f").unwrap().clone();
 
         env.insert_var(
             "f",
@@ -2725,6 +2732,8 @@ mod tests {
         });
         let expr = zspan!(ExprType::LVal(Box::new(zspan!(LVal::Simple("i".to_owned())))));
         env.typecheck_type_decl(&type_decl).expect("typecheck type decl");
+        env.convert_pre_types();
+
         env.typecheck_let(&var_def).expect("typecheck var def");
         assert_eq!(
             env.typecheck_expr_mut(&expr).unwrap().unwrap(),
@@ -2806,9 +2815,8 @@ mod tests {
     #[test]
     fn check_for_invalid_types_in_fn_sig() {
         let tmp_generator = TmpGenerator::default();
-        let label_f = tmp_generator.new_label();
 
-        let mut env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1, Label::top());
+        let env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1, Label::top());
         let fn_decl = zspan!(ast::FnDecl {
             id: zspan!("f".to_owned()),
             type_fields: vec![],
@@ -3363,7 +3371,7 @@ mod tests {
         env.record_field_decl_spans
             .insert("r".to_owned(), hashmap! { "a".to_owned() => zspan!() });
 
-        let ty = env.r#type("r").unwrap();
+        let ty = env.r#type("r").unwrap().clone();
 
         env.insert_var(
             "r".to_owned(),
@@ -3420,7 +3428,7 @@ mod tests {
         env.record_field_decl_spans
             .insert("r".to_owned(), hashmap! { "a".to_owned() => zspan!() });
 
-        let ty = env.r#type("r").unwrap();
+        let ty = env.r#type("r").unwrap().clone();
 
         env.insert_var(
             "r".to_owned(),
@@ -3476,7 +3484,7 @@ mod tests {
         env.record_field_decl_spans
             .insert("r".to_owned(), hashmap! { "a".to_owned() => zspan!() });
 
-        let ty = env.r#type("r").unwrap();
+        let ty = env.r#type("r").unwrap().clone();
 
         env.insert_var(
             "r",
