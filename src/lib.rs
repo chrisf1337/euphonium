@@ -13,6 +13,7 @@ pub mod parser;
 pub mod sourcemap;
 pub mod tmp;
 mod translate;
+mod ty;
 pub mod typecheck;
 
 #[cfg(test)]

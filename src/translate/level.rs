@@ -15,11 +15,11 @@ impl Level {
         tmp_generator: &TmpGenerator,
         parent_label: Option<Label>,
         name: impl Into<String>,
-        formals: &[bool],
+        formals: &[(usize, bool)],
     ) -> Self {
         // Add static link
-        let mut frame_formals = vec![false; formals.len() + 1];
-        frame_formals[0] = true;
+        let mut frame_formals = vec![(0, false); formals.len() + 1];
+        frame_formals[0] = (std::mem::size_of::<u64>(), true);
         frame_formals[1..].copy_from_slice(formals);
         Self {
             parent_label,
@@ -34,7 +34,7 @@ impl Level {
                 name: "top".to_owned(),
                 label: Label::top(),
                 formals: vec![],
-                n_locals: 0,
+                locals_offset: 0,
             },
         }
     }
@@ -51,10 +51,10 @@ impl Level {
             .collect()
     }
 
-    pub fn alloc_local(&mut self, tmp_generator: &TmpGenerator, escapes: bool) -> Access {
+    pub fn alloc_local(&mut self, tmp_generator: &TmpGenerator, size: usize, escapes: bool) -> Access {
         Access {
             level_label: self.frame.label.clone(),
-            access: self.frame.alloc_local(tmp_generator, escapes),
+            access: self.frame.alloc_local(tmp_generator, size, escapes),
         }
     }
 

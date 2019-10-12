@@ -4,8 +4,8 @@ use crate::{
 };
 use std::fmt;
 
-#[cfg(test)]
-pub mod interpreter;
+// #[cfg(test)]
+// pub mod interpreter;
 
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub enum Expr {
@@ -13,7 +13,7 @@ pub enum Expr {
     Label(Label),
     Tmp(Tmp),
     BinOp(Box<Expr>, BinOp, Box<Expr>),
-    Mem(Box<Expr>),
+    Mem(Box<Expr>, usize),
     Call(Box<Expr>, Vec<Expr>),
     Seq(Box<Stmt>, Box<Expr>),
 }
@@ -25,7 +25,7 @@ impl fmt::Debug for Expr {
             Expr::Label(l) => write!(f, "{:?}", l),
             Expr::Tmp(t) => write!(f, "{:?}", t),
             Expr::BinOp(l, op, r) => f.debug_tuple("BinOp").field(l).field(op).field(r).finish(),
-            Expr::Mem(e) => f.debug_tuple("Mem").field(e).finish(),
+            Expr::Mem(e, size) => f.debug_tuple("Mem").field(e).field(size).finish(),
             Expr::Call(fun, args) => f.debug_tuple("Call").field(fun).field(args).finish(),
             Expr::Seq(s, e) => {
                 let entries: &[&dyn fmt::Debug] = &[s, e];
@@ -144,9 +144,9 @@ impl Expr {
                 stmts.extend(r_stmts);
                 (stmts, Expr::BinOp(Box::new(l_expr), *op, Box::new(r_expr)))
             }
-            Expr::Mem(expr) => {
+            Expr::Mem(expr, size) => {
                 let (stmts, expr) = expr.flatten();
-                (stmts, Expr::Mem(Box::new(expr)))
+                (stmts, Expr::Mem(Box::new(expr), *size))
             }
             Expr::Call(func, args) => {
                 let mut stmts = vec![];
@@ -265,7 +265,7 @@ mod tests {
             (Expr::BinOp(l1, _, r1), Expr::BinOp(l2, _, r2)) => {
                 tmp_eq_in_expr(tmp_table, l1, l2) && tmp_eq_in_expr(tmp_table, r1, r2)
             }
-            (Expr::Mem(expr1), Expr::Mem(expr2)) => tmp_eq_in_expr(tmp_table, expr1, expr2),
+            (Expr::Mem(expr1, _), Expr::Mem(expr2, _)) => tmp_eq_in_expr(tmp_table, expr1, expr2),
             (Expr::Call(func1, args1), Expr::Call(func2, args2)) => {
                 tmp_eq_in_expr(tmp_table, func1, func2)
                     && args1

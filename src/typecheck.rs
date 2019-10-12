@@ -1,6 +1,6 @@
 use crate::{
     ast::{
-        self, Arith, ArithOp, Array, Assign, Bool, Closure, Compare, Decl, DeclType, Enum, Expr, ExprType, FieldAssign,
+        Arith, ArithOp, Array, Assign, Bool, Closure, Compare, Decl, DeclType, Enum, Expr, ExprType, FieldAssign,
         FileSpan, FnCall, FnDecl, For, If, LVal, Let, Pattern, Range, Record, Spanned, TypeDecl, TypeDeclType, While,
     },
     fragment::{FnFragment, Fragment},
@@ -9,6 +9,7 @@ use crate::{
     log::TYPECHECK_LOG,
     tmp::{self, Label, TmpGenerator},
     translate::{self, Access, Level},
+    ty::{EnumCase, RecordField, Type, TypeInfo, _RecordField, _Type},
 };
 use codespan::{FileId, Span};
 use codespan_reporting;
@@ -20,7 +21,6 @@ use std::{
     collections::{HashMap, HashSet},
     hash::Hash,
     rc::Rc,
-    str::FromStr,
 };
 
 pub type Result<T> = std::result::Result<T, Vec<TypecheckErr>>;
@@ -60,15 +60,15 @@ impl<T> TranslateOutput<T> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TypecheckErrType {
     /// expected, actual
-    TypeMismatch(Rc<Type>, Rc<Type>),
+    TypeMismatch(TypeInfo, TypeInfo),
     // The reason we need a separate case for this instead of using TypeMismatch is because we would
     // need to typecheck the arguments passed to the non-function in order to determine the expected
     // function type.
     ArityMismatch(usize, usize),
     NotAFn(String),
-    NotARecord(Rc<Type>),
-    NotAnArray(Rc<Type>),
-    NotAnEnum(Rc<Type>),
+    NotARecord(TypeInfo),
+    NotAnArray(TypeInfo),
+    NotAnEnum(TypeInfo),
     NotAnEnumCase(String),
     NotARangeLiteral,
     UndefinedVar(String),
@@ -77,7 +77,7 @@ pub enum TypecheckErrType {
     UndefinedType(String),
     CannotSubscript,
     /// Type triggering the cycle, what it was aliased to
-    TypeDeclCycle(String, Rc<Type>),
+    TypeDeclCycle(String, Rc<_Type>),
     MissingFields(Vec<String>),
     InvalidFields(Vec<String>),
     IllegalLetExpr,
@@ -131,9 +131,9 @@ impl TypecheckErr {
                 let ty = env.var(fun).unwrap();
                 format!("not a function: {} (has type {:?})", fun, ty)
             }
-            NotARecord(ty) => format!("not a record (has type {:?})", ty.as_ref()),
-            NotAnArray(ty) => format!("not an array (has type {:?})", ty.as_ref()),
-            NotAnEnum(ty) => format!("not an enum (has type {:?})", ty.as_ref()),
+            NotARecord(ty) => format!("not a record (has type {:?})", ty.ty().as_ref()),
+            NotAnArray(ty) => format!("not an array (has type {:?})", ty.ty().as_ref()),
+            NotAnEnum(ty) => format!("not an enum (has type {:?})", ty.ty().as_ref()),
             NotAnEnumCase(case_id) => format!("not an enum case: {}", case_id),
             NotARangeLiteral => "not a range literal".to_owned(),
             UndefinedVar(var) => format!("undefined variable: {}", var),
@@ -173,122 +173,6 @@ impl TypecheckErr {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RecordField {
-    ty: Rc<Type>,
-    index: usize,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Type {
-    Int,
-    String,
-    Bool,
-    Record(String, HashMap<String, RecordField>),
-    Array(Rc<Type>, usize),
-    Unit,
-    Alias(String),
-    Enum(String, HashMap<String, EnumCase>),
-    Fn(Vec<Rc<Type>>, Rc<Type>),
-    Iterator(Rc<Type>),
-}
-
-impl Type {
-    fn alias(&self) -> Option<&str> {
-        if let Type::Alias(alias) = self {
-            Some(alias)
-        } else {
-            None
-        }
-    }
-
-    fn from_type_decl(type_decl: TypeDecl) -> Self {
-        match type_decl.ty.t {
-            TypeDeclType::Type(ty) => Type::from_str(&ty.t).unwrap(),
-            TypeDeclType::Enum(cases) => Type::Enum(
-                type_decl.id.t.clone(),
-                cases.into_iter().map(|c| (c.t.id.t.clone(), c.t.into())).collect(),
-            ),
-            TypeDeclType::Record(type_fields) => {
-                let mut type_fields_hm = HashMap::new();
-                for (i, TypeField { id, ty }) in type_fields.into_iter().map(|tf| tf.t.into()).enumerate() {
-                    type_fields_hm.insert(id, RecordField { ty, index: i });
-                }
-                Type::Record(type_decl.id.t.clone(), type_fields_hm)
-            }
-            TypeDeclType::Array(ty, len) => Type::Array(Rc::new(ty.t.into()), len.t),
-            TypeDeclType::Fn(param_types, return_type) => Type::Fn(
-                param_types
-                    .into_iter()
-                    .map(|param_type| Rc::new(param_type.t.into()))
-                    .collect(),
-                Rc::new(return_type.t.into()),
-            ),
-            TypeDeclType::Unit => Type::Unit,
-        }
-    }
-}
-
-impl FromStr for Type {
-    type Err = ();
-
-    fn from_str(s: &str) -> std::result::Result<Self, ()> {
-        match s {
-            "int" => Ok(Type::Int),
-            "string" => Ok(Type::String),
-            "bool" => Ok(Type::Bool),
-            _ => Ok(Type::Alias(s.to_owned())),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EnumCase {
-    id: String,
-    params: Vec<Rc<Type>>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct TypeField {
-    id: String,
-    ty: Rc<Type>,
-}
-
-impl From<ast::Type> for Type {
-    fn from(ty: ast::Type) -> Self {
-        match ty {
-            ast::Type::Type(ty) => Type::from_str(&ty.t).unwrap(),
-            ast::Type::Array(ty, len) => Type::Array(Rc::new(ty.t.into()), len.t),
-            ast::Type::Fn(param_types, return_type) => Type::Fn(
-                param_types
-                    .into_iter()
-                    .map(|param_type| Rc::new(param_type.t.into()))
-                    .collect(),
-                Rc::new(return_type.t.into()),
-            ),
-            ast::Type::Unit => Type::Unit,
-        }
-    }
-}
-
-impl From<ast::TypeField> for TypeField {
-    fn from(type_field: ast::TypeField) -> Self {
-        Self {
-            id: type_field.id.t,
-            ty: Rc::new(type_field.ty.t.into()),
-        }
-    }
-}
-
-impl From<ast::EnumCase> for EnumCase {
-    fn from(case: ast::EnumCase) -> Self {
-        Self {
-            id: case.id.t,
-            params: case.params.into_iter().map(|p| Rc::new(p.t.into())).collect(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
 enum EnvEntryType {
     Var(Access),
     Fn(Label),
@@ -306,14 +190,14 @@ impl EnvEntryType {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct EnvEntry {
-    ty: Rc<Type>,
+    ty: TypeInfo,
     immutable: bool,
     entry_type: EnvEntryType,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct LValProperties {
-    ty: Rc<Type>,
+    ty: TypeInfo,
     /// `None` if mutable, or `Some(var)` if immutable, with `var` being the root immutable variable.
     ///
     /// For example, if `a` is an immutable record with a field named `b`, then the `LValProperties`
@@ -327,7 +211,8 @@ pub struct Env<'a> {
     pub file_id: FileId,
     parent: Option<&'a Env<'a>>,
     vars: HashMap<String, EnvEntry>,
-    types: HashMap<String, Rc<Type>>,
+    types: HashMap<String, TypeInfo>,
+    pre_types: HashMap<String, Rc<_Type>>,
     var_def_spans: HashMap<String, FileSpan>,
     type_def_spans: HashMap<String, FileSpan>,
 
@@ -345,9 +230,9 @@ pub struct Env<'a> {
 
 impl<'a> Env<'a> {
     pub fn new(tmp_generator: TmpGenerator, file_id: FileId, level_label: Label) -> Self {
-        let mut types = HashMap::new();
-        types.insert("int".to_owned(), Rc::new(Type::Int));
-        types.insert("string".to_owned(), Rc::new(Type::String));
+        let mut pre_types = HashMap::new();
+        pre_types.insert("int".to_owned(), Rc::new(_Type::Int));
+        pre_types.insert("string".to_owned(), Rc::new(_Type::String));
         let mut type_def_spans = HashMap::new();
         type_def_spans.insert("int".to_owned(), FileSpan::new(file_id, Span::initial()));
         type_def_spans.insert("string".to_owned(), FileSpan::new(file_id, Span::initial()));
@@ -357,7 +242,8 @@ impl<'a> Env<'a> {
             file_id,
             parent: None,
             vars: HashMap::new(),
-            types,
+            types: HashMap::new(),
+            pre_types,
             var_def_spans: HashMap::new(),
             type_def_spans,
 
@@ -382,6 +268,7 @@ impl<'a> Env<'a> {
             parent: Some(self),
             vars: HashMap::new(),
             types: HashMap::new(),
+            pre_types: HashMap::new(),
             var_def_spans: HashMap::new(),
             type_def_spans: HashMap::new(),
 
@@ -406,13 +293,22 @@ impl<'a> Env<'a> {
         }
     }
 
-    fn insert_var(&mut self, name: String, entry: EnvEntry, def_span: FileSpan) {
+    fn insert_var(&mut self, name: impl Into<String>, entry: EnvEntry, def_span: FileSpan) {
+        let name = name.into();
         self.vars.insert(name.clone(), entry);
         self.var_def_spans.insert(name, def_span);
     }
 
-    fn insert_type(&mut self, name: String, ty: Type, def_span: FileSpan) {
-        self.types.insert(name.clone(), Rc::new(ty));
+    fn insert_pre_type(&mut self, name: impl Into<String>, ty: _Type, def_span: FileSpan) {
+        let name = name.into();
+        self.pre_types.insert(name.clone(), Rc::new(ty));
+        self.type_def_spans.insert(name, def_span);
+    }
+
+    #[cfg(test)]
+    fn insert_type(&mut self, name: impl Into<String>, ty: TypeInfo, def_span: FileSpan) {
+        let name = name.into();
+        self.types.insert(name.clone(), ty);
         self.type_def_spans.insert(name, def_span);
     }
 
@@ -426,7 +322,17 @@ impl<'a> Env<'a> {
         }
     }
 
-    fn r#type(&self, name: &str) -> Option<&Rc<Type>> {
+    fn pre_type(&self, name: &str) -> Option<&Rc<_Type>> {
+        if let Some(ty) = self.pre_types.get(name) {
+            Some(ty)
+        } else if let Some(parent) = self.parent {
+            parent.pre_type(name)
+        } else {
+            None
+        }
+    }
+
+    fn r#type(&self, name: &str) -> Option<&TypeInfo> {
         if let Some(ty) = self.types.get(name) {
             Some(ty)
         } else if let Some(parent) = self.parent {
@@ -502,8 +408,28 @@ impl<'a> Env<'a> {
     /// Does not follow aliases in records or enums because they can be recursive. This means that constructing `Type`s
     /// by hand instead of retrieving them from `types` in `Env` will result in failed equality
     /// checks, even if the aliases that they contain point to the same base type.
-    fn resolve_type(&self, ty: &Rc<Type>, def_span: FileSpan) -> Result<Rc<Type>> {
+    fn resolve_pre_type(&self, ty: &Rc<_Type>, def_span: FileSpan) -> Result<Rc<_Type>> {
         match ty.as_ref() {
+            _Type::Alias(alias) => {
+                if let Some(resolved_type) = self.pre_type(alias) {
+                    let span = self.type_def_span(alias).unwrap();
+                    self.resolve_pre_type(resolved_type, span)
+                } else {
+                    Err(vec![TypecheckErr::new_err(
+                        TypecheckErrType::UndefinedType(alias.clone()),
+                        def_span,
+                    )])
+                }
+            }
+            _Type::Array(elem_type, len) => {
+                Ok(Rc::new(_Type::Array(self.resolve_pre_type(elem_type, def_span)?, *len)))
+            }
+            _ => Ok(ty.clone()),
+        }
+    }
+
+    fn resolve_type(&self, ty: &TypeInfo, def_span: FileSpan) -> Result<TypeInfo> {
+        match ty.ty().as_ref() {
             Type::Alias(alias) => {
                 if let Some(resolved_type) = self.r#type(alias) {
                     let span = self.type_def_span(alias).unwrap();
@@ -515,13 +441,16 @@ impl<'a> Env<'a> {
                     )])
                 }
             }
-            Type::Array(elem_type, len) => Ok(Rc::new(Type::Array(self.resolve_type(elem_type, def_span)?, *len))),
+            Type::Array(elem_type, len) => Ok(TypeInfo::new(
+                Rc::new(Type::Array(self.resolve_type(elem_type, def_span)?, *len)),
+                ty.size(),
+            )),
             _ => Ok(ty.clone()),
         }
     }
 
     /// `ty` must have already been resolved.
-    fn assert_ty(&self, expr: &Expr, ty: &Rc<Type>) -> Result<TranslateOutput<Rc<Type>>> {
+    fn assert_ty(&self, expr: &Expr, ty: &TypeInfo) -> Result<TranslateOutput<TypeInfo>> {
         let translate_output = self.typecheck_expr(expr)?;
         let expr_type = &translate_output.t;
         let resolved_expr_type = self.resolve_type(expr_type, expr.span)?;
@@ -536,7 +465,7 @@ impl<'a> Env<'a> {
     }
 
     fn check_for_type_decl_cycles(&self, ty: &str, path: Vec<&str>) -> Result<()> {
-        if let Some(alias) = self.types.get(ty) {
+        if let Some(alias) = self.pre_types.get(ty) {
             if let Some(alias_str) = alias.alias() {
                 if path.contains(&alias_str) {
                     let span = self.type_def_span(ty).unwrap();
@@ -557,14 +486,14 @@ impl<'a> Env<'a> {
     }
 
     /// Call after translating type decls and checking for cycles.
-    fn validate_type(&self, ty: &Rc<Type>, def_span: FileSpan) -> Result<()> {
+    fn validate_pre_type(&self, ty: &Rc<_Type>, def_span: FileSpan) -> Result<()> {
         match ty.as_ref() {
-            Type::String | Type::Bool | Type::Unit | Type::Int | Type::Iterator(_) => Ok(()),
-            Type::Alias(_) => self.resolve_type(ty, def_span).map(|_| ()),
-            Type::Record(_, record) => {
+            _Type::String | _Type::Bool | _Type::Unit | _Type::Int | _Type::Iterator(_) => Ok(()),
+            _Type::Alias(_) => self.resolve_pre_type(ty, def_span).map(|_| ()),
+            _Type::Record(_, record) => {
                 let mut errors = vec![];
-                for RecordField { ty, .. } in record.values() {
-                    match self.validate_type(ty, def_span) {
+                for _RecordField { ty, .. } in record.values() {
+                    match self.validate_pre_type(ty, def_span) {
                         Ok(()) => (),
                         Err(errs) => errors.extend(errs),
                     }
@@ -575,17 +504,17 @@ impl<'a> Env<'a> {
                     Err(errors)
                 }
             }
-            Type::Array(ty, _) => self.validate_type(ty, def_span),
-            Type::Enum(_, cases) => {
+            _Type::Array(ty, _) => self.validate_pre_type(ty, def_span),
+            _Type::Enum(_, cases) => {
                 let mut errors = vec![];
                 for case in cases.values() {
                     for param in &case.params {
                         // Don't allow nested enum decls
-                        if let Type::Enum(..) = param.as_ref() {
+                        if let _Type::Enum(..) = param.as_ref() {
                             errors.push(TypecheckErr::new_err(TypecheckErrType::IllegalNestedEnumDecl, def_span));
                             continue;
                         }
-                        match self.validate_type(param, def_span) {
+                        match self.validate_pre_type(param, def_span) {
                             Ok(()) => (),
                             Err(errs) => errors.extend(errs),
                         }
@@ -597,17 +526,17 @@ impl<'a> Env<'a> {
                     Err(errors)
                 }
             }
-            Type::Fn(param_types, return_type) => {
+            _Type::Fn(param_types, return_type) => {
                 let mut errors = vec![];
 
                 for param_type in param_types {
-                    match self.validate_type(param_type, def_span) {
+                    match self.validate_pre_type(param_type, def_span) {
                         Ok(()) => (),
                         Err(errs) => errors.extend(errs),
                     }
                 }
 
-                match self.validate_type(return_type, def_span) {
+                match self.validate_pre_type(return_type, def_span) {
                     Ok(()) => (),
                     Err(errs) => errors.extend(errs),
                 }
@@ -621,26 +550,14 @@ impl<'a> Env<'a> {
         }
     }
 
-    fn check_for_invalid_types(&self) -> Result<()> {
+    /// Once we have typechecked all type decls, check if pre-types are all valid. This is
+    /// essentially making sure that aliases resolve into actual types and enum decls are not nested.
+    fn check_for_invalid_pre_types(&self) -> Result<()> {
         let mut errors = vec![];
-        for (id, ty) in &self.types {
-            match self.validate_type(ty, self.type_def_span(id).unwrap()) {
+        for (id, ty) in &self.pre_types {
+            match self.validate_pre_type(ty, self.type_def_span(id).unwrap()) {
                 Ok(()) => (),
                 Err(errs) => errors.extend(errs),
-            }
-        }
-        for (id, var) in &self.vars {
-            if let Type::Fn(param_types, return_type) = var.ty.as_ref() {
-                for ty in param_types {
-                    match self.validate_type(ty, self.var_def_span(id).unwrap()) {
-                        Ok(()) => (),
-                        Err(errs) => errors.extend(errs),
-                    }
-                }
-                match self.validate_type(return_type, self.var_def_span(id).unwrap()) {
-                    Ok(()) => (),
-                    Err(errs) => errors.extend(errs),
-                }
             }
         }
         if !errors.is_empty() {
@@ -685,11 +602,135 @@ impl<'a> Env<'a> {
         self.second_pass(decls)
     }
 
+    fn size_of(&self, ty: &Rc<_Type>) -> usize {
+        match ty.as_ref() {
+            _Type::Int => std::mem::size_of::<i64>(),
+            _Type::String => std::mem::size_of::<u64>(),
+            _Type::Bool => std::mem::size_of::<bool>(),
+            _Type::Record(_, fields) => fields.values().map(|f| self.size_of(&f.ty)).sum(),
+            _Type::Array(elem_type, length) => self.size_of(elem_type) * length,
+            _Type::Unit => 0,
+            _Type::Alias(_) => {
+                let resolved_type = self
+                    .resolve_pre_type(ty, FileSpan::new(self.file_id, Span::initial()))
+                    .unwrap();
+                self.size_of(&resolved_type)
+            }
+            _Type::Enum(_, cases) => cases
+                .values()
+                .map(|c| c.params.iter().map(|p| self.size_of(p)).sum::<usize>())
+                .max()
+                .unwrap_or(0),
+            _Type::Fn(..) => std::mem::size_of::<u64>(),
+            _Type::Iterator(ty) => self.size_of(ty) * 2,
+        }
+    }
+
+    /// This must be called after checking for type decl cycles; otherwise, the compiler will
+    /// infinitely loop trying to resolve types.
+    fn convert_pre_type(&self, ty: &Rc<_Type>) -> TypeInfo {
+        match ty.as_ref() {
+            _Type::Int => TypeInfo::int(),
+            _Type::String => TypeInfo::string(),
+            _Type::Bool => TypeInfo::bool(),
+            _Type::Record(id, fields) => TypeInfo::new(
+                Rc::new(Type::Record(
+                    id.clone(),
+                    fields
+                        .clone()
+                        .into_iter()
+                        .map(|(id, field)| {
+                            (
+                                id,
+                                RecordField {
+                                    ty: self.convert_pre_type(&field.ty),
+                                    index: field.index,
+                                },
+                            )
+                        })
+                        .collect(),
+                )),
+                self.size_of(ty),
+            ),
+            _Type::Array(elem_ty, len) => {
+                let elem_ty = self.convert_pre_type(elem_ty);
+                TypeInfo::new(Rc::new(Type::Array(elem_ty, *len)), self.size_of(ty))
+            }
+            _Type::Unit => TypeInfo::unit(),
+            _Type::Alias(alias) => TypeInfo::new(Rc::new(Type::Alias(alias.clone())), self.size_of(ty)),
+            _Type::Enum(id, cases) => TypeInfo::new(
+                Rc::new(Type::Enum(
+                    id.clone(),
+                    cases
+                        .clone()
+                        .into_iter()
+                        .map(|(id, case)| {
+                            (
+                                id,
+                                EnumCase {
+                                    id: case.id.clone(),
+                                    params: case.params.iter().map(|p| self.convert_pre_type(p)).collect(),
+                                },
+                            )
+                        })
+                        .collect(),
+                )),
+                self.size_of(ty),
+            ),
+            _Type::Fn(param_types, return_type) => TypeInfo::new(
+                Rc::new(Type::Fn(
+                    param_types.iter().map(|ty| self.convert_pre_type(ty)).collect(),
+                    self.convert_pre_type(return_type),
+                )),
+                self.size_of(ty),
+            ),
+            _Type::Iterator(ty) => TypeInfo::new(Rc::new(Type::Iterator(self.convert_pre_type(ty))), self.size_of(ty)),
+        }
+    }
+
+    // Converts pre-types into actual TypeInfos.
+    fn convert_pre_types(&mut self) {
+        self.types = self
+            .pre_types
+            .iter()
+            .map(|(id, pre_type)| (id.clone(), self.convert_pre_type(pre_type)))
+            .collect();
+    }
+
+    fn validate_fn_decl_pre_types(&self, fn_decl: &FnDecl) -> Result<()> {
+        let mut errors = vec![];
+        let param_pre_types: Vec<Rc<_Type>> = fn_decl
+            .type_fields
+            .iter()
+            .map(|type_field| Rc::new(type_field.t.clone().ty.t.into()))
+            .collect();
+        for (i, param_pre_type) in param_pre_types.iter().enumerate() {
+            match self.validate_pre_type(param_pre_type, fn_decl.type_fields[i].ty.span) {
+                Ok(_) => (),
+                Err(errs) => errors.extend(errs),
+            }
+        }
+
+        if let Some(return_type) = &fn_decl.return_type {
+            let return_pre_type = Rc::new(return_type.t.clone().into());
+            match self.validate_pre_type(&return_pre_type, return_type.span) {
+                Ok(_) => (),
+                Err(errs) => errors.extend(errs),
+            }
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+
     fn first_pass(&mut self, decls: &[Decl]) -> Result<()> {
         let mut errors = vec![];
         let mut found_cycle = false;
         for decl in decls {
-            match self.typecheck_decl_first_pass(decl) {
+            match self.typecheck_type_decl_and_check_cycles(decl) {
                 Ok(()) => (),
                 Err(errs) => {
                     for err in &errs {
@@ -709,9 +750,22 @@ impl<'a> Env<'a> {
             }
         }
 
-        match self.check_for_invalid_types() {
+        match self.check_for_invalid_pre_types() {
             Ok(()) => (),
             Err(errs) => errors.extend(errs),
+        }
+
+        if !errors.is_empty() {
+            return Err(errors);
+        }
+
+        self.convert_pre_types();
+
+        for decl in decls {
+            if let DeclType::Fn(fn_decl) = &decl.t {
+                self.validate_fn_decl_pre_types(fn_decl)?;
+                self.typecheck_fn_decl_sig(fn_decl)?;
+            }
         }
 
         if errors.is_empty() {
@@ -738,22 +792,19 @@ impl<'a> Env<'a> {
         }
     }
 
-    fn typecheck_decl_first_pass(&mut self, decl: &Decl) -> Result<()> {
+    fn typecheck_type_decl_and_check_cycles(&mut self, decl: &Decl) -> Result<()> {
         self.level_label = Label::top();
         match &decl.t {
-            DeclType::Fn(fn_decl) => {
-                self.typecheck_fn_decl_sig(fn_decl)?;
-                Ok(())
-            }
             DeclType::Type(type_decl) => {
                 self.typecheck_type_decl(type_decl)?;
                 self.check_for_type_decl_cycles(&type_decl.id, vec![])
             }
+            DeclType::Fn(_) => Ok(()),
             _ => unreachable!(), // DeclType::Error
         }
     }
 
-    fn typecheck_fn_decl_sig(&mut self, fn_decl: &Spanned<FnDecl>) -> Result<Rc<Type>> {
+    fn typecheck_fn_decl_sig(&mut self, fn_decl: &Spanned<FnDecl>) -> Result<TypeInfo> {
         // Check if there already exists another function with the same name
         if self.vars.contains_key(&fn_decl.id.t) {
             let span = self.var_def_span(&fn_decl.id.t).unwrap();
@@ -786,20 +837,20 @@ impl<'a> Env<'a> {
         .collect();
         self.fn_param_decl_spans.insert(fn_decl.id.t.clone(), param_decl_spans);
 
-        let param_types = fn_decl
+        let param_types: Vec<TypeInfo> = fn_decl
             .type_fields
             .iter()
-            .map(|type_field| Rc::new(type_field.ty.t.clone().into()))
+            .map(|type_field| self.convert_pre_type(&Rc::new(type_field.ty.t.clone().into())))
             .collect();
         let return_type = if let Some(Spanned { t: return_type, .. }) = &fn_decl.return_type {
-            return_type.clone().into()
+            self.convert_pre_type(&Rc::new(return_type.clone().into()))
         } else {
-            Type::Unit
+            TypeInfo::unit()
         };
 
-        let ty = Rc::new(Type::Fn(param_types, Rc::new(return_type)));
+        let ty = TypeInfo::new(Rc::new(Type::Fn(param_types.clone(), return_type)), 0);
         // FIXME: Don't assume all formals escape
-        let formals = vec![true; fn_decl.type_fields.len()];
+        let formals: Vec<(usize, bool)> = param_types.iter().map(|param_type| (param_type.size(), true)).collect();
         let level = Level::new(
             &self.tmp_generator,
             Some(self.level_label.clone()),
@@ -839,7 +890,7 @@ impl<'a> Env<'a> {
         };
         let mut new_env = self.new_child(label);
 
-        if let Type::Fn(param_types, return_type) = fn_type.as_ref() {
+        if let Type::Fn(param_types, return_type) = fn_type.ty().as_ref() {
             for ((param_id, span), param_type, formal) in izip!(
                 fn_decl.type_fields.iter().map(|tf| (&tf.id.t, tf.span)),
                 param_types,
@@ -892,7 +943,7 @@ impl<'a> Env<'a> {
             )])]);
         }
 
-        let ty = Type::from_type_decl(decl.t.clone());
+        let ty = _Type::from_type_decl(decl.t.clone());
         match &decl.ty.t {
             TypeDeclType::Record(record_fields) => {
                 let field_def_spans: HashMap<String, FileSpan> = Self::check_for_duplicates(
@@ -934,12 +985,12 @@ impl<'a> Env<'a> {
             }
             _ => (),
         }
-        self.insert_type(id, ty, decl.span);
+        self.insert_pre_type(id, ty, decl.span);
 
         Ok(())
     }
 
-    pub(crate) fn typecheck_expr(&self, expr: &Expr) -> Result<TranslateOutput<Rc<Type>>> {
+    pub(crate) fn typecheck_expr(&self, expr: &Expr) -> Result<TranslateOutput<TypeInfo>> {
         match &expr.t {
             ExprType::Seq(exprs, returns) => {
                 let (mut new_env, return_type, trexpr) = {
@@ -966,7 +1017,7 @@ impl<'a> Env<'a> {
                     } else {
                         let TranslateOutput { expr: trexpr, .. } = new_env.typecheck_expr_mut(last_expr)?;
                         TranslateOutput {
-                            t: Rc::new(Type::Unit),
+                            t: TypeInfo::unit(),
                             expr: translate::Expr::Expr(ir::Expr::Seq(
                                 Box::new(trexpr.unwrap_stmt(&self.tmp_generator)),
                                 Box::new(ir::Expr::Const(0)),
@@ -978,7 +1029,7 @@ impl<'a> Env<'a> {
                     // defined.
                     let mut fn_decls: HashMap<String, EnvEntry> = HashMap::new();
                     for (id, var) in &new_env.vars {
-                        if let Type::Fn(..) = var.ty.as_ref() {
+                        if let Type::Fn(..) = var.ty.ty().as_ref() {
                             fn_decls.insert(id.clone(), var.clone());
                         }
                     }
@@ -1020,18 +1071,18 @@ impl<'a> Env<'a> {
                 let mut fragments = self.fragments.borrow_mut();
                 fragments.push(fragment);
                 Ok(TranslateOutput {
-                    t: Rc::new(Type::String),
+                    t: TypeInfo::string(),
                     expr: translate::Expr::Expr(label),
                 })
             }
             ExprType::Number(n) => Ok(TranslateOutput {
-                t: Rc::new(Type::Int),
+                t: TypeInfo::int(),
                 expr: translate::Expr::Expr(ir::Expr::Const(*n as i64)),
             }),
             ExprType::Neg(expr) => {
-                let TranslateOutput { expr, .. } = self.assert_ty(expr, &Rc::new(Type::Int))?;
+                let TranslateOutput { expr, .. } = self.assert_ty(expr, &TypeInfo::int())?;
                 Ok(TranslateOutput {
-                    t: Rc::new(Type::Int),
+                    t: TypeInfo::int(),
                     expr: translate::Expr::Expr(ir::Expr::BinOp(
                         Box::new(ir::Expr::Const(-1)),
                         ir::BinOp::Mul,
@@ -1041,13 +1092,13 @@ impl<'a> Env<'a> {
             }
             ExprType::Arith(arith) => self.typecheck_arith(arith),
             ExprType::Unit => Ok(TranslateOutput {
-                t: Rc::new(Type::Unit),
+                t: TypeInfo::unit(),
                 expr: translate::Expr::Expr(ir::Expr::Const(0)),
             }),
             ExprType::Continue => {
                 if let Some(continue_label) = self.continue_label.as_ref() {
                     Ok(TranslateOutput {
-                        t: Rc::new(Type::Unit),
+                        t: TypeInfo::unit(),
                         expr: translate::Expr::Stmt(ir::Stmt::Jump(
                             ir::Expr::Label(continue_label.clone()),
                             vec![continue_label.clone()],
@@ -1063,7 +1114,7 @@ impl<'a> Env<'a> {
             ExprType::Break => {
                 if let Some(break_label) = self.break_label.as_ref() {
                     Ok(TranslateOutput {
-                        t: Rc::new(Type::Unit),
+                        t: TypeInfo::unit(),
                         expr: translate::Expr::Stmt(ir::Stmt::Jump(
                             ir::Expr::Label(break_label.clone()),
                             vec![break_label.clone()],
@@ -1077,10 +1128,10 @@ impl<'a> Env<'a> {
                 }
             }
             ExprType::BoolLiteral(b) => Ok(TranslateOutput {
-                t: Rc::new(Type::Bool),
+                t: TypeInfo::bool(),
                 expr: translate::Expr::Expr(ir::Expr::Const(if *b { 1 } else { 0 })),
             }),
-            ExprType::Not(expr) => self.assert_ty(expr, &Rc::new(Type::Bool)),
+            ExprType::Not(expr) => self.assert_ty(expr, &TypeInfo::bool()),
             ExprType::Bool(bool_expr) => self.typecheck_bool(bool_expr),
             ExprType::LVal(lval) => Ok(self.typecheck_lval(lval)?.map(|lval_props| lval_props.ty)),
             ExprType::Let(_) => Err(vec![TypecheckErr::new_err(TypecheckErrType::IllegalLetExpr, expr.span)]),
@@ -1102,7 +1153,7 @@ impl<'a> Env<'a> {
         }
     }
 
-    pub(crate) fn typecheck_expr_mut(&mut self, expr: &Expr) -> Result<TranslateOutput<Rc<Type>>> {
+    pub(crate) fn typecheck_expr_mut(&mut self, expr: &Expr) -> Result<TranslateOutput<TypeInfo>> {
         match &expr.t {
             ExprType::Let(let_expr) => self.typecheck_let(let_expr),
             ExprType::FnDecl(fn_decl) => self.typecheck_fn_decl_expr(fn_decl),
@@ -1142,13 +1193,14 @@ impl<'a> Env<'a> {
                     t: lval_properties,
                     expr: record_trexpr,
                 } = self.typecheck_lval(var)?;
-                if let Type::Record(_, fields) = self.resolve_type(&lval_properties.ty, var.span)?.as_ref() {
+                if let Type::Record(_, fields) = self.resolve_type(&lval_properties.ty, var.span)?.ty().as_ref() {
                     if let Some(RecordField { ty: field_type, index }) = fields.get(&field.t) {
                         // A field is mutable only if the record it belongs to is mutable
                         let trexpr = Env::translate_pointer_offset(
                             &self.tmp_generator,
                             &record_trexpr,
                             &translate::Expr::Expr(ir::Expr::Const(*index as i64)),
+                            field_type.size(),
                         );
                         return Ok(TranslateOutput {
                             t: LValProperties {
@@ -1173,8 +1225,8 @@ impl<'a> Env<'a> {
                     t: index_type,
                     expr: index_trexpr,
                 } = self.typecheck_expr(index)?;
-                if let Type::Array(ty, len) = self.resolve_type(&lval_properties.ty, var.span)?.as_ref() {
-                    if self.resolve_type(&index_type, index.span)? == Rc::new(Type::Int) {
+                if let Type::Array(ty, len) = self.resolve_type(&lval_properties.ty, var.span)?.ty().as_ref() {
+                    if self.resolve_type(&index_type, index.span)? == TypeInfo::int() {
                         let index_tmp_trexpr = ir::Expr::Tmp(self.tmp_generator.new_tmp());
                         let true_label_1 = self.tmp_generator.new_label();
                         let true_label_2 = self.tmp_generator.new_label();
@@ -1219,6 +1271,7 @@ impl<'a> Env<'a> {
                                         &self.tmp_generator,
                                         &lval_trexpr,
                                         &translate::Expr::Expr(index_tmp_trexpr),
+                                        ty.size(),
                                     )
                                     .unwrap_expr(&self.tmp_generator),
                                 ),
@@ -1226,7 +1279,7 @@ impl<'a> Env<'a> {
                         })
                     } else {
                         Err(vec![TypecheckErr::new_err(
-                            TypecheckErrType::TypeMismatch(Rc::new(Type::Int), index_type),
+                            TypecheckErrType::TypeMismatch(TypeInfo::int(), index_type),
                             index.span,
                         )])
                     }
@@ -1240,7 +1293,7 @@ impl<'a> Env<'a> {
         }
     }
 
-    fn typecheck_let(&mut self, let_expr: &Spanned<Let>) -> Result<TranslateOutput<Rc<Type>>> {
+    fn typecheck_let(&mut self, let_expr: &Spanned<Let>) -> Result<TranslateOutput<TypeInfo>> {
         let Let {
             pattern,
             ty: ast_ty,
@@ -1253,7 +1306,7 @@ impl<'a> Env<'a> {
         } = self.typecheck_expr(expr)?;
         if let Some(ast_ty) = ast_ty {
             // Type annotation
-            let ty = Rc::new(ast_ty.t.clone().into());
+            let ty = self.convert_pre_type(&Rc::new(ast_ty.t.clone().into()));
             let resolved_ty = self.resolve_type(&ty, ast_ty.span)?;
             let resolved_expr_ty = self.resolve_type(&expr_type, expr.span)?;
             if resolved_ty != resolved_expr_ty {
@@ -1266,7 +1319,7 @@ impl<'a> Env<'a> {
         if let Pattern::String(var_name) = &pattern.t {
             // Prefer the annotated type if provided
             let ty = if let Some(ty) = ast_ty {
-                Rc::new(ty.t.clone().into())
+                self.convert_pre_type(&Rc::new(ty.t.clone().into()))
             } else {
                 expr_type
             };
@@ -1274,7 +1327,7 @@ impl<'a> Env<'a> {
             let local = {
                 let mut levels = self.levels.borrow_mut();
                 let level = levels.get_mut(&self.level_label).unwrap();
-                level.alloc_local(&self.tmp_generator, true)
+                level.alloc_local(&self.tmp_generator, ty.size(), true)
             };
 
             self.insert_var(
@@ -1289,7 +1342,7 @@ impl<'a> Env<'a> {
             let levels = self.levels.borrow();
             let assignee_trexpr = Env::translate_simple_var(&levels, &local, &self.level_label);
             Ok(TranslateOutput {
-                t: Rc::new(Type::Unit),
+                t: TypeInfo::unit(),
                 expr: translate::Expr::Stmt(ir::Stmt::Move(
                     assignee_trexpr.unwrap_expr(&self.tmp_generator),
                     assigned_val_trexpr.unwrap_expr(&self.tmp_generator),
@@ -1297,7 +1350,7 @@ impl<'a> Env<'a> {
             })
         } else {
             Ok(TranslateOutput {
-                t: Rc::new(Type::Unit),
+                t: TypeInfo::unit(),
                 expr: translate::Expr::Stmt(ir::Stmt::Seq(
                     Box::new(assigned_val_trexpr.unwrap_stmt(&self.tmp_generator)),
                     Box::new(ir::Stmt::Expr(ir::Expr::Const(0))),
@@ -1312,9 +1365,9 @@ impl<'a> Env<'a> {
             t: FnCall { id, args },
             span,
         }: &Spanned<FnCall>,
-    ) -> Result<TranslateOutput<Rc<Type>>> {
+    ) -> Result<TranslateOutput<TypeInfo>> {
         if let Some(fn_type) = self.var(&id.t).map(|x| x.ty.clone()) {
-            if let Type::Fn(param_types, return_type) = self.resolve_type(&fn_type, id.span)?.as_ref() {
+            if let Type::Fn(param_types, return_type) = self.resolve_type(&fn_type, id.span)?.ty().as_ref() {
                 if args.len() != param_types.len() {
                     return Err(vec![TypecheckErr::new_err(
                         TypecheckErrType::ArityMismatch(param_types.len(), args.len()),
@@ -1381,9 +1434,9 @@ impl<'a> Env<'a> {
             span,
             ..
         }: &Spanned<Record>,
-    ) -> Result<TranslateOutput<Rc<Type>>> {
+    ) -> Result<TranslateOutput<TypeInfo>> {
         if let Some(ty) = self.r#type(&record_id.t) {
-            if let Type::Record(_, field_types) = ty.as_ref() {
+            if let Type::Record(_, field_types) = ty.ty().as_ref() {
                 let mut field_assigns_hm = HashMap::new();
                 for field_assign in field_assigns {
                     field_assigns_hm.insert(field_assign.id.t.clone(), field_assign.expr.clone());
@@ -1477,6 +1530,7 @@ impl<'a> Env<'a> {
                         &self.tmp_generator,
                         &translate::Expr::Expr(record_tmp_trexpr.clone()),
                         &translate::Expr::Expr(ir::Expr::Const(field_index as i64)),
+                        expected_type.size(),
                     );
                     assign_stmts.push(ir::Stmt::Move(
                         field_trexpr.unwrap_expr(&self.tmp_generator),
@@ -1509,7 +1563,7 @@ impl<'a> Env<'a> {
         }
     }
 
-    fn typecheck_assign(&self, Spanned { t: assign, span }: &Spanned<Assign>) -> Result<TranslateOutput<Rc<Type>>> {
+    fn typecheck_assign(&self, Spanned { t: assign, span }: &Spanned<Assign>) -> Result<TranslateOutput<TypeInfo>> {
         let TranslateOutput {
             t: lval_properties,
             expr: assignee_trexpr,
@@ -1546,7 +1600,7 @@ impl<'a> Env<'a> {
         ));
 
         Ok(TranslateOutput {
-            t: Rc::new(Type::Unit),
+            t: TypeInfo::unit(),
             expr: trexpr,
         })
     }
@@ -1573,11 +1627,12 @@ impl<'a> Env<'a> {
         }
     }
 
-    fn typecheck_array(&self, Spanned { t: array, .. }: &Spanned<Array>) -> Result<TranslateOutput<Rc<Type>>> {
+    fn typecheck_array(&self, Spanned { t: array, .. }: &Spanned<Array>) -> Result<TranslateOutput<TypeInfo>> {
         let TranslateOutput {
             t: elem_type,
             expr: init_val_trexpr,
         } = self.typecheck_expr(&array.initial_value)?;
+        let elem_size = elem_type.size();
         let len = Self::eval_arith_const_expr(&array.len)?;
         if len < 0 {
             return Err(vec![TypecheckErr::new_err(
@@ -1595,6 +1650,7 @@ impl<'a> Env<'a> {
                 &self.tmp_generator,
                 &translate::Expr::Expr(array_tmp_trexpr.clone()),
                 &translate::Expr::Expr(ir::Expr::Const(i as i64)),
+                elem_size,
             );
             assign_stmts.push(ir::Stmt::Move(
                 elem_trexpr.unwrap_expr(&self.tmp_generator),
@@ -1603,7 +1659,7 @@ impl<'a> Env<'a> {
         }
 
         Ok(TranslateOutput {
-            t: Rc::new(Type::Array(elem_type, len as usize)),
+            t: TypeInfo::new(Rc::new(Type::Array(elem_type, len as usize)), elem_size * len as usize),
             expr: translate::Expr::Expr(ir::Expr::Seq(
                 Box::new(ir::Stmt::seq(assign_stmts)),
                 Box::new(array_tmp_trexpr),
@@ -1611,12 +1667,12 @@ impl<'a> Env<'a> {
         })
     }
 
-    fn typecheck_if(&self, Spanned { t: expr, span }: &Spanned<If>) -> Result<TranslateOutput<Rc<Type>>> {
+    fn typecheck_if(&self, Spanned { t: expr, span }: &Spanned<If>) -> Result<TranslateOutput<TypeInfo>> {
         let true_label = self.tmp_generator.new_label();
         let false_label = self.tmp_generator.new_label();
         let join_label = self.tmp_generator.new_label();
         let result = self.tmp_generator.new_tmp();
-        let cond_gen = self.assert_ty(&expr.cond, &Rc::new(Type::Bool))?.expr.unwrap_cond();
+        let cond_gen = self.assert_ty(&expr.cond, &TypeInfo::bool())?.expr.unwrap_cond();
 
         let mut injected_labels = None;
         let mut then_expr_was_cond = false;
@@ -1680,9 +1736,9 @@ impl<'a> Env<'a> {
                 })
             }
         } else {
-            if then_expr_type != Rc::new(Type::Unit) {
+            if then_expr_type != TypeInfo::unit() {
                 return Err(vec![TypecheckErr::new_err(
-                    TypecheckErrType::TypeMismatch(Rc::new(Type::Unit), then_expr_type),
+                    TypecheckErrType::TypeMismatch(TypeInfo::unit(), then_expr_type),
                     expr.then_expr.span,
                 )]);
             }
@@ -1732,7 +1788,7 @@ impl<'a> Env<'a> {
             t: if else_instr.is_some() {
                 then_expr_type
             } else {
-                Rc::new(Type::Unit)
+                TypeInfo::unit()
             },
             expr: translate::Expr::Expr(ir::Expr::Seq(
                 Box::new(ir::Stmt::seq(seq)),
@@ -1741,17 +1797,20 @@ impl<'a> Env<'a> {
         })
     }
 
-    fn typecheck_range(&self, Spanned { t: expr, .. }: &Spanned<Range>) -> Result<TranslateOutput<Rc<Type>>> {
-        self.assert_ty(&expr.lower, &Rc::new(Type::Int))?;
-        self.assert_ty(&expr.upper, &Rc::new(Type::Int))?;
+    fn typecheck_range(&self, Spanned { t: expr, .. }: &Spanned<Range>) -> Result<TranslateOutput<TypeInfo>> {
+        self.assert_ty(&expr.lower, &TypeInfo::int())?;
+        self.assert_ty(&expr.upper, &TypeInfo::int())?;
         Ok(TranslateOutput {
-            t: Rc::new(Type::Iterator(Rc::new(Type::Int))),
+            t: TypeInfo::new(Rc::new(Type::Iterator(TypeInfo::int())), 2 * TypeInfo::int().size()),
             expr: translate::Expr::Expr(ir::Expr::Const(0)),
         })
     }
 
-    fn typecheck_for(&self, Spanned { t: expr, .. }: &Spanned<For>) -> Result<TranslateOutput<Rc<Type>>> {
-        self.assert_ty(&expr.range, &Rc::new(Type::Iterator(Rc::new(Type::Int))))?;
+    fn typecheck_for(&self, Spanned { t: expr, .. }: &Spanned<For>) -> Result<TranslateOutput<TypeInfo>> {
+        self.assert_ty(
+            &expr.range,
+            &TypeInfo::new(Rc::new(Type::Iterator(TypeInfo::int())), 2 * TypeInfo::int().size()),
+        )?;
         // Only support range literals in for loops for now
         if let ExprType::Range(range_expr) = &expr.range.t {
             let TranslateOutput { expr: lower_trexpr, .. } = self.typecheck_expr(&range_expr.lower)?;
@@ -1764,8 +1823,8 @@ impl<'a> Env<'a> {
                 let mut levels = child_env.levels.borrow_mut();
                 let level = levels.get_mut(&self.level_label).unwrap();
                 (
-                    level.alloc_local(&self.tmp_generator, true),
-                    level.alloc_local(&self.tmp_generator, true),
+                    level.alloc_local(&self.tmp_generator, TypeInfo::int().size(), true),
+                    level.alloc_local(&self.tmp_generator, TypeInfo::int().size(), true),
                 )
             };
 
@@ -1800,7 +1859,7 @@ impl<'a> Env<'a> {
             child_env.insert_var(
                 expr.index.t.clone(),
                 EnvEntry {
-                    ty: Rc::new(Type::Int),
+                    ty: TypeInfo::int(),
                     immutable: false,
                     // FIXME
                     entry_type: EnvEntryType::Var(index_local),
@@ -1809,7 +1868,7 @@ impl<'a> Env<'a> {
             );
 
             let body = child_env
-                .assert_ty(&expr.body, &Rc::new(Type::Unit))?
+                .assert_ty(&expr.body, &TypeInfo::unit())?
                 .expr
                 .unwrap_stmt(&self.tmp_generator);
 
@@ -1833,7 +1892,7 @@ impl<'a> Env<'a> {
             ]);
 
             Ok(TranslateOutput {
-                t: Rc::new(Type::Unit),
+                t: TypeInfo::unit(),
                 expr: translate::Expr::Stmt(ir::Stmt::seq(stmts)),
             })
         } else {
@@ -1848,18 +1907,18 @@ impl<'a> Env<'a> {
         }
     }
 
-    fn typecheck_while(&self, Spanned { t: expr, .. }: &Spanned<While>) -> Result<TranslateOutput<Rc<Type>>> {
+    fn typecheck_while(&self, Spanned { t: expr, .. }: &Spanned<While>) -> Result<TranslateOutput<TypeInfo>> {
         let test_label = self.tmp_generator.new_label();
         let done_label = self.tmp_generator.new_label();
         let cond_true_label = self.tmp_generator.new_label();
-        let cond = self.assert_ty(&expr.cond, &Rc::new(Type::Bool))?.expr;
+        let cond = self.assert_ty(&expr.cond, &TypeInfo::bool())?.expr;
         let gen_stmt = cond.unwrap_cond();
 
         let mut child_env = self.new_child(self.level_label.clone());
         child_env.continue_label = Some(test_label.clone());
         child_env.break_label = Some(done_label.clone());
         let body = child_env
-            .assert_ty(&expr.body, &Rc::new(Type::Unit))?
+            .assert_ty(&expr.body, &TypeInfo::unit())?
             .expr
             .unwrap_stmt(&self.tmp_generator);
 
@@ -1872,16 +1931,16 @@ impl<'a> Env<'a> {
             ir::Stmt::Label(done_label),
         ]);
         Ok(TranslateOutput {
-            t: Rc::new(Type::Unit),
+            t: TypeInfo::unit(),
             expr: translate::Expr::Stmt(stmts),
         })
     }
 
-    fn typecheck_arith(&self, Spanned { t: expr, .. }: &Spanned<Arith>) -> Result<TranslateOutput<Rc<Type>>> {
-        let TranslateOutput { expr: l_expr, .. } = self.assert_ty(&expr.l, &Rc::new(Type::Int))?;
-        let TranslateOutput { expr: r_expr, .. } = self.assert_ty(&expr.r, &Rc::new(Type::Int))?;
+    fn typecheck_arith(&self, Spanned { t: expr, .. }: &Spanned<Arith>) -> Result<TranslateOutput<TypeInfo>> {
+        let TranslateOutput { expr: l_expr, .. } = self.assert_ty(&expr.l, &TypeInfo::int())?;
+        let TranslateOutput { expr: r_expr, .. } = self.assert_ty(&expr.r, &TypeInfo::int())?;
         Ok(TranslateOutput {
-            t: Rc::new(Type::Int),
+            t: TypeInfo::int(),
             expr: translate::Expr::Expr(ir::Expr::BinOp(
                 Box::new(l_expr.unwrap_expr(&self.tmp_generator)),
                 expr.op.t.into(),
@@ -1890,18 +1949,18 @@ impl<'a> Env<'a> {
         })
     }
 
-    fn typecheck_bool(&self, Spanned { t: expr, span }: &Spanned<Bool>) -> Result<TranslateOutput<Rc<Type>>> {
+    fn typecheck_bool(&self, Spanned { t: expr, span }: &Spanned<Bool>) -> Result<TranslateOutput<TypeInfo>> {
         // We should still typecheck each element individually to get more informative error messages.
-        self.assert_ty(&expr.l, &Rc::new(Type::Bool))?;
-        self.assert_ty(&expr.r, &Rc::new(Type::Bool))?;
+        self.assert_ty(&expr.l, &TypeInfo::bool())?;
+        self.assert_ty(&expr.r, &TypeInfo::bool())?;
         let if_expr = expr.clone().into_if();
         Ok(TranslateOutput {
-            t: Rc::new(Type::Bool),
+            t: TypeInfo::bool(),
             expr: self.typecheck_if(&Spanned::new(if_expr, *span))?.expr,
         })
     }
 
-    fn typecheck_compare(&self, Spanned { t: expr, span }: &Spanned<Compare>) -> Result<TranslateOutput<Rc<Type>>> {
+    fn typecheck_compare(&self, Spanned { t: expr, span }: &Spanned<Compare>) -> Result<TranslateOutput<TypeInfo>> {
         let TranslateOutput { t: l_ty, expr: l_expr } = self.typecheck_expr(&expr.l)?;
         let TranslateOutput { t: r_ty, expr: r_expr } = self.typecheck_expr(&expr.r)?;
         let left_type = self.resolve_type(&l_ty, expr.l.span)?;
@@ -1916,7 +1975,7 @@ impl<'a> Env<'a> {
         let l_expr = l_expr.unwrap_expr(&self.tmp_generator);
         let r_expr = r_expr.unwrap_expr(&self.tmp_generator);
 
-        let expr = if left_type == Rc::new(Type::String) {
+        let expr = if left_type == TypeInfo::string() {
             translate::Expr::Expr(Frame::external_call("__strcmp", vec![l_expr, r_expr]))
         } else {
             let op = expr.op.t.into();
@@ -1926,14 +1985,14 @@ impl<'a> Env<'a> {
         };
 
         Ok(TranslateOutput {
-            t: Rc::new(Type::Bool),
+            t: TypeInfo::bool(),
             expr,
         })
     }
 
-    fn typecheck_enum(&self, Spanned { t: expr, .. }: &Spanned<Enum>) -> Result<TranslateOutput<Rc<Type>>> {
+    fn typecheck_enum(&self, Spanned { t: expr, .. }: &Spanned<Enum>) -> Result<TranslateOutput<TypeInfo>> {
         if let Some(ty) = self.r#type(&expr.enum_id) {
-            if let Type::Enum(_, enum_cases) = ty.as_ref() {
+            if let Type::Enum(_, enum_cases) = ty.ty().as_ref() {
                 if let Some(EnumCase { params, .. }) = enum_cases.get(&expr.case_id.t) {
                     if params.len() != expr.args.len() {
                         return Err(vec![TypecheckErr::new_err(
@@ -1998,7 +2057,7 @@ impl<'a> Env<'a> {
         }
     }
 
-    fn typecheck_closure(&self, Spanned { t: expr, .. }: &Spanned<Closure>) -> Result<TranslateOutput<Rc<Type>>> {
+    fn typecheck_closure(&self, Spanned { t: expr, .. }: &Spanned<Closure>) -> Result<TranslateOutput<TypeInfo>> {
         // FIXME: We need to create a new level for the closure?
         let child_env = self.new_child(self.level_label.clone());
         Self::check_for_duplicates(
@@ -2019,7 +2078,7 @@ impl<'a> Env<'a> {
         let mut param_types = vec![];
         let mut errors = vec![];
         for type_field in &expr.type_fields {
-            let ty = Rc::new(type_field.ty.t.clone().into());
+            let ty = self.convert_pre_type(&Rc::new(type_field.ty.t.clone().into()));
             match self.resolve_type(&ty, type_field.ty.span) {
                 Ok(_) => {
                     param_types.push(ty.clone());
@@ -2048,40 +2107,23 @@ impl<'a> Env<'a> {
             return Err(errors);
         }
         Ok(TranslateOutput {
-            t: Rc::new(Type::Fn(param_types, return_type)),
+            t: TypeInfo::new(Rc::new(Type::Fn(param_types, return_type)), std::mem::size_of::<u64>()),
             expr: translate::Expr::Expr(ir::Expr::Const(0)),
         })
     }
 
-    fn typecheck_fn_decl_expr(&mut self, fn_decl: &Spanned<FnDecl>) -> Result<TranslateOutput<Rc<Type>>> {
+    fn typecheck_fn_decl_expr(&mut self, fn_decl: &Spanned<FnDecl>) -> Result<TranslateOutput<TypeInfo>> {
         // At this point, we have already typechecked all type decls, so we can validate the param
         // and return types.
-        if let Type::Fn(param_types, return_type) = self.typecheck_fn_decl_sig(fn_decl)?.as_ref() {
-            let mut errors = vec![];
-            for (param_index, param_type) in param_types.iter().enumerate() {
-                if let Err(errs) = self.validate_type(param_type, fn_decl.type_fields[param_index].span) {
-                    errors.extend(errs);
-                }
-                if let Some(return_type_decl) = &fn_decl.return_type {
-                    if let Err(errs) = self.validate_type(return_type, return_type_decl.span) {
-                        errors.extend(errs);
-                    }
-                }
-            }
+        self.validate_fn_decl_pre_types(fn_decl)?;
+        self.typecheck_fn_decl_sig(fn_decl)?;
 
-            // Defer typechecking function body until all function declaration signatures have been
-            // typechecked. This allows for mutually recursive functions.
-            if !errors.is_empty() {
-                Err(errors)
-            } else {
-                Ok(TranslateOutput {
-                    t: Rc::new(Type::Unit),
-                    expr: translate::Expr::Expr(ir::Expr::Const(0)),
-                })
-            }
-        } else {
-            panic!("expected function type");
-        }
+        // Defer typechecking function body until all function declaration signatures have been
+        // typechecked. This allows for mutually recursive functions.
+        Ok(TranslateOutput {
+            t: TypeInfo::unit(),
+            expr: translate::Expr::Expr(ir::Expr::Const(0)),
+        })
     }
 
     pub fn translate_simple_var(
@@ -2101,16 +2143,20 @@ impl<'a> Env<'a> {
         tmp_generator: &TmpGenerator,
         array_expr: &translate::Expr,
         index_expr: &translate::Expr,
+        size: usize,
     ) -> translate::Expr {
-        translate::Expr::Expr(ir::Expr::Mem(Box::new(ir::Expr::BinOp(
-            Box::new(array_expr.clone().unwrap_expr(tmp_generator)),
-            ir::BinOp::Add,
+        translate::Expr::Expr(ir::Expr::Mem(
             Box::new(ir::Expr::BinOp(
-                Box::new(index_expr.clone().unwrap_expr(tmp_generator)),
-                ir::BinOp::Mul,
-                Box::new(ir::Expr::Const(frame::WORD_SIZE)),
+                Box::new(array_expr.clone().unwrap_expr(tmp_generator)),
+                ir::BinOp::Add,
+                Box::new(ir::Expr::BinOp(
+                    Box::new(index_expr.clone().unwrap_expr(tmp_generator)),
+                    ir::BinOp::Mul,
+                    Box::new(ir::Expr::Const(frame::WORD_SIZE)),
+                )),
             )),
-        ))))
+            size,
+        ))
     }
 
     pub fn static_link(levels: &HashMap<Label, Level>, from_level: &Level, to_level: &Level) -> ir::Expr {
@@ -2119,7 +2165,10 @@ impl<'a> Env<'a> {
         } else {
             let parent_label = from_level.parent_label.as_ref().unwrap();
             let parent_level = &levels[&parent_label];
-            ir::Expr::Mem(Box::new(Env::static_link(levels, parent_level, to_level)))
+            ir::Expr::Mem(
+                Box::new(Env::static_link(levels, parent_level, to_level)),
+                std::mem::size_of::<u64>(),
+            )
         }
     }
 
@@ -2138,24 +2187,25 @@ mod tests {
     use crate::{
         ast::{self, BoolOp, CompareOp, TypeField},
         frame,
+        ty::_EnumCase,
         utils::EMPTY_SOURCEMAP,
     };
     use pretty_assertions::assert_eq;
 
     #[test]
-    fn resolve_type() {
+    fn resolve_pre_type() {
         let mut env = Env::new(TmpGenerator::default(), EMPTY_SOURCEMAP.1, Label::top());
-        env.insert_type("a".to_owned(), Type::Alias("b".to_owned()), zspan!());
-        env.insert_type("b".to_owned(), Type::Alias("c".to_owned()), zspan!());
-        env.insert_type("c".to_owned(), Type::Int, zspan!());
-        env.insert_type("d".to_owned(), Type::Alias("e".to_owned()), zspan!());
+        env.insert_pre_type("a".to_owned(), _Type::Alias("b".to_owned()), zspan!());
+        env.insert_pre_type("b".to_owned(), _Type::Alias("c".to_owned()), zspan!());
+        env.insert_pre_type("c".to_owned(), _Type::Int, zspan!());
+        env.insert_pre_type("d".to_owned(), _Type::Alias("e".to_owned()), zspan!());
 
         assert_eq!(
-            env.resolve_type(&Rc::new(Type::Alias("a".to_owned())), zspan!()),
-            Ok(Rc::new(Type::Int))
+            env.resolve_pre_type(&Rc::new(_Type::Alias("a".to_owned())), zspan!()),
+            Ok(Rc::new(_Type::Int))
         );
         assert_eq!(
-            env.resolve_type(&Rc::new(Type::Alias("d".to_owned())), zspan!())
+            env.resolve_pre_type(&Rc::new(_Type::Alias("d".to_owned())), zspan!())
                 .unwrap_err()[0]
                 .t
                 .ty,
@@ -2167,22 +2217,29 @@ mod tests {
     fn child_env() {
         let mut env = Env::new(TmpGenerator::default(), EMPTY_SOURCEMAP.1, Label::top());
         let var_properties = EnvEntry {
-            ty: Rc::new(Type::Int),
+            ty: TypeInfo::int(),
             immutable: true,
             entry_type: EnvEntryType::Var(Access {
                 level_label: Label::top(),
-                access: frame::Access::InFrame(-8),
+                access: frame::Access {
+                    ty: frame::AccessType::InFrame(-8),
+                    size: std::mem::size_of::<i64>(),
+                },
             }),
         };
         env.insert_var("a".to_owned(), var_properties.clone(), zspan!());
         let mut child_env = env.new_child(env.level_label.clone());
-        child_env.insert_type("i".to_owned(), Type::Alias("int".to_owned()), zspan!());
+        child_env.insert_type(
+            "i".to_owned(),
+            TypeInfo::new(Rc::new(Type::Alias("int".to_owned())), std::mem::size_of::<i64>()),
+            zspan!(),
+        );
 
         assert!(child_env.contains_type("int"));
         assert!(child_env.contains_type("i"));
         assert_eq!(
             child_env.resolve_type(child_env.r#type("i").unwrap(), zspan!()),
-            Ok(Rc::new(Type::Int))
+            Ok(TypeInfo::int())
         );
         assert_eq!(child_env.var("a"), Some(&var_properties));
     }
@@ -2199,7 +2256,7 @@ mod tests {
         let env = Env::new(TmpGenerator::default(), EMPTY_SOURCEMAP.1, level_label);
         assert_eq!(
             env.typecheck_expr(&expr).map(TranslateOutput::unwrap),
-            Ok(Rc::new(Type::Bool))
+            Ok(TypeInfo::bool())
         );
     }
 
@@ -2220,7 +2277,7 @@ mod tests {
         assert_eq!(
             env.typecheck_expr(&expr),
             Err(vec![TypecheckErr::new_err(
-                TypecheckErrType::TypeMismatch(Rc::new(Type::Bool), Rc::new(Type::Int)),
+                TypecheckErrType::TypeMismatch(TypeInfo::bool(), TypeInfo::int()),
                 zspan!(),
             )])
         );
@@ -2252,16 +2309,24 @@ mod tests {
         }
 
         let record = hashmap! {
-            "f".to_owned() => RecordField{ ty: Rc::new(Type::Int), index: 0}
+            "f".to_owned() => _RecordField { ty: Rc::new(_Type::Int), index: 0 }
         };
+
+        env.insert_pre_type("r".to_owned(), _Type::Record("r".to_owned(), record), zspan!());
+        env.convert_pre_types();
+        let ty = env.r#type("r").unwrap().clone();
+
         env.insert_var(
             "x".to_owned(),
             EnvEntry {
-                ty: Rc::new(Type::Record("r".to_owned(), record)),
+                ty: ty.clone(),
                 immutable: false,
                 entry_type: EnvEntryType::Var(Access {
                     level_label: level_label.clone(),
-                    access: frame::Access::InFrame(-8),
+                    access: frame::Access {
+                        ty: frame::AccessType::InFrame(-8),
+                        size: ty.size(),
+                    },
                 }),
             },
             zspan!(),
@@ -2273,7 +2338,7 @@ mod tests {
         assert_eq!(
             env.typecheck_lval(&lval).map(TranslateOutput::unwrap),
             Ok(LValProperties {
-                ty: Rc::new(Type::Int),
+                ty: TypeInfo::int(),
                 immutable: None,
             })
         );
@@ -2291,14 +2356,21 @@ mod tests {
             levels.insert(level_label.clone(), level);
         }
 
+        env.insert_pre_type("r".to_owned(), _Type::Record("r".to_owned(), HashMap::new()), zspan!());
+        env.convert_pre_types();
+        let ty = env.r#type("r").unwrap();
+
         env.insert_var(
             "x".to_owned(),
             EnvEntry {
-                ty: Rc::new(Type::Record("r".to_owned(), HashMap::new())),
+                ty: ty.clone(),
                 immutable: true,
                 entry_type: EnvEntryType::Var(Access {
                     level_label: level_label.clone(),
-                    access: frame::Access::InFrame(-8),
+                    access: frame::Access {
+                        ty: frame::AccessType::InFrame(-8),
+                        size: ty.size(),
+                    },
                 }),
             },
             zspan!(),
@@ -2328,14 +2400,19 @@ mod tests {
             levels.insert(level_label.clone(), level);
         }
 
+        let ty = TypeInfo::int();
+
         env.insert_var(
             "x".to_owned(),
             EnvEntry {
-                ty: Rc::new(Type::Int),
+                ty: ty.clone(),
                 immutable: true,
                 entry_type: EnvEntryType::Var(Access {
                     level_label: level_label.clone(),
-                    access: frame::Access::InFrame(-8),
+                    access: frame::Access {
+                        ty: frame::AccessType::InFrame(-8),
+                        size: ty.size(),
+                    },
                 }),
             },
             zspan!(),
@@ -2365,14 +2442,19 @@ mod tests {
             levels.insert(level_label.clone(), level);
         }
 
+        let ty = TypeInfo::new(Rc::new(Type::Array(TypeInfo::int(), 3)), TypeInfo::int().size() * 3);
+
         env.insert_var(
             "x".to_owned(),
             EnvEntry {
-                ty: Rc::new(Type::Array(Rc::new(Type::Int), 3)),
+                ty: ty.clone(),
                 immutable: true,
                 entry_type: EnvEntryType::Var(Access {
                     level_label: level_label.clone(),
-                    access: frame::Access::InFrame(-8),
+                    access: frame::Access {
+                        ty: frame::AccessType::InFrame(-8),
+                        size: ty.size(),
+                    },
                 }),
             },
             zspan!(),
@@ -2384,7 +2466,7 @@ mod tests {
         assert_eq!(
             env.typecheck_lval(&lval).map(TranslateOutput::unwrap),
             Ok(LValProperties {
-                ty: Rc::new(Type::Int),
+                ty: TypeInfo::int(),
                 immutable: Some("x".to_owned())
             })
         );
@@ -2409,9 +2491,9 @@ mod tests {
         });
         assert_eq!(
             env.typecheck_let(&let_expr).map(TranslateOutput::unwrap),
-            Ok(Rc::new(Type::Unit))
+            Ok(TypeInfo::unit())
         );
-        assert_eq!(env.vars["x"].ty, Rc::new(Type::Int));
+        assert_eq!(env.vars["x"].ty, TypeInfo::int());
         assert_eq!(env.vars["x"].immutable, true);
         assert!(env.var_def_spans.contains_key("x"));
     }
@@ -2430,7 +2512,7 @@ mod tests {
         });
         assert_eq!(
             env.typecheck_let(&let_expr).unwrap_err()[0].t.ty,
-            TypecheckErrType::TypeMismatch(Rc::new(Type::String), Rc::new(Type::Int))
+            TypecheckErrType::TypeMismatch(TypeInfo::string(), TypeInfo::int())
         );
     }
 
@@ -2460,7 +2542,7 @@ mod tests {
         env.insert_var(
             "f".to_owned(),
             EnvEntry {
-                ty: Rc::new(Type::Int),
+                ty: TypeInfo::int(),
                 immutable: true,
                 entry_type: EnvEntryType::Fn(label_f),
             },
@@ -2483,10 +2565,12 @@ mod tests {
         let label_f = tmp_generator.new_label();
 
         let mut env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1, level_label);
+        let ty = TypeInfo::new(Rc::new(Type::Fn(vec![], TypeInfo::int())), std::mem::size_of::<u64>());
+
         env.insert_var(
             "f".to_owned(),
             EnvEntry {
-                ty: Rc::new(Type::Fn(vec![], Rc::new(Type::Int))),
+                ty,
                 immutable: true,
                 entry_type: EnvEntryType::Fn(label_f),
             },
@@ -2509,10 +2593,14 @@ mod tests {
         let label_f = tmp_generator.new_label();
 
         let mut env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1, level_label);
+        env.insert_pre_type("f", _Type::Fn(vec![Rc::new(_Type::Int)], Rc::new(_Type::Int)), zspan!());
+        env.convert_pre_types();
+        let ty = env.r#type("f").unwrap();
+
         env.insert_var(
             "f".to_owned(),
             EnvEntry {
-                ty: Rc::new(Type::Fn(vec![Rc::new(Type::Int)], Rc::new(Type::Int))),
+                ty: ty.clone(),
                 immutable: true,
                 entry_type: EnvEntryType::Fn(label_f),
             },
@@ -2527,7 +2615,7 @@ mod tests {
 
         assert_eq!(
             env.typecheck_fn_call(&fn_call).unwrap_err()[0].t.ty,
-            TypecheckErrType::TypeMismatch(Rc::new(Type::Int), Rc::new(Type::String))
+            TypecheckErrType::TypeMismatch(TypeInfo::int(), TypeInfo::string())
         )
     }
 
@@ -2538,11 +2626,16 @@ mod tests {
         let label_f = tmp_generator.new_label();
 
         let mut env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1, level_label);
-        env.insert_type("a".to_owned(), Type::Alias("int".to_owned()), zspan!());
+        env.insert_pre_type("a", _Type::Alias("int".to_owned()), zspan!());
+        env.insert_pre_type("f", _Type::Fn(vec![], Rc::new(_Type::Alias("a".to_owned()))), zspan!());
+        env.convert_pre_types();
+
+        let ty = env.r#type("f").unwrap();
+
         env.insert_var(
-            "f".to_owned(),
+            "f",
             EnvEntry {
-                ty: Rc::new(Type::Fn(vec![], Rc::new(Type::Alias("a".to_owned())))),
+                ty: ty.clone(),
                 immutable: true,
                 entry_type: EnvEntryType::Fn(label_f),
             },
@@ -2554,7 +2647,7 @@ mod tests {
         });
         assert_eq!(
             env.typecheck_fn_call(&fn_call).unwrap().unwrap(),
-            Rc::new(Type::Alias("a".to_owned()))
+            TypeInfo::new(Rc::new(Type::Alias("a".to_owned())), TypeInfo::int().size())
         );
     }
 
@@ -2575,6 +2668,8 @@ mod tests {
             expr: zspan!(ExprType::Number(0)),
         });
         let _ = env.typecheck_type_decl(&type_decl);
+        env.convert_pre_types();
+
         assert!(env.typecheck_let(&let_expr).is_ok());
     }
 
@@ -2595,9 +2690,14 @@ mod tests {
             expr: zspan!(ExprType::String("".to_owned())),
         });
         let _ = env.typecheck_type_decl(&type_decl);
+        env.convert_pre_types();
+
         assert_eq!(
             env.typecheck_let(&let_expr).unwrap_err()[0].t.ty,
-            TypecheckErrType::TypeMismatch(Rc::new(Type::Alias("a".to_owned())), Rc::new(Type::String))
+            TypecheckErrType::TypeMismatch(
+                TypeInfo::new(Rc::new(Type::Alias("a".to_owned())), TypeInfo::int().size()),
+                TypeInfo::string()
+            )
         );
     }
 
@@ -2628,7 +2728,7 @@ mod tests {
         env.typecheck_let(&var_def).expect("typecheck var def");
         assert_eq!(
             env.typecheck_expr_mut(&expr).unwrap().unwrap(),
-            Rc::new(Type::Alias("i".to_owned()))
+            TypeInfo::new(Rc::new(Type::Alias("i".to_owned())), TypeInfo::int().size())
         );
     }
 
@@ -2644,36 +2744,40 @@ mod tests {
                 ty: zspan!(ast::Type::Type(zspan!("i".to_owned())))
             })]))
         })));
-        env.typecheck_decl_first_pass(&type_decl).expect("typecheck decl");
+        env.typecheck_type_decl_and_check_cycles(&type_decl)
+            .expect("typecheck decl");
     }
 
     #[test]
     fn check_for_type_decl_cycles_err1() {
         let mut env = Env::new(TmpGenerator::default(), EMPTY_SOURCEMAP.1, Label::top());
-        env.insert_type("a".to_owned(), Type::Alias("a".to_owned()), zspan!());
+        env.insert_pre_type("a", _Type::Alias("a".to_owned()), zspan!());
+
         assert_eq!(
             env.check_for_type_decl_cycles("a", vec![]).unwrap_err()[0].t.ty,
-            TypecheckErrType::TypeDeclCycle("a".to_owned(), Rc::new(Type::Alias("a".to_owned())))
+            TypecheckErrType::TypeDeclCycle("a".to_owned(), Rc::new(_Type::Alias("a".to_owned())))
         );
     }
 
     #[test]
     fn check_for_type_decl_cycles_err2() {
         let mut env = Env::new(TmpGenerator::default(), EMPTY_SOURCEMAP.1, Label::top());
-        env.insert_type("a".to_owned(), Type::Alias("b".to_owned()), zspan!());
-        env.insert_type("b".to_owned(), Type::Alias("c".to_owned()), zspan!());
-        env.insert_type("c".to_owned(), Type::Alias("a".to_owned()), zspan!());
+        env.insert_pre_type("a", _Type::Alias("b".to_owned()), zspan!());
+        env.insert_pre_type("b", _Type::Alias("c".to_owned()), zspan!());
+        env.insert_pre_type("c", _Type::Alias("a".to_owned()), zspan!());
+
         assert_eq!(
             env.check_for_type_decl_cycles("a", vec![]).unwrap_err()[0].t.ty,
-            TypecheckErrType::TypeDeclCycle("c".to_owned(), Rc::new(Type::Alias("a".to_owned())))
+            TypecheckErrType::TypeDeclCycle("c".to_owned(), Rc::new(_Type::Alias("a".to_owned())))
         );
     }
 
     #[test]
     fn check_for_type_decl_cycles() {
         let mut env = Env::new(TmpGenerator::default(), EMPTY_SOURCEMAP.1, Label::top());
-        env.insert_type("a".to_owned(), Type::Alias("b".to_owned()), zspan!());
-        env.insert_type("b".to_owned(), Type::Alias("c".to_owned()), zspan!());
+        env.insert_pre_type("a", _Type::Alias("b".to_owned()), zspan!());
+        env.insert_pre_type("b", _Type::Alias("c".to_owned()), zspan!());
+
         assert_eq!(env.check_for_type_decl_cycles("a", vec![]), Ok(()));
     }
 
@@ -2685,6 +2789,7 @@ mod tests {
             ty: zspan!(ast::TypeDeclType::Unit)
         }))
         .expect("typecheck type decl");
+        env.convert_pre_types();
 
         assert_eq!(
             env.typecheck_type_decl(&zspan!(ast::TypeDecl {
@@ -2704,17 +2809,15 @@ mod tests {
         let label_f = tmp_generator.new_label();
 
         let mut env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1, Label::top());
-        env.insert_var(
-            "f".to_owned(),
-            EnvEntry {
-                ty: Rc::new(Type::Fn(vec![], Rc::new(Type::Alias("a".to_owned())))),
-                immutable: true,
-                entry_type: EnvEntryType::Fn(label_f),
-            },
-            zspan!(),
-        );
+        let fn_decl = zspan!(ast::FnDecl {
+            id: zspan!("f".to_owned()),
+            type_fields: vec![],
+            return_type: Some(zspan!(ast::Type::Type(zspan!("a".to_owned())))),
+            body: zspan!(ast::ExprType::Unit)
+        });
+
         assert_eq!(
-            env.check_for_invalid_types().unwrap_err()[0].t.ty,
+            env.validate_fn_decl_pre_types(&fn_decl).unwrap_err()[0].t.ty,
             TypecheckErrType::UndefinedType("a".to_owned())
         );
     }
@@ -2745,7 +2848,7 @@ mod tests {
         assert_eq!(
             result,
             Err(vec![TypecheckErr::new_err(
-                TypecheckErrType::TypeDeclCycle("a".to_owned(), Rc::new(Type::Alias("a".to_owned()))),
+                TypecheckErrType::TypeDeclCycle("a".to_owned(), Rc::new(_Type::Alias("a".to_owned()))),
                 zspan!()
             )])
         );
@@ -2823,7 +2926,10 @@ mod tests {
 
         assert_eq!(
             env.typecheck_fn_decl_sig(&fn_decl),
-            Ok(Rc::new(Type::Fn(vec![Rc::new(Type::Int)], Rc::new(Type::Unit))))
+            Ok(TypeInfo::new(
+                Rc::new(Type::Fn(vec![TypeInfo::int()], TypeInfo::unit())),
+                std::mem::size_of::<u64>()
+            ))
         );
         env.typecheck_fn_decl_body(&fn_decl).expect("typecheck fn decl body");
 
@@ -2836,32 +2942,35 @@ mod tests {
             level.formals(),
             vec![Access {
                 level_label: label,
-                access: frame::Access::InFrame(-8)
+                access: frame::Access {
+                    ty: frame::AccessType::InFrame(-8),
+                    size: std::mem::size_of::<u64>()
+                }
             }]
         );
     }
 
     #[test]
-    fn validate_type() {
+    fn validate_pre_type() {
         let mut env = Env::new(TmpGenerator::default(), EMPTY_SOURCEMAP.1, Label::top());
         let mut record_fields = HashMap::new();
         record_fields.insert(
             "f".to_owned(),
-            RecordField {
-                ty: Rc::new(Type::Alias("a".to_owned())),
+            _RecordField {
+                ty: Rc::new(_Type::Alias("a".to_owned())),
                 index: 0,
             },
         );
         record_fields.insert(
             "g".to_owned(),
-            RecordField {
-                ty: Rc::new(Type::Alias("b".to_owned())),
+            _RecordField {
+                ty: Rc::new(_Type::Alias("b".to_owned())),
                 index: 1,
             },
         );
-        env.insert_type("a".to_owned(), Type::Record("a".to_owned(), record_fields), zspan!());
+        env.insert_pre_type("a".to_owned(), _Type::Record("a".to_owned(), record_fields), zspan!());
 
-        let errs = env.check_for_invalid_types().unwrap_err();
+        let errs = env.check_for_invalid_pre_types().unwrap_err();
         assert_eq!(errs.len(), 1);
         // Recursive type def in records is allowed
         assert_eq!(errs[0].t.ty, TypecheckErrType::UndefinedType("b".to_owned()));
@@ -2873,13 +2982,15 @@ mod tests {
         let level_label = Label::top();
 
         let mut env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1, level_label);
-        let record_type = Type::Record(
+        let record_type = _Type::Record(
             "r".to_owned(),
             hashmap! {
-                "a".to_owned() => RecordField { ty: Rc::new(Type::Int), index: 0 },
+                "a".to_owned() => _RecordField { ty: Rc::new(_Type::Int), index: 0 },
             },
         );
-        env.insert_type("r".to_owned(), record_type, zspan!());
+        env.insert_pre_type("r".to_owned(), record_type, zspan!());
+        env.convert_pre_types();
+
         let record = zspan!(Record {
             id: zspan!("r".to_owned()),
             field_assigns: vec![]
@@ -2896,8 +3007,10 @@ mod tests {
         let level_label = Label::top();
 
         let mut env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1, level_label);
-        let record_type = Type::Record("r".to_owned(), HashMap::new());
-        env.insert_type("r".to_owned(), record_type, zspan!());
+        let record_type = _Type::Record("r".to_owned(), HashMap::new());
+        env.insert_pre_type("r", record_type, zspan!());
+        env.convert_pre_types();
+
         let record = zspan!(Record {
             id: zspan!("r".to_owned()),
             field_assigns: vec![zspan!(FieldAssign {
@@ -2917,14 +3030,16 @@ mod tests {
         let level_label = Label::top();
 
         let mut env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1, level_label);
-        let record_type = Type::Record(
+        let record_type = _Type::Record(
             "r".to_owned(),
             hashmap! {
-                "a".to_owned() => RecordField { ty: Rc::new(Type::Int), index: 0 },
+                "a".to_owned() => _RecordField { ty: Rc::new(_Type::Int), index: 0 },
             },
         );
 
-        env.insert_type("r".to_owned(), record_type.clone(), zspan!());
+        env.insert_pre_type("r".to_owned(), record_type.clone(), zspan!());
+        env.convert_pre_types();
+
         env.record_field_decl_spans.insert(
             "r".to_owned(),
             hashmap! {
@@ -2958,14 +3073,18 @@ mod tests {
         let level_label = Label::top();
 
         let mut env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1, level_label);
-        let record_type = Type::Record(
+        let record_type = _Type::Record(
             "r".to_owned(),
             hashmap! {
-                "a".to_owned() => RecordField { ty: Rc::new(Type::Int), index: 0 },
-                "b".to_owned() => RecordField { ty: Rc::new(Type::String), index: 1},
+                "a".to_owned() => _RecordField { ty: Rc::new(_Type::Int), index: 0 },
+                "b".to_owned() => _RecordField { ty: Rc::new(_Type::String), index: 1},
             },
         );
-        env.insert_type("r".to_owned(), record_type.clone(), zspan!());
+        env.insert_pre_type("r".to_owned(), record_type.clone(), zspan!());
+        env.convert_pre_types();
+
+        let ty = env.r#type("r").unwrap().clone();
+
         env.record_field_decl_spans.insert(
             "r".to_owned(),
             hashmap! {
@@ -2987,7 +3106,7 @@ mod tests {
             ]
         });
 
-        assert_eq!(env.typecheck_record(&record).unwrap().unwrap(), Rc::new(record_type));
+        assert_eq!(env.typecheck_record(&record).unwrap().unwrap(), ty);
     }
 
     #[test]
@@ -2996,13 +3115,15 @@ mod tests {
         let level_label = Label::top();
 
         let mut env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1, level_label);
-        let record_type = Type::Record(
+        let record_type = _Type::Record(
             "r".to_owned(),
             hashmap! {
-                "a".to_owned() => RecordField { ty: Rc::new(Type::Int), index: 0 },
+                "a".to_owned() => _RecordField { ty: Rc::new(_Type::Int), index: 0 },
             },
         );
-        env.insert_type("r".to_owned(), record_type, zspan!());
+        env.insert_pre_type("r", record_type, zspan!());
+        env.convert_pre_types();
+
         env.record_field_decl_spans
             .insert("r".to_owned(), hashmap! { "a".to_owned() => zspan!() });
         let record = zspan!(Record {
@@ -3015,7 +3136,7 @@ mod tests {
 
         assert_eq!(
             env.typecheck_record(&record).unwrap_err()[0].t.ty,
-            TypecheckErrType::TypeMismatch(Rc::new(Type::Int), Rc::new(Type::String))
+            TypecheckErrType::TypeMismatch(TypeInfo::int(), TypeInfo::string())
         );
     }
 
@@ -3127,11 +3248,14 @@ mod tests {
         env.insert_var(
             "b".to_owned(),
             EnvEntry {
-                ty: Rc::new(Type::String),
+                ty: TypeInfo::string(),
                 immutable: true,
                 entry_type: EnvEntryType::Var(Access {
                     level_label: level_label.clone(),
-                    access: frame::Access::InFrame(-8),
+                    access: frame::Access {
+                        ty: frame::AccessType::InFrame(-8),
+                        size: TypeInfo::string().size(),
+                    },
                 }),
             },
             zspan!(),
@@ -3143,7 +3267,7 @@ mod tests {
 
         assert_eq!(
             env.typecheck_expr(&seq).map(TranslateOutput::unwrap),
-            Ok(Rc::new(Type::String))
+            Ok(TypeInfo::string())
         );
     }
 
@@ -3191,11 +3315,14 @@ mod tests {
         env.insert_var(
             "a".to_owned(),
             EnvEntry {
-                ty: Rc::new(Type::Int),
+                ty: TypeInfo::int(),
                 immutable: true,
                 entry_type: EnvEntryType::Var(Access {
                     level_label: level_label.clone(),
-                    access: frame::Access::InFrame(-8),
+                    access: frame::Access {
+                        ty: frame::AccessType::InFrame(-8),
+                        size: TypeInfo::int().size(),
+                    },
                 }),
             },
             zspan!(),
@@ -3225,24 +3352,30 @@ mod tests {
             levels.insert(level_label.clone(), level);
         }
 
-        let record_type = Type::Record(
+        let record_type = _Type::Record(
             "r".to_owned(),
             hashmap! {
-                "a".to_owned() => RecordField { ty: Rc::new(Type::Int), index: 0 },
+                "a".to_owned() => _RecordField { ty: Rc::new(_Type::Int), index: 0 },
             },
         );
-        env.insert_type("r".to_owned(), record_type.clone(), zspan!());
+        env.insert_pre_type("r", record_type.clone(), zspan!());
+        env.convert_pre_types();
         env.record_field_decl_spans
             .insert("r".to_owned(), hashmap! { "a".to_owned() => zspan!() });
+
+        let ty = env.r#type("r").unwrap();
 
         env.insert_var(
             "r".to_owned(),
             EnvEntry {
-                ty: Rc::new(record_type),
+                ty: ty.clone(),
                 immutable: true,
                 entry_type: EnvEntryType::Var(Access {
                     level_label: level_label.clone(),
-                    access: frame::Access::InFrame(-8),
+                    access: frame::Access {
+                        ty: frame::AccessType::InFrame(-8),
+                        size: ty.size(),
+                    },
                 }),
             },
             zspan!(),
@@ -3275,24 +3408,31 @@ mod tests {
             levels.insert(level_label.clone(), level);
         }
 
-        let record_type = Type::Record(
+        let record_type = _Type::Record(
             "r".to_owned(),
             hashmap! {
-                "a".to_owned() => RecordField { ty: Rc::new(Type::Int), index: 0 },
+                "a".to_owned() => _RecordField { ty: Rc::new(_Type::Int), index: 0 },
             },
         );
-        env.insert_type("r".to_owned(), record_type.clone(), zspan!());
+        env.insert_pre_type("r", record_type, zspan!());
+        env.convert_pre_types();
+
         env.record_field_decl_spans
             .insert("r".to_owned(), hashmap! { "a".to_owned() => zspan!() });
+
+        let ty = env.r#type("r").unwrap();
 
         env.insert_var(
             "r".to_owned(),
             EnvEntry {
-                ty: Rc::new(record_type),
+                ty: ty.clone(),
                 immutable: false,
                 entry_type: EnvEntryType::Var(Access {
                     level_label: level_label.clone(),
-                    access: frame::Access::InFrame(-8),
+                    access: frame::Access {
+                        ty: frame::AccessType::InFrame(-8),
+                        size: ty.size(),
+                    },
                 }),
             },
             zspan!(),
@@ -3309,7 +3449,7 @@ mod tests {
                 .unwrap_err()[0]
                 .t
                 .ty,
-            TypecheckErrType::TypeMismatch(Rc::new(Type::Int), Rc::new(Type::Unit))
+            TypecheckErrType::TypeMismatch(TypeInfo::int(), TypeInfo::unit())
         );
     }
 
@@ -3325,24 +3465,30 @@ mod tests {
             levels.insert(level_label.clone(), level);
         }
 
-        let record_type = Type::Record(
+        let record_type = _Type::Record(
             "r".to_owned(),
             hashmap! {
-                "a".to_owned() => RecordField{ ty: Rc::new(Type::Int), index: 0 },
+                "a".to_owned() => _RecordField { ty: Rc::new(_Type::Int), index: 0 },
             },
         );
-        env.insert_type("r".to_owned(), record_type.clone(), zspan!());
+        env.insert_pre_type("r", record_type, zspan!());
+        env.convert_pre_types();
         env.record_field_decl_spans
             .insert("r".to_owned(), hashmap! { "a".to_owned() => zspan!() });
 
+        let ty = env.r#type("r").unwrap();
+
         env.insert_var(
-            "r".to_owned(),
+            "r",
             EnvEntry {
-                ty: Rc::new(record_type),
+                ty: ty.clone(),
                 immutable: false,
                 entry_type: EnvEntryType::Var(Access {
                     level_label: level_label.clone(),
-                    access: frame::Access::InFrame(-8),
+                    access: frame::Access {
+                        ty: frame::AccessType::InFrame(-8),
+                        size: ty.size(),
+                    },
                 }),
             },
             zspan!(),
@@ -3357,7 +3503,7 @@ mod tests {
                 expr: zspan!(ExprType::Number(0))
             }),)
                 .map(TranslateOutput::unwrap),
-            Ok(Rc::new(Type::Unit))
+            Ok(TypeInfo::unit())
         );
     }
 
@@ -3373,15 +3519,19 @@ mod tests {
             levels.insert(level_label.clone(), level);
         }
 
-        let array_type = Type::Array(Rc::new(Type::Int), 1);
+        let array_type = TypeInfo::new(Rc::new(Type::Array(TypeInfo::int(), 1)), TypeInfo::int().size());
+
         env.insert_var(
-            "a".to_owned(),
+            "a",
             EnvEntry {
-                ty: Rc::new(array_type),
+                ty: array_type.clone(),
                 immutable: true,
                 entry_type: EnvEntryType::Var(Access {
                     level_label: level_label.clone(),
-                    access: frame::Access::InFrame(-8),
+                    access: frame::Access {
+                        ty: frame::AccessType::InFrame(-8),
+                        size: array_type.size(),
+                    },
                 }),
             },
             zspan!(),
@@ -3414,15 +3564,19 @@ mod tests {
             levels.insert(level_label.clone(), level);
         }
 
-        let array_type = Type::Array(Rc::new(Type::Int), 1);
+        let array_type = TypeInfo::new(Rc::new(Type::Array(TypeInfo::int(), 1)), TypeInfo::int().size());
+
         env.insert_var(
             "a".to_owned(),
             EnvEntry {
-                ty: Rc::new(array_type),
+                ty: array_type.clone(),
                 immutable: false,
                 entry_type: EnvEntryType::Var(Access {
                     level_label: level_label.clone(),
-                    access: frame::Access::InFrame(-8),
+                    access: frame::Access {
+                        ty: frame::AccessType::InFrame(-8),
+                        size: array_type.size(),
+                    },
                 }),
             },
             zspan!(),
@@ -3439,7 +3593,7 @@ mod tests {
                 .unwrap_err()[0]
                 .t
                 .ty,
-            TypecheckErrType::TypeMismatch(Rc::new(Type::Int), Rc::new(Type::String))
+            TypecheckErrType::TypeMismatch(TypeInfo::int(), TypeInfo::string())
         );
     }
 
@@ -3454,15 +3608,19 @@ mod tests {
             let mut levels = env.levels.borrow_mut();
             levels.insert(level_label.clone(), level);
         }
-        let array_type = Type::Array(Rc::new(Type::Int), 1);
+        let array_type = TypeInfo::new(Rc::new(Type::Array(TypeInfo::int(), 1)), TypeInfo::int().size());
+
         env.insert_var(
             "a".to_owned(),
             EnvEntry {
-                ty: Rc::new(array_type),
+                ty: array_type.clone(),
                 immutable: false,
                 entry_type: EnvEntryType::Var(Access {
                     level_label: level_label.clone(),
-                    access: frame::Access::InFrame(-8),
+                    access: frame::Access {
+                        ty: frame::AccessType::InFrame(-8),
+                        size: array_type.size(),
+                    },
                 }),
             },
             zspan!(),
@@ -3477,7 +3635,7 @@ mod tests {
                 expr: zspan!(ExprType::Number(0))
             }),)
                 .map(TranslateOutput::unwrap),
-            Ok(Rc::new(Type::Unit))
+            Ok(TypeInfo::unit())
         );
     }
 
@@ -3487,11 +3645,11 @@ mod tests {
         let level_label = Label::top();
 
         let mut env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1, level_label);
-        let fn_type = Type::Fn(vec![], Rc::new(Type::Unit));
+        let fn_type = TypeInfo::new(Rc::new(Type::Fn(vec![], TypeInfo::unit())), std::mem::size_of::<u64>());
         env.insert_var(
             "f".to_owned(),
             EnvEntry {
-                ty: Rc::new(fn_type),
+                ty: fn_type,
                 immutable: true,
                 entry_type: EnvEntryType::Fn(Label("f".to_owned())),
             },
@@ -3518,7 +3676,10 @@ mod tests {
 
         assert_eq!(
             env.typecheck_array(&array_expr).map(TranslateOutput::unwrap),
-            Ok(Rc::new(Type::Array(Rc::new(Type::Int), 3)))
+            Ok(TypeInfo::new(
+                Rc::new(Type::Array(TypeInfo::int(), 3)),
+                TypeInfo::int().size() * 3
+            ))
         );
     }
 
@@ -3539,7 +3700,10 @@ mod tests {
 
         assert_eq!(
             env.typecheck_array(&array_expr).map(TranslateOutput::unwrap),
-            Ok(Rc::new(Type::Array(Rc::new(Type::Int), 3)))
+            Ok(TypeInfo::new(
+                Rc::new(Type::Array(TypeInfo::int(), 3)),
+                TypeInfo::int().size() * 3
+            ))
         );
     }
 
@@ -3595,7 +3759,7 @@ mod tests {
 
         assert_eq!(
             env.typecheck_if(&if_expr).map(TranslateOutput::unwrap),
-            Ok(Rc::new(Type::Unit))
+            Ok(TypeInfo::unit())
         );
     }
 
@@ -3613,7 +3777,7 @@ mod tests {
 
         assert_eq!(
             env.typecheck_if(&if_expr).unwrap_err()[0].t.ty,
-            TypecheckErrType::TypeMismatch(Rc::new(Type::Unit), Rc::new(Type::Int))
+            TypecheckErrType::TypeMismatch(TypeInfo::unit(), TypeInfo::int())
         );
     }
 
@@ -3631,7 +3795,7 @@ mod tests {
 
         assert_eq!(
             env.typecheck_if(&if_expr).map(TranslateOutput::unwrap),
-            Ok(Rc::new(Type::Int))
+            Ok(TypeInfo::int())
         );
     }
 
@@ -3649,7 +3813,7 @@ mod tests {
 
         assert_eq!(
             env.typecheck_if(&if_expr).unwrap_err()[0].t.ty,
-            TypecheckErrType::TypeMismatch(Rc::new(Type::Int), Rc::new(Type::String))
+            TypecheckErrType::TypeMismatch(TypeInfo::int(), TypeInfo::string())
         );
     }
 
@@ -3666,7 +3830,10 @@ mod tests {
 
         assert_eq!(
             env.typecheck_range(&range).map(TranslateOutput::unwrap),
-            Ok(Rc::new(Type::Iterator(Rc::new(Type::Int))))
+            Ok(TypeInfo::new(
+                Rc::new(Type::Iterator(TypeInfo::int())),
+                TypeInfo::int().size() * 2
+            ))
         );
     }
 
@@ -3683,7 +3850,7 @@ mod tests {
 
         assert_eq!(
             env.typecheck_range(&range).unwrap_err()[0].t.ty,
-            TypecheckErrType::TypeMismatch(Rc::new(Type::Int), Rc::new(Type::String))
+            TypecheckErrType::TypeMismatch(TypeInfo::int(), TypeInfo::string())
         );
     }
 
@@ -3713,7 +3880,7 @@ mod tests {
 
         assert_eq!(
             env.typecheck_for(&for_expr).map(TranslateOutput::unwrap),
-            Ok(Rc::new(Type::Unit))
+            Ok(TypeInfo::unit())
         );
     }
 
@@ -3734,7 +3901,10 @@ mod tests {
 
         assert_eq!(
             env.typecheck_for(&for_expr).unwrap_err()[0].t.ty,
-            TypecheckErrType::TypeMismatch(Rc::new(Type::Iterator(Rc::new(Type::Int))), Rc::new(Type::Int))
+            TypecheckErrType::TypeMismatch(
+                TypeInfo::new(Rc::new(Type::Iterator(TypeInfo::int())), TypeInfo::int().size() * 2),
+                TypeInfo::int()
+            )
         );
     }
 
@@ -3764,7 +3934,7 @@ mod tests {
 
         assert_eq!(
             env.typecheck_for(&for_expr).unwrap_err()[0].t.ty,
-            TypecheckErrType::TypeMismatch(Rc::new(Type::Unit), Rc::new(Type::Int))
+            TypecheckErrType::TypeMismatch(TypeInfo::unit(), TypeInfo::int())
         );
     }
 
@@ -3781,7 +3951,7 @@ mod tests {
 
         assert_eq!(
             env.typecheck_while(&while_expr).map(TranslateOutput::unwrap),
-            Ok(Rc::new(Type::Unit))
+            Ok(TypeInfo::unit())
         );
     }
 
@@ -3797,7 +3967,7 @@ mod tests {
         });
         assert_eq!(
             env.typecheck_while(&while_expr).unwrap_err()[0].t.ty,
-            TypecheckErrType::TypeMismatch(Rc::new(Type::Bool), Rc::new(Type::Int))
+            TypecheckErrType::TypeMismatch(TypeInfo::bool(), TypeInfo::int())
         );
     }
 
@@ -3814,7 +3984,7 @@ mod tests {
 
         assert_eq!(
             env.typecheck_while(&while_expr).unwrap_err()[0].t.ty,
-            TypecheckErrType::TypeMismatch(Rc::new(Type::Unit), Rc::new(Type::Int))
+            TypecheckErrType::TypeMismatch(TypeInfo::unit(), TypeInfo::int())
         );
     }
 
@@ -3832,7 +4002,7 @@ mod tests {
 
         assert_eq!(
             env.typecheck_compare(&compare).map(TranslateOutput::unwrap),
-            Ok(Rc::new(Type::Bool))
+            Ok(TypeInfo::bool())
         );
     }
 
@@ -3850,7 +4020,7 @@ mod tests {
 
         assert_eq!(
             env.typecheck_compare(&compare).unwrap_err()[0].t.ty,
-            TypecheckErrType::TypeMismatch(Rc::new(Type::Int), Rc::new(Type::Bool))
+            TypecheckErrType::TypeMismatch(TypeInfo::int(), TypeInfo::bool())
         );
     }
 
@@ -3860,19 +4030,20 @@ mod tests {
         let level_label = Label::top();
 
         let mut env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1, level_label);
-        env.insert_type(
-            "e".to_owned(),
-            Type::Enum(
+        env.insert_pre_type(
+            "e",
+            _Type::Enum(
                 "e".to_owned(),
                 hashmap! {
-                    "c".to_owned() => EnumCase {
+                    "c".to_owned() => _EnumCase {
                         id: "c".to_owned(),
-                        params: vec![Rc::new(Type::Int)]
+                        params: vec![Rc::new(_Type::Int)]
                     }
                 },
             ),
             zspan!(),
         );
+        env.convert_pre_types();
 
         let enum_expr = zspan!(Enum {
             enum_id: zspan!("e".to_owned()),
@@ -3892,19 +4063,20 @@ mod tests {
         let level_label = Label::top();
 
         let mut env = Env::new(tmp_generator, EMPTY_SOURCEMAP.1, level_label);
-        env.insert_type(
-            "e".to_owned(),
-            Type::Enum(
+        env.insert_pre_type(
+            "e",
+            _Type::Enum(
                 "e".to_owned(),
                 hashmap! {
-                    "c".to_owned() => EnumCase {
+                    "c".to_owned() => _EnumCase {
                         id: "c".to_owned(),
-                        params: vec![Rc::new(Type::Int)]
+                        params: vec![Rc::new(_Type::Int)]
                     }
                 },
             ),
             zspan!(),
         );
+        env.convert_pre_types();
 
         let enum_expr = zspan!(Enum {
             enum_id: zspan!("e".to_owned()),
@@ -3914,7 +4086,7 @@ mod tests {
 
         assert_eq!(
             env.typecheck_enum(&enum_expr).unwrap_err()[0].t.ty,
-            TypecheckErrType::TypeMismatch(Rc::new(Type::Int), Rc::new(Type::String))
+            TypecheckErrType::TypeMismatch(TypeInfo::int(), TypeInfo::string())
         );
     }
 
@@ -3935,7 +4107,10 @@ mod tests {
 
         assert_eq!(
             env.typecheck_closure(&closure).map(TranslateOutput::unwrap),
-            Ok(Rc::new(Type::Fn(vec![Rc::new(Type::Int)], Rc::new(Type::Int))))
+            Ok(TypeInfo::new(
+                Rc::new(Type::Fn(vec![TypeInfo::int()], TypeInfo::int())),
+                std::mem::size_of::<u64>()
+            ))
         );
     }
 
@@ -3954,11 +4129,14 @@ mod tests {
         env.insert_var(
             "b".to_owned(),
             EnvEntry {
-                ty: Rc::new(Type::String),
+                ty: TypeInfo::string(),
                 immutable: true,
                 entry_type: EnvEntryType::Var(Access {
                     level_label: level_label.clone(),
-                    access: frame::Access::InFrame(-8),
+                    access: frame::Access {
+                        ty: frame::AccessType::InFrame(-8),
+                        size: TypeInfo::string().size(),
+                    },
                 }),
             },
             zspan!(),
@@ -3973,7 +4151,10 @@ mod tests {
 
         assert_eq!(
             env.typecheck_closure(&closure).map(TranslateOutput::unwrap),
-            Ok(Rc::new(Type::Fn(vec![Rc::new(Type::Int)], Rc::new(Type::String))))
+            Ok(TypeInfo::new(
+                Rc::new(Type::Fn(vec![TypeInfo::int()], TypeInfo::string())),
+                std::mem::size_of::<u64>()
+            ))
         );
     }
 
@@ -4049,7 +4230,7 @@ mod tests {
         assert_eq!(
             env.typecheck_expr(&zspan!(ExprType::Seq(vec![fn_decl1, let_expr, fn_decl2], false)),)
                 .map(TranslateOutput::unwrap),
-            Ok(Rc::new(Type::Unit))
+            Ok(TypeInfo::unit())
         );
     }
 
@@ -4095,14 +4276,20 @@ mod tests {
         let level = Level::new(&mut tmp_generator, Some(Label::top()), "f", &[]);
 
         assert_eq!(level.frame.formals.len(), 1);
-        assert_eq!(level.frame.formals[0], frame::Access::InFrame(0));
+        assert_eq!(
+            level.frame.formals[0],
+            frame::Access {
+                ty: frame::AccessType::InFrame(0),
+                size: std::mem::size_of::<u64>()
+            }
+        );
     }
 
     #[test]
     fn follows_static_links() {
         {
             let mut tmp_generator = TmpGenerator::default();
-            let frame = Frame::new(&mut tmp_generator, "f", &[true]);
+            let frame = Frame::new(&mut tmp_generator, "f", &[(std::mem::size_of::<u64>(), true)]);
             let label = frame.label.clone();
             let mut levels = hashmap! {
                 Label::top() => Level::top(),
@@ -4112,23 +4299,26 @@ mod tests {
                 },
             };
             let level = levels.get_mut(&label).unwrap();
-            let local = level.alloc_local(&mut tmp_generator, true);
+            let local = level.alloc_local(&mut tmp_generator, TypeInfo::int().size(), true);
 
             assert_eq!(
                 Env::translate_simple_var(&levels, &local, &label),
-                translate::Expr::Expr(ir::Expr::Mem(Box::new(ir::Expr::BinOp(
-                    Box::new(ir::Expr::Tmp(*tmp::FP)),
-                    ir::BinOp::Add,
-                    Box::new(ir::Expr::Const(-frame::WORD_SIZE))
-                ))))
+                translate::Expr::Expr(ir::Expr::Mem(
+                    Box::new(ir::Expr::BinOp(
+                        Box::new(ir::Expr::Tmp(*tmp::FP)),
+                        ir::BinOp::Add,
+                        Box::new(ir::Expr::Const(-frame::WORD_SIZE))
+                    )),
+                    std::mem::size_of::<u64>()
+                ))
             );
         }
 
         {
             let mut tmp_generator = TmpGenerator::default();
-            let frame_f = Frame::new(&mut tmp_generator, "f", &[true]);
+            let frame_f = Frame::new(&mut tmp_generator, "f", &[(std::mem::size_of::<u64>(), true)]);
             let label_f = frame_f.label.clone();
-            let frame_g = Frame::new(&mut tmp_generator, "g", &[true]);
+            let frame_g = Frame::new(&mut tmp_generator, "g", &[(std::mem::size_of::<u64>(), true)]);
             let label_g = frame_g.label.clone();
             let mut levels = hashmap! {
                 Label::top() => Level::top(),
@@ -4142,15 +4332,21 @@ mod tests {
                 }
             };
             let level = levels.get_mut(&label_f).unwrap();
-            let local = level.alloc_local(&mut tmp_generator, true);
+            let local = level.alloc_local(&mut tmp_generator, TypeInfo::int().size(), true);
 
             assert_eq!(
                 Env::translate_simple_var(&levels, &local, &label_g),
-                translate::Expr::Expr(ir::Expr::Mem(Box::new(ir::Expr::BinOp(
-                    Box::new(ir::Expr::Mem(Box::new(ir::Expr::Tmp(*tmp::FP)))),
-                    ir::BinOp::Add,
-                    Box::new(ir::Expr::Const(-frame::WORD_SIZE))
-                ))))
+                translate::Expr::Expr(ir::Expr::Mem(
+                    Box::new(ir::Expr::BinOp(
+                        Box::new(ir::Expr::Mem(
+                            Box::new(ir::Expr::Tmp(*tmp::FP)),
+                            std::mem::size_of::<u64>()
+                        )),
+                        ir::BinOp::Add,
+                        Box::new(ir::Expr::Const(-frame::WORD_SIZE))
+                    )),
+                    std::mem::size_of::<u64>()
+                ))
             );
         }
     }
