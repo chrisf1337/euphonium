@@ -27,13 +27,13 @@ lazy_static! {
 #[derive(Clone)]
 pub struct Interpreter {
     stmts: Vec<ir::Stmt>,
-    tmps: HashMap<Tmp, u64>,
+    tmps: HashMap<Tmp, i64>,
     memory: [u8; MEMORY_SIZE],
     ip: usize,
     /// Map of label to instruction index in `stmts`.
     jump_table: HashMap<Label, usize>,
     /// Map of label to address in `memory`.
-    string_table: HashMap<Label, u64>,
+    string_table: HashMap<Label, i64>,
     /// Heap pointer
     hp: u64,
     panicked: bool,
@@ -41,8 +41,8 @@ pub struct Interpreter {
 
 impl Default for Interpreter {
     fn default() -> Interpreter {
-        let fp = MEMORY_SIZE as u64;
-        let sp = MEMORY_SIZE as u64;
+        let fp = MEMORY_SIZE as i64;
+        let sp = MEMORY_SIZE as i64;
         let tmps = hashmap! {
             tmp::FP.clone() => fp,
             tmp::SP.clone() => sp,
@@ -65,15 +65,15 @@ impl Interpreter {
         self.ip = self.jump_table[label];
     }
 
-    fn step(&mut self) -> Option<u64> {
+    fn step(&mut self) -> Option<i64> {
         let stmt = self.stmts[self.ip].clone();
         let val = self.interpret_stmt(&stmt);
         self.ip += 1;
         val
     }
 
-    fn run(&mut self) -> Option<u64> {
-        let mut val: Option<u64> = None;
+    fn run(&mut self) -> Option<i64> {
+        let mut val: Option<i64> = None;
         while self.ip < self.stmts.len() {
             val = self.step();
             if self.panicked {
@@ -83,7 +83,7 @@ impl Interpreter {
         val
     }
 
-    fn run_expr(&mut self, tmp_generator: &TmpGenerator, expr: Expr) -> Option<u64> {
+    fn run_expr(&mut self, tmp_generator: &TmpGenerator, expr: Expr) -> Option<i64> {
         let stmts = expr.unwrap_stmt(tmp_generator).flatten();
         let mut jump_table = HashMap::new();
         for (i, stmt) in stmts.iter().enumerate() {
@@ -98,68 +98,68 @@ impl Interpreter {
         self.run()
     }
 
-    fn sp(&self) -> u64 {
+    fn sp(&self) -> i64 {
         self.tmps[&tmp::SP]
     }
 
-    fn sp_mut(&mut self) -> &mut u64 {
+    fn sp_mut(&mut self) -> &mut i64 {
         self.tmp_mut(*tmp::SP)
     }
 
-    fn fp(&self) -> u64 {
+    fn fp(&self) -> i64 {
         self.tmps[&tmp::FP]
     }
 
-    fn fp_mut(&mut self) -> &mut u64 {
+    fn fp_mut(&mut self) -> &mut i64 {
         self.tmp_mut(*tmp::FP)
     }
 
-    fn tmp_mut(&mut self, tmp: Tmp) -> &mut u64 {
+    fn tmp_mut(&mut self, tmp: Tmp) -> &mut i64 {
         self.tmps.entry(tmp).or_default()
     }
 
     fn set_string_table(&mut self, fragments: &[Fragment]) {
         for fragment in fragments {
             if let Fragment::String(StringFragment { label, string }) = fragment {
-                self.string_table.insert(label.clone(), self.hp);
+                self.string_table.insert(label.clone(), self.hp as i64);
 
-                let mut p = self.hp;
+                let mut p = self.hp as usize;
                 let string = string.clone().into_bytes();
                 self.write_u64(string.len() as u64, p);
-                p += std::mem::size_of::<u64>() as u64;
+                p += std::mem::size_of::<u64>();
                 self.write_u8s(&string, p);
-                p += string.len() as u64;
+                p += string.len();
                 let padding = vec![0; std::mem::size_of::<u64>() - (string.len() % std::mem::size_of::<u64>())];
                 self.write_u8s(&padding, p);
-                p += padding.len() as u64;
-                self.hp = p;
+                p += padding.len();
+                self.hp = p as u64;
             }
         }
     }
 
-    fn interpret_expr_as_rvalue(&mut self, expr: &ir::Expr) -> u64 {
+    fn interpret_expr_as_value(&mut self, expr: &ir::Expr) -> i64 {
         match expr {
-            ir::Expr::Const(c) => unsafe { std::mem::transmute(*c) },
+            ir::Expr::Const(c) => *c,
             ir::Expr::Tmp(tmp) => *self.tmp_mut(*tmp),
             ir::Expr::BinOp(l, op, r) => {
-                let l = self.interpret_expr_as_rvalue(l);
-                let r = self.interpret_expr_as_rvalue(r);
+                let l = self.interpret_expr_as_value(l);
+                let r = self.interpret_expr_as_value(r);
                 match op {
-                    ir::BinOp::Add => l.wrapping_add(r),
-                    ir::BinOp::Sub => l.wrapping_sub(r),
-                    ir::BinOp::Mul => l.wrapping_mul(r),
-                    ir::BinOp::Div => l.wrapping_div(r),
+                    ir::BinOp::Add => l + r,
+                    ir::BinOp::Sub => l - r,
+                    ir::BinOp::Mul => l * r,
+                    ir::BinOp::Div => l / r,
                     ir::BinOp::Mod => l % r,
                     _ => unimplemented!("{:?}", op),
                 }
             }
-            ir::Expr::Mem(expr) => {
-                let addr = self.interpret_expr_as_rvalue(expr);
-                self.read_u64(addr)
+            ir::Expr::Mem(expr, size) => {
+                let addr = self.interpret_expr_as_value(expr);
+                self.read_i64(addr as usize)
             }
             ir::Expr::Seq(stmt, expr) => {
                 self.interpret_stmt(stmt);
-                self.interpret_expr_as_rvalue(expr)
+                self.interpret_expr_as_value(expr)
             }
             ir::Expr::Call(label, args) => {
                 let name = if let ir::Expr::Label(Label(label)) = label.as_ref() {
@@ -177,26 +177,27 @@ impl Interpreter {
         }
     }
 
-    fn interpret_stmt(&mut self, stmt: &ir::Stmt) -> Option<u64> {
+    fn interpret_stmt(&mut self, stmt: &ir::Stmt) -> Option<i64> {
         match stmt {
             ir::Stmt::Move(dst, src) => {
-                let value = self.interpret_expr_as_rvalue(src);
+                let value = self.interpret_expr_as_value(src);
                 match dst {
                     ir::Expr::Tmp(tmp) => {
                         let tmp = self.tmp_mut(*tmp);
                         *tmp = value;
                     }
-                    ir::Expr::Mem(addr_expr) => {
-                        let addr = self.interpret_expr_as_rvalue(addr_expr);
-                        self.write_u64(value, addr);
+                    ir::Expr::Mem(addr_expr, size) => {
+                        // assert_eq!(*size, std::mem::size_of::<u64>());
+                        let addr = self.interpret_expr_as_value(addr_expr);
+                        self.write_i64(value, addr as usize);
                     }
                     _ => panic!("cannot move to non Tmp or Mem"),
                 }
                 None
             }
             ir::Stmt::CJump(l, op, r, t_label, f_label) => {
-                let l: i64 = unsafe { std::mem::transmute(self.interpret_expr_as_rvalue(l)) };
-                let r: i64 = unsafe { std::mem::transmute(self.interpret_expr_as_rvalue(r)) };
+                let l: i64 = self.interpret_expr_as_value(l);
+                let r: i64 = self.interpret_expr_as_value(r);
                 match op {
                     ir::CompareOp::Eq => {
                         if l == r {
@@ -239,7 +240,7 @@ impl Interpreter {
                     panic!("unexpected jump target: {:?}", expr);
                 }
             }
-            ir::Stmt::Expr(expr) => Some(self.interpret_expr_as_rvalue(expr)),
+            ir::Stmt::Expr(expr) => Some(self.interpret_expr_as_value(expr)),
             ir::Stmt::Seq(stmt1, stmt2) => {
                 self.interpret_stmt(stmt1);
                 self.interpret_stmt(stmt2)
@@ -247,79 +248,77 @@ impl Interpreter {
         }
     }
 
-    fn write_u8(&mut self, u: u8, addr: u64) {
-        self.memory[addr as usize] = u;
+    fn write_u8(&mut self, u: u8, addr: usize) {
+        self.memory[addr] = u;
     }
 
-    fn read_u8(&self, addr: u64) -> u8 {
-        self.memory[addr as usize]
+    fn read_u8(&self, addr: usize) -> u8 {
+        self.memory[addr]
     }
 
-    fn write_u8s(&mut self, us: &[u8], addr: u64) {
-        let addr = addr as usize;
+    fn write_u8s(&mut self, us: &[u8], addr: usize) {
         self.memory[addr..addr + us.len()].copy_from_slice(us)
     }
 
-    fn read_u8s(&self, addr: u64, n: usize) -> Vec<u8> {
-        let addr = addr as usize;
+    fn read_u8s(&self, addr: usize, n: usize) -> Vec<u8> {
         self.memory[addr..addr + n].to_vec()
     }
 
-    fn write_u64(&mut self, u: u64, addr: u64) {
+    fn write_u64(&mut self, u: u64, addr: usize) {
         let bytes = u.to_le_bytes();
         self.write_u8s(&bytes, addr);
     }
 
-    fn read_u64(&self, addr: u64) -> u64 {
+    fn read_u64(&self, addr: usize) -> u64 {
         let mut bytes = [0u8; frame::WORD_SIZE as usize];
         bytes.copy_from_slice(&self.read_u8s(addr, std::mem::size_of::<u64>()));
         u64::from_le_bytes(bytes)
     }
 
-    fn write_u64s(&mut self, us: &[u64], mut addr: u64) {
+    fn write_u64s(&mut self, us: &[u64], mut addr: usize) {
         for &u in us {
             self.write_u64(u, addr);
-            addr += std::mem::size_of::<u64>() as u64;
+            addr += std::mem::size_of::<u64>();
         }
     }
 
-    fn read_u64s(&self, addr: u64, n: usize) -> Vec<u64> {
+    fn read_u64s(&self, addr: usize, n: usize) -> Vec<u64> {
         let mut bytes = vec![];
-        for i in (addr..addr + (n * std::mem::size_of::<u64>()) as u64).step_by(std::mem::size_of::<u64>()) {
+        for i in (addr..addr + n * std::mem::size_of::<u64>()).step_by(std::mem::size_of::<u64>()) {
             bytes.push(self.read_u64(i));
         }
         bytes
     }
 
-    fn write_i64(&mut self, i: i64, addr: u64) {
+    fn write_i64(&mut self, i: i64, addr: usize) {
         let bytes = i.to_le_bytes();
         self.write_u8s(&bytes, addr);
     }
 
-    fn read_i64(&self, addr: u64) -> i64 {
+    fn read_i64(&self, addr: usize) -> i64 {
         let mut bytes = [0u8; frame::WORD_SIZE as usize];
         bytes.copy_from_slice(&self.read_u8s(addr, std::mem::size_of::<i64>()));
         i64::from_le_bytes(bytes)
     }
 
-    fn write_i64s(&mut self, is: &[i64], mut addr: u64) {
+    fn write_i64s(&mut self, is: &[i64], mut addr: usize) {
         for &i in is {
             self.write_i64(i, addr);
-            addr += std::mem::size_of::<i64>() as u64;
+            addr += std::mem::size_of::<i64>();
         }
     }
 
-    fn read_i64s(&self, addr: u64, n: usize) -> Vec<i64> {
+    fn read_i64s(&self, addr: usize, n: usize) -> Vec<i64> {
         let mut bytes = vec![];
-        for i in (addr..addr + (n * std::mem::size_of::<u64>()) as u64).step_by(std::mem::size_of::<u64>()) {
+        for i in (addr..addr + n * std::mem::size_of::<u64>()).step_by(std::mem::size_of::<u64>()) {
             bytes.push(self.read_i64(i));
         }
         bytes
     }
 
-    fn read_str(&self, mut addr: u64) -> String {
+    fn read_str(&self, mut addr: usize) -> String {
         let len = self.read_u64(addr) as usize;
-        addr += std::mem::size_of::<u64>() as u64;
+        addr += std::mem::size_of::<u64>();
 
         let bytes = self.read_u8s(addr, len);
         std::str::from_utf8(&bytes)
@@ -344,10 +343,16 @@ impl Interpreter {
         file.write_all(&self.memory).expect("failed to write to file");
     }
 
-    fn alloc_local(&mut self, tmp_generator: &TmpGenerator, level: &mut Level, escapes: bool) -> (Access, Option<u64>) {
-        let local = level.alloc_local(tmp_generator, escapes);
+    fn alloc_local(
+        &mut self,
+        tmp_generator: &TmpGenerator,
+        level: &mut Level,
+        size: usize,
+        escapes: bool,
+    ) -> (Access, Option<i64>) {
+        let local = level.alloc_local(tmp_generator, size, escapes);
         let addr = if escapes {
-            *self.sp_mut() -= frame::WORD_SIZE as u64;
+            *self.sp_mut() -= frame::WORD_SIZE;
             Some(self.sp())
         } else {
             None
@@ -355,7 +360,7 @@ impl Interpreter {
         (local, addr)
     }
 
-    fn runtime_call(&mut self, name: &str, args: &[ir::Expr]) -> u64 {
+    fn runtime_call(&mut self, name: &str, args: &[ir::Expr]) -> i64 {
         match name {
             "__malloc" => self.__malloc(args),
             "__panic" => self.__panic(args),
@@ -363,25 +368,25 @@ impl Interpreter {
         }
     }
 
-    fn malloc(&mut self, words: u64) -> u64 {
+    fn malloc(&mut self, words: u64) -> i64 {
         let addr = self.hp;
         self.hp += frame::WORD_SIZE as u64 * words;
-        addr
+        addr as i64
     }
 
-    fn __malloc(&mut self, args: &[ir::Expr]) -> u64 {
-        let len = self.interpret_expr_as_rvalue(&args[0]);
-        self.malloc(len)
+    fn __malloc(&mut self, args: &[ir::Expr]) -> i64 {
+        let len = self.interpret_expr_as_value(&args[0]);
+        self.malloc(len as u64)
     }
 
-    fn __panic(&mut self, _args: &[ir::Expr]) -> u64 {
+    fn __panic(&mut self, _args: &[ir::Expr]) -> i64 {
         self.panicked = true;
         0
     }
 
     // fn __strcmp(&self, args: &[ir::Expr]) -> u64 {
-    //     let l = self.interpret_expr_as_rvalue(&args[0]);
-    //     let r = self.interpret_expr_as_rvalue(&args[1]);
+    //     let l = self.interpret_expr_as_value(&args[0]);
+    //     let r = self.interpret_expr_as_value(&args[1]);
     // }
 }
 
@@ -437,13 +442,20 @@ mod tests {
         interpreter.write_u64(0x54321, 0x234);
         interpreter.write_u64(0x234, 0x123);
         assert_eq!(
-            interpreter.interpret_expr_as_rvalue(&ir::Expr::Mem(Box::new(ir::Expr::Const(0x123)))),
+            interpreter.interpret_expr_as_value(&ir::Expr::Mem(
+                Box::new(ir::Expr::Const(0x123)),
+                std::mem::size_of::<u64>()
+            )),
             0x234
         );
         assert_eq!(
-            interpreter.interpret_expr_as_rvalue(&ir::Expr::Mem(Box::new(ir::Expr::Mem(Box::new(ir::Expr::Const(
-                0x123
-            )))))),
+            interpreter.interpret_expr_as_value(&ir::Expr::Mem(
+                Box::new(ir::Expr::Mem(
+                    Box::new(ir::Expr::Const(0x123)),
+                    std::mem::size_of::<u64>()
+                )),
+                std::mem::size_of::<u64>()
+            )),
             0x54321
         );
     }
@@ -453,17 +465,17 @@ mod tests {
         let mut tmp_generator = TmpGenerator::default();
         let mut interpreter = Interpreter::default();
         let mut level = Level::new(&mut tmp_generator, Some(Label::top()), "f", &[]);
-        let (local, addr) = interpreter.alloc_local(&mut tmp_generator, &mut level, true);
+        let (local, addr) = interpreter.alloc_local(&mut tmp_generator, &mut level, std::mem::size_of::<u64>(), true);
         let label = level.label();
         let levels = hashmap! {
             Label::top() => Level::top(),
             label.clone() => level.clone(),
         };
         let expr = Env::translate_simple_var(&levels, &local, label).clone();
-        interpreter.write_u64(0x1234, addr.unwrap());
+        interpreter.write_u64(0x1234, addr.unwrap() as usize);
 
         assert_eq!(
-            interpreter.interpret_expr_as_rvalue(&expr.unwrap_expr(&mut tmp_generator)),
+            interpreter.interpret_expr_as_value(&expr.unwrap_expr(&mut tmp_generator)),
             0x1234
         );
     }
@@ -473,7 +485,7 @@ mod tests {
         let mut tmp_generator = TmpGenerator::default();
         let mut interpreter = Interpreter::default();
         let mut level = Level::new(&mut tmp_generator, Some(Label::top()), "f", &[]);
-        let (local, addr) = interpreter.alloc_local(&mut tmp_generator, &mut level, true);
+        let (local, addr) = interpreter.alloc_local(&mut tmp_generator, &mut level, std::mem::size_of::<u64>(), true);
         let label = level.label();
         let levels = hashmap! {
             Label::top() => Level::top(),
@@ -481,7 +493,7 @@ mod tests {
         };
 
         // Array located at 0x100. Write address into local.
-        interpreter.write_u64(0x100, addr.unwrap());
+        interpreter.write_u64(0x100, addr.unwrap() as usize);
         interpreter.write_u64s(&[1, 2, 3], 0x100);
 
         let (expr1, expr2, expr3) = {
@@ -491,30 +503,33 @@ mod tests {
                     &mut tmp_generator,
                     &array_expr,
                     &translate::Expr::Expr(ir::Expr::Const(0)),
+                    std::mem::size_of::<u64>(),
                 ),
                 Env::translate_pointer_offset(
                     &mut tmp_generator,
                     &array_expr,
                     &translate::Expr::Expr(ir::Expr::Const(1)),
+                    std::mem::size_of::<u64>(),
                 ),
                 Env::translate_pointer_offset(
                     &mut tmp_generator,
                     &array_expr,
                     &translate::Expr::Expr(ir::Expr::Const(2)),
+                    std::mem::size_of::<u64>(),
                 ),
             )
         };
 
         assert_eq!(
-            interpreter.interpret_expr_as_rvalue(&expr1.unwrap_expr(&mut tmp_generator)),
+            interpreter.interpret_expr_as_value(&expr1.unwrap_expr(&mut tmp_generator)),
             1
         );
         assert_eq!(
-            interpreter.interpret_expr_as_rvalue(&expr2.unwrap_expr(&mut tmp_generator)),
+            interpreter.interpret_expr_as_value(&expr2.unwrap_expr(&mut tmp_generator)),
             2
         );
         assert_eq!(
-            interpreter.interpret_expr_as_rvalue(&expr3.unwrap_expr(&mut tmp_generator)),
+            interpreter.interpret_expr_as_value(&expr3.unwrap_expr(&mut tmp_generator)),
             3
         );
     }
@@ -522,12 +537,12 @@ mod tests {
     #[test]
     fn r#move() {
         let mut interpreter = Interpreter::default();
-        *interpreter.sp_mut() -= frame::WORD_SIZE as u64;
+        *interpreter.sp_mut() -= frame::WORD_SIZE;
         interpreter.interpret_stmt(&ir::Stmt::Move(
-            ir::Expr::Mem(Box::new(ir::Expr::Tmp(*tmp::SP))),
+            ir::Expr::Mem(Box::new(ir::Expr::Tmp(*tmp::SP)), std::mem::size_of::<u64>()),
             ir::Expr::Const(0x200),
         ));
-        assert_eq!(interpreter.read_u64(interpreter.tmps[&tmp::SP]), 0x200);
+        assert_eq!(interpreter.read_u64(interpreter.tmps[&tmp::SP] as usize), 0x200);
     }
 
     #[test]
@@ -545,10 +560,16 @@ mod tests {
                 f_label.clone(),
             ),
             ir::Stmt::Label(t_label),
-            ir::Stmt::Move(ir::Expr::Mem(Box::new(ir::Expr::Const(0x200))), ir::Expr::Const(123)),
+            ir::Stmt::Move(
+                ir::Expr::Mem(Box::new(ir::Expr::Const(0x200)), std::mem::size_of::<u64>()),
+                ir::Expr::Const(123),
+            ),
             ir::Stmt::Jump(ir::Expr::Label(join_label.clone()), vec![join_label.clone()]),
             ir::Stmt::Label(f_label),
-            ir::Stmt::Move(ir::Expr::Mem(Box::new(ir::Expr::Const(0x200))), ir::Expr::Const(456)),
+            ir::Stmt::Move(
+                ir::Expr::Mem(Box::new(ir::Expr::Const(0x200)), std::mem::size_of::<u64>()),
+                ir::Expr::Const(456),
+            ),
             ir::Stmt::Jump(ir::Expr::Label(join_label.clone()), vec![join_label.clone()]),
             ir::Stmt::Label(join_label),
         ];
@@ -602,7 +623,7 @@ mod tests {
         let mut interpreter = Interpreter::default();
         interpreter.run_expr(&tmp_generator, Expr::Stmt(stmt));
         let addr = interpreter.fp() as i64 - frame::WORD_SIZE;
-        assert_eq!(interpreter.read_u64(addr as u64), 1);
+        assert_eq!(interpreter.read_u64(addr as usize), 1);
     }
 
     #[test]
@@ -656,7 +677,7 @@ mod tests {
         let mut interpreter = Interpreter::default();
         interpreter.run_expr(&tmp_generator, Expr::Stmt(stmt));
         let addr = interpreter.fp() as i64 - frame::WORD_SIZE;
-        assert_eq!(interpreter.read_u64(addr as u64), 123);
+        assert_eq!(interpreter.read_u64(addr as usize), 123);
     }
 
     #[test]
@@ -831,6 +852,7 @@ mod tests {
             ]))
         });
         env.typecheck_type_decl(&record_decl)?;
+        env.convert_pre_types();
 
         let assign_expr = zspan!(ast::ExprType::Let(Box::new(zspan!(ast::Let {
             pattern: zspan!(ast::Pattern::String("a".to_owned())),
@@ -879,7 +901,7 @@ mod tests {
             )))));
             let trexpr = env.typecheck_expr(&subscript_expr)?.expr;
             let result = interpreter.run_expr(&tmp_generator, trexpr).expect("run_expr");
-            assert_eq!(interpreter.read_str(result), "string".to_owned());
+            assert_eq!(interpreter.read_str(result as usize), "string".to_owned());
         }
 
         Ok(())

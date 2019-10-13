@@ -4,8 +4,8 @@ use crate::{
 };
 use std::fmt;
 
-// #[cfg(test)]
-// pub mod interpreter;
+#[cfg(test)]
+pub mod interpreter;
 
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub enum Expr {

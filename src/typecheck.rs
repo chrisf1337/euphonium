@@ -689,7 +689,7 @@ impl<'a> Env<'a> {
     }
 
     // Converts pre-types into actual TypeInfos.
-    fn convert_pre_types(&mut self) {
+    pub(crate) fn convert_pre_types(&mut self) {
         self.types = self
             .pre_types
             .iter()
@@ -932,6 +932,8 @@ impl<'a> Env<'a> {
         Ok(())
     }
 
+    /// Converts type decls into pre-types. `convert_pre_types()` needs to be called in order to size
+    /// all types and convert them to "full" types.
     pub(crate) fn typecheck_type_decl(&mut self, decl: &Spanned<TypeDecl>) -> Result<()> {
         let id = decl.id.t.clone();
 
