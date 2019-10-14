@@ -23,7 +23,7 @@ use std::{
     rc::Rc,
 };
 
-pub type Result<T> = std::result::Result<T, Vec<TypecheckErr>>;
+pub type Result<T> = std::result::Result<T, Vec<TypecheckError>>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TranslateOutput<T> {
@@ -58,7 +58,7 @@ impl<T> TranslateOutput<T> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TypecheckErrType {
+pub enum TypecheckErrorType {
     /// expected, actual
     TypeMismatch(TypeInfo, TypeInfo),
     // The reason we need a separate case for this instead of using TypeMismatch is because we would
@@ -94,18 +94,18 @@ pub enum TypecheckErrType {
     IllegalBreakOrContinue,
 }
 
-pub type TypecheckErr = Spanned<_TypecheckErr>;
+pub type TypecheckError = Spanned<_TypecheckError>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct _TypecheckErr {
-    pub ty: TypecheckErrType,
+pub struct _TypecheckError {
+    pub ty: TypecheckErrorType,
     pub secondary_messages: Vec<Spanned<String>>,
 }
 
-impl TypecheckErr {
-    fn new_err(ty: TypecheckErrType, span: FileSpan) -> Self {
-        TypecheckErr::new(
-            _TypecheckErr {
+impl TypecheckError {
+    fn new_err(ty: TypecheckErrorType, span: FileSpan) -> Self {
+        TypecheckError::new(
+            _TypecheckError {
                 ty,
                 secondary_messages: vec![],
             },
@@ -119,7 +119,7 @@ impl TypecheckErr {
     }
 
     pub fn diagnostic(&self, env: &Env) -> codespan_reporting::diagnostic::Diagnostic {
-        use TypecheckErrType::*;
+        use TypecheckErrorType::*;
         let msg = match &self.ty {
             TypeMismatch(expected, actual) => {
                 format!("type mismatch\nexpected: {:?}\n  actual: {:?}", expected, actual)
@@ -415,8 +415,8 @@ impl<'a> Env<'a> {
                     let span = self.type_def_span(alias).unwrap();
                     self.resolve_pre_type(resolved_type, span)
                 } else {
-                    Err(vec![TypecheckErr::new_err(
-                        TypecheckErrType::UndefinedType(alias.clone()),
+                    Err(vec![TypecheckError::new_err(
+                        TypecheckErrorType::UndefinedType(alias.clone()),
                         def_span,
                     )])
                 }
@@ -435,8 +435,8 @@ impl<'a> Env<'a> {
                     let span = self.type_def_span(alias).unwrap();
                     self.resolve_type(resolved_type, span)
                 } else {
-                    Err(vec![TypecheckErr::new_err(
-                        TypecheckErrType::UndefinedType(alias.clone()),
+                    Err(vec![TypecheckError::new_err(
+                        TypecheckErrorType::UndefinedType(alias.clone()),
                         def_span,
                     )])
                 }
@@ -455,8 +455,8 @@ impl<'a> Env<'a> {
         let expr_type = &translate_output.t;
         let resolved_expr_type = self.resolve_type(expr_type, expr.span)?;
         if ty != &resolved_expr_type {
-            Err(vec![TypecheckErr::new_err(
-                TypecheckErrType::TypeMismatch(ty.clone(), expr_type.clone()),
+            Err(vec![TypecheckError::new_err(
+                TypecheckErrorType::TypeMismatch(ty.clone(), expr_type.clone()),
                 expr.span,
             )])
         } else {
@@ -469,8 +469,8 @@ impl<'a> Env<'a> {
             if let Some(alias_str) = alias.alias() {
                 if path.contains(&alias_str) {
                     let span = self.type_def_span(ty).unwrap();
-                    return Err(vec![TypecheckErr::new_err(
-                        TypecheckErrType::TypeDeclCycle(ty.to_string(), alias.clone()),
+                    return Err(vec![TypecheckError::new_err(
+                        TypecheckErrorType::TypeDeclCycle(ty.to_string(), alias.clone()),
                         span,
                     )]);
                 }
@@ -511,7 +511,10 @@ impl<'a> Env<'a> {
                     for param in &case.params {
                         // Don't allow nested enum decls
                         if let _Type::Enum(..) = param.as_ref() {
-                            errors.push(TypecheckErr::new_err(TypecheckErrType::IllegalNestedEnumDecl, def_span));
+                            errors.push(TypecheckError::new_err(
+                                TypecheckErrorType::IllegalNestedEnumDecl,
+                                def_span,
+                            ));
                             continue;
                         }
                         match self.validate_pre_type(param, def_span) {
@@ -575,11 +578,11 @@ impl<'a> Env<'a> {
     where
         I: IntoIterator<Item = &'b Spanned<T>>,
         KeyFn: Fn(&'b Spanned<T>) -> Key,
-        ErrGen: Fn(&'b Spanned<T>, FileSpan) -> TypecheckErr,
+        ErrGen: Fn(&'b Spanned<T>, FileSpan) -> TypecheckError,
     {
         // t -> def span
         let mut checked_elems: HashMap<Key, FileSpan> = HashMap::new();
-        let mut errors: Vec<TypecheckErr> = vec![];
+        let mut errors: Vec<TypecheckError> = vec![];
         for elem in iter {
             let key = key_fn(elem);
             if let Some(prev_def_span) = checked_elems.get(&key) {
@@ -734,8 +737,8 @@ impl<'a> Env<'a> {
                 Ok(()) => (),
                 Err(errs) => {
                     for err in &errs {
-                        if let _TypecheckErr {
-                            ty: TypecheckErrType::TypeDeclCycle(..),
+                        if let _TypecheckError {
+                            ty: TypecheckErrorType::TypeDeclCycle(..),
                             ..
                         } = err.t
                         {
@@ -808,8 +811,8 @@ impl<'a> Env<'a> {
         // Check if there already exists another function with the same name
         if self.vars.contains_key(&fn_decl.id.t) {
             let span = self.var_def_span(&fn_decl.id.t).unwrap();
-            return Err(vec![TypecheckErr::new_err(
-                TypecheckErrType::DuplicateFn(fn_decl.id.t.clone()),
+            return Err(vec![TypecheckError::new_err(
+                TypecheckErrorType::DuplicateFn(fn_decl.id.t.clone()),
                 fn_decl.id.span,
             )
             .with_secondary_messages(vec![Spanned::new(
@@ -822,8 +825,8 @@ impl<'a> Env<'a> {
             &fn_decl.type_fields,
             |type_field| &type_field.id.t,
             |type_field, span| {
-                TypecheckErr::new_err(
-                    TypecheckErrType::DuplicateParam(type_field.id.t.clone()),
+                TypecheckError::new_err(
+                    TypecheckErrorType::DuplicateParam(type_field.id.t.clone()),
                     type_field.span,
                 )
                 .with_secondary_messages(vec![Spanned::new(
@@ -920,8 +923,8 @@ impl<'a> Env<'a> {
                         .map_or_else(|| fn_decl.span, |ret_ty| ret_ty.span),
                 )?
             {
-                return Err(vec![TypecheckErr::new_err(
-                    TypecheckErrType::TypeMismatch(return_type.clone(), body_type),
+                return Err(vec![TypecheckError::new_err(
+                    TypecheckErrorType::TypeMismatch(return_type.clone(), body_type),
                     fn_decl.span,
                 )]);
             }
@@ -938,8 +941,8 @@ impl<'a> Env<'a> {
         let id = decl.id.t.clone();
 
         if self.contains_type(&id) {
-            return Err(vec![TypecheckErr::new_err(
-                TypecheckErrType::DuplicateType(id.clone()),
+            return Err(vec![TypecheckError::new_err(
+                TypecheckErrorType::DuplicateType(id.clone()),
                 decl.span,
             )
             .with_secondary_messages(vec![Spanned::new(
@@ -956,7 +959,7 @@ impl<'a> Env<'a> {
                     |field| &field.id.t,
                     |field, span| {
                         let field_id = field.id.t.clone();
-                        TypecheckErr::new_err(TypecheckErrType::DuplicateField(field_id.clone()), field.span)
+                        TypecheckError::new_err(TypecheckErrorType::DuplicateField(field_id.clone()), field.span)
                             .with_secondary_messages(vec![Spanned::new(
                                 format!("{} was declared here", field_id),
                                 span,
@@ -975,7 +978,7 @@ impl<'a> Env<'a> {
                     |case| &case.id.t,
                     |case, span| {
                         let case_id = case.id.t.clone();
-                        TypecheckErr::new_err(TypecheckErrType::DuplicateEnumCase(case_id.clone()), case.span)
+                        TypecheckError::new_err(TypecheckErrorType::DuplicateEnumCase(case_id.clone()), case.span)
                             .with_secondary_messages(vec![Spanned::new(format!("{} was declared here", case_id), span)])
                     },
                 )?;
@@ -1110,8 +1113,8 @@ impl<'a> Env<'a> {
                         )),
                     })
                 } else {
-                    Err(vec![TypecheckErr::new_err(
-                        TypecheckErrType::IllegalBreakOrContinue,
+                    Err(vec![TypecheckError::new_err(
+                        TypecheckErrorType::IllegalBreakOrContinue,
                         expr.span,
                     )])
                 }
@@ -1126,8 +1129,8 @@ impl<'a> Env<'a> {
                         )),
                     })
                 } else {
-                    Err(vec![TypecheckErr::new_err(
-                        TypecheckErrType::IllegalBreakOrContinue,
+                    Err(vec![TypecheckError::new_err(
+                        TypecheckErrorType::IllegalBreakOrContinue,
                         expr.span,
                     )])
                 }
@@ -1139,7 +1142,10 @@ impl<'a> Env<'a> {
             ExprType::Not(expr) => self.assert_ty(expr, &TypeInfo::bool()),
             ExprType::Bool(bool_expr) => self.typecheck_bool(bool_expr),
             ExprType::LVal(lval) => Ok(self.typecheck_lval(lval)?.map(|lval_props| lval_props.ty)),
-            ExprType::Let(_) => Err(vec![TypecheckErr::new_err(TypecheckErrType::IllegalLetExpr, expr.span)]),
+            ExprType::Let(_) => Err(vec![TypecheckError::new_err(
+                TypecheckErrorType::IllegalLetExpr,
+                expr.span,
+            )]),
             ExprType::FnCall(fn_call) => self.typecheck_fn_call(fn_call),
             ExprType::Record(record) => self.typecheck_record(record),
             ExprType::Assign(assign) => self.typecheck_assign(assign),
@@ -1151,8 +1157,8 @@ impl<'a> Env<'a> {
             ExprType::Compare(compare) => self.typecheck_compare(compare),
             ExprType::Enum(enum_expr) => self.typecheck_enum(enum_expr),
             ExprType::Closure(closure) => self.typecheck_closure(closure),
-            ExprType::FnDecl(_) => Err(vec![TypecheckErr::new_err(
-                TypecheckErrType::IllegalFnDeclExpr,
+            ExprType::FnDecl(_) => Err(vec![TypecheckError::new_err(
+                TypecheckErrorType::IllegalFnDeclExpr,
                 expr.span,
             )]),
         }
@@ -1187,8 +1193,8 @@ impl<'a> Env<'a> {
                         expr: trexpr,
                     })
                 } else {
-                    Err(vec![TypecheckErr::new_err(
-                        TypecheckErrType::UndefinedVar(var.clone()),
+                    Err(vec![TypecheckError::new_err(
+                        TypecheckErrorType::UndefinedVar(var.clone()),
                         lval.span,
                     )])
                 }
@@ -1216,8 +1222,8 @@ impl<'a> Env<'a> {
                         });
                     }
                 }
-                Err(vec![TypecheckErr::new_err(
-                    TypecheckErrType::UndefinedField(field.t.clone()),
+                Err(vec![TypecheckError::new_err(
+                    TypecheckErrorType::UndefinedField(field.t.clone()),
                     field.span,
                 )])
             }
@@ -1283,14 +1289,14 @@ impl<'a> Env<'a> {
                             )),
                         })
                     } else {
-                        Err(vec![TypecheckErr::new_err(
-                            TypecheckErrType::TypeMismatch(TypeInfo::int(), index_type),
+                        Err(vec![TypecheckError::new_err(
+                            TypecheckErrorType::TypeMismatch(TypeInfo::int(), index_type),
                             index.span,
                         )])
                     }
                 } else {
-                    Err(vec![TypecheckErr::new_err(
-                        TypecheckErrType::CannotSubscript,
+                    Err(vec![TypecheckError::new_err(
+                        TypecheckErrorType::CannotSubscript,
                         index.span,
                     )])
                 }
@@ -1315,8 +1321,8 @@ impl<'a> Env<'a> {
             let resolved_ty = self.resolve_type(&ty, ast_ty.span)?;
             let resolved_expr_ty = self.resolve_type(&expr_type, expr.span)?;
             if resolved_ty != resolved_expr_ty {
-                return Err(vec![TypecheckErr::new_err(
-                    TypecheckErrType::TypeMismatch(ty, expr_type),
+                return Err(vec![TypecheckError::new_err(
+                    TypecheckErrorType::TypeMismatch(ty, expr_type),
                     let_expr.span,
                 )]);
             }
@@ -1375,8 +1381,8 @@ impl<'a> Env<'a> {
         if let Some(fn_type) = self.var(&id.t).map(|x| x.ty.clone()) {
             if let Type::Fn(param_types, return_type) = self.resolve_type(&fn_type, id.span)?.ty().as_ref() {
                 if args.len() != param_types.len() {
-                    return Err(vec![TypecheckErr::new_err(
-                        TypecheckErrType::ArityMismatch(param_types.len(), args.len()),
+                    return Err(vec![TypecheckError::new_err(
+                        TypecheckErrorType::ArityMismatch(param_types.len(), args.len()),
                         *span,
                     )]);
                 }
@@ -1392,8 +1398,8 @@ impl<'a> Env<'a> {
                                     .resolve_type(param_type, FileSpan::new(self.file_id, Span::initial()))
                                     .unwrap()
                             {
-                                let mut err = TypecheckErr::new_err(
-                                    TypecheckErrType::TypeMismatch(param_type.clone(), ty.clone()),
+                                let mut err = TypecheckError::new_err(
+                                    TypecheckErrorType::TypeMismatch(param_type.clone(), ty.clone()),
                                     arg.span,
                                 );
                                 if let Some(decl_spans) = self.fn_param_decl_spans(id) {
@@ -1417,14 +1423,14 @@ impl<'a> Env<'a> {
                     expr: translate::Expr::Expr(ir::Expr::Const(0)),
                 })
             } else {
-                Err(vec![TypecheckErr::new_err(
-                    TypecheckErrType::NotAFn(id.t.clone()),
+                Err(vec![TypecheckError::new_err(
+                    TypecheckErrorType::NotAFn(id.t.clone()),
                     id.span,
                 )])
             }
         } else {
-            Err(vec![TypecheckErr::new_err(
-                TypecheckErrType::UndefinedFn(id.t.clone()),
+            Err(vec![TypecheckError::new_err(
+                TypecheckErrorType::UndefinedFn(id.t.clone()),
                 *span,
             )])
         }
@@ -1459,8 +1465,8 @@ impl<'a> Env<'a> {
                 if !missing_fields.is_empty() {
                     let mut missing_fields: Vec<String> = missing_fields.into_iter().cloned().collect();
                     missing_fields.sort_unstable();
-                    errors.push(TypecheckErr::new_err(
-                        TypecheckErrType::MissingFields(missing_fields),
+                    errors.push(TypecheckError::new_err(
+                        TypecheckErrorType::MissingFields(missing_fields),
                         *span,
                     ));
                 }
@@ -1474,8 +1480,8 @@ impl<'a> Env<'a> {
                 if !invalid_fields.is_empty() {
                     let mut invalid_fields: Vec<String> = invalid_fields.into_iter().cloned().collect();
                     invalid_fields.sort_unstable();
-                    errors.push(TypecheckErr::new_err(
-                        TypecheckErrType::InvalidFields(invalid_fields),
+                    errors.push(TypecheckError::new_err(
+                        TypecheckErrorType::InvalidFields(invalid_fields),
                         *span,
                     ));
                 }
@@ -1488,8 +1494,8 @@ impl<'a> Env<'a> {
                     field_assigns,
                     |field_assign| &field_assign.id.t,
                     |field_assign, span| {
-                        TypecheckErr::new_err(
-                            TypecheckErrType::DuplicateField(field_assign.id.t.clone()),
+                        TypecheckError::new_err(
+                            TypecheckErrorType::DuplicateField(field_assign.id.t.clone()),
                             field_assign.span,
                         )
                         .with_secondary_messages(vec![Spanned::new(
@@ -1520,8 +1526,8 @@ impl<'a> Env<'a> {
                     let actual_type = self.resolve_type(&ty, expr.span)?;
                     if expected_type != actual_type {
                         errors.push(
-                            TypecheckErr::new_err(
-                                TypecheckErrType::TypeMismatch(expected_type.clone(), actual_type.clone()),
+                            TypecheckError::new_err(
+                                TypecheckErrorType::TypeMismatch(expected_type.clone(), actual_type.clone()),
                                 *span,
                             )
                             .with_secondary_messages(vec![Spanned::new(
@@ -1556,14 +1562,14 @@ impl<'a> Env<'a> {
                     )),
                 })
             } else {
-                Err(vec![TypecheckErr::new_err(
-                    TypecheckErrType::NotARecord(ty.clone()),
+                Err(vec![TypecheckError::new_err(
+                    TypecheckErrorType::NotARecord(ty.clone()),
                     *span,
                 )])
             }
         } else {
-            Err(vec![TypecheckErr::new_err(
-                TypecheckErrType::UndefinedType(record_id.t.clone()),
+            Err(vec![TypecheckError::new_err(
+                TypecheckErrorType::UndefinedType(record_id.t.clone()),
                 record_id.span,
             )])
         }
@@ -1577,8 +1583,8 @@ impl<'a> Env<'a> {
         // Make sure we don't mutate an immutable var.
         if let Some(root) = lval_properties.immutable.as_ref() {
             let def_span = self.var_def_span(root).unwrap();
-            return Err(vec![TypecheckErr::new_err(
-                TypecheckErrType::MutatingImmutable(root.clone()),
+            return Err(vec![TypecheckError::new_err(
+                TypecheckErrorType::MutatingImmutable(root.clone()),
                 assign.lval.span,
             )
             .with_secondary_messages(vec![Spanned::new(
@@ -1594,8 +1600,8 @@ impl<'a> Env<'a> {
         let resolved_actual_ty = self.resolve_type(&assigned_val_ty, assign.expr.span)?;
         let resolved_expected_ty = self.resolve_type(&lval_properties.ty, assign.lval.span)?;
         if resolved_expected_ty != resolved_actual_ty {
-            return Err(vec![TypecheckErr::new_err(
-                TypecheckErrType::TypeMismatch(resolved_expected_ty, resolved_actual_ty),
+            return Err(vec![TypecheckError::new_err(
+                TypecheckErrorType::TypeMismatch(resolved_expected_ty, resolved_actual_ty),
                 *span,
             )]);
         }
@@ -1626,8 +1632,8 @@ impl<'a> Env<'a> {
                     ArithOp::Mod => Ok(l % r),
                 }
             }
-            _ => Err(vec![TypecheckErr::new_err(
-                TypecheckErrType::NonConstantArithExpr(expr.clone()),
+            _ => Err(vec![TypecheckError::new_err(
+                TypecheckErrorType::NonConstantArithExpr(expr.clone()),
                 *span,
             )]),
         }
@@ -1641,8 +1647,8 @@ impl<'a> Env<'a> {
         let elem_size = elem_type.size();
         let len = Self::eval_arith_const_expr(&array.len)?;
         if len < 0 {
-            return Err(vec![TypecheckErr::new_err(
-                TypecheckErrType::NegativeArrayLen(len),
+            return Err(vec![TypecheckError::new_err(
+                TypecheckErrorType::NegativeArrayLen(len),
                 array.len.span,
             )]);
         }
@@ -1713,8 +1719,8 @@ impl<'a> Env<'a> {
             if self.resolve_type(&then_expr_type, expr.then_expr.span)?
                 != self.resolve_type(&else_expr_type, else_expr.span)?
             {
-                return Err(vec![TypecheckErr::new_err(
-                    TypecheckErrType::TypeMismatch(then_expr_type.clone(), else_expr_type.clone()),
+                return Err(vec![TypecheckError::new_err(
+                    TypecheckErrorType::TypeMismatch(then_expr_type.clone(), else_expr_type.clone()),
                     *span,
                 )
                 .with_secondary_messages(vec![Spanned::new(
@@ -1743,8 +1749,8 @@ impl<'a> Env<'a> {
             }
         } else {
             if then_expr_type != TypeInfo::unit() {
-                return Err(vec![TypecheckErr::new_err(
-                    TypecheckErrType::TypeMismatch(TypeInfo::unit(), then_expr_type),
+                return Err(vec![TypecheckError::new_err(
+                    TypecheckErrorType::TypeMismatch(TypeInfo::unit(), then_expr_type),
                     expr.then_expr.span,
                 )]);
             }
@@ -1902,8 +1908,8 @@ impl<'a> Env<'a> {
                 expr: translate::Expr::Stmt(ir::Stmt::seq(stmts)),
             })
         } else {
-            Err(vec![TypecheckErr::new_err(
-                TypecheckErrType::NotARangeLiteral,
+            Err(vec![TypecheckError::new_err(
+                TypecheckErrorType::NotARangeLiteral,
                 expr.range.span,
             )
             .with_secondary_messages(vec![Spanned::new(
@@ -1972,8 +1978,8 @@ impl<'a> Env<'a> {
         let left_type = self.resolve_type(&l_ty, expr.l.span)?;
         let right_type = self.resolve_type(&r_ty, expr.r.span)?;
         if left_type != right_type {
-            return Err(vec![TypecheckErr::new_err(
-                TypecheckErrType::TypeMismatch(left_type.clone(), right_type.clone()),
+            return Err(vec![TypecheckError::new_err(
+                TypecheckErrorType::TypeMismatch(left_type.clone(), right_type.clone()),
                 *span,
             )]);
         }
@@ -2001,8 +2007,8 @@ impl<'a> Env<'a> {
             if let Type::Enum(_, enum_cases) = ty.ty().as_ref() {
                 if let Some(EnumCase { params, .. }) = enum_cases.get(&expr.case_id.t) {
                     if params.len() != expr.args.len() {
-                        return Err(vec![TypecheckErr::new_err(
-                            TypecheckErrType::ArityMismatch(params.len(), expr.args.len()),
+                        return Err(vec![TypecheckError::new_err(
+                            TypecheckErrorType::ArityMismatch(params.len(), expr.args.len()),
                             expr.args.span,
                         )]);
                     }
@@ -2018,8 +2024,8 @@ impl<'a> Env<'a> {
                                         .resolve_type(param_type, FileSpan::new(self.file_id, Span::initial()))
                                         .unwrap()
                                 {
-                                    let mut err = TypecheckErr::new_err(
-                                        TypecheckErrType::TypeMismatch(param_type.clone(), ty.clone()),
+                                    let mut err = TypecheckError::new_err(
+                                        TypecheckErrorType::TypeMismatch(param_type.clone(), ty.clone()),
                                         arg.span,
                                     );
                                     if let Some(decl_spans) = self.enum_case_param_decl_spans(&expr.enum_id) {
@@ -2044,20 +2050,20 @@ impl<'a> Env<'a> {
                         expr: translate::Expr::Expr(ir::Expr::Const(0)),
                     })
                 } else {
-                    Err(vec![TypecheckErr::new_err(
-                        TypecheckErrType::NotAnEnumCase(expr.case_id.t.clone()),
+                    Err(vec![TypecheckError::new_err(
+                        TypecheckErrorType::NotAnEnumCase(expr.case_id.t.clone()),
                         expr.case_id.span,
                     )])
                 }
             } else {
-                Err(vec![TypecheckErr::new_err(
-                    TypecheckErrType::NotAnEnum(ty.clone()),
+                Err(vec![TypecheckError::new_err(
+                    TypecheckErrorType::NotAnEnum(ty.clone()),
                     expr.enum_id.span,
                 )])
             }
         } else {
-            Err(vec![TypecheckErr::new_err(
-                TypecheckErrType::UndefinedType(expr.enum_id.t.clone()),
+            Err(vec![TypecheckError::new_err(
+                TypecheckErrorType::UndefinedType(expr.enum_id.t.clone()),
                 expr.enum_id.span,
             )])
         }
@@ -2070,8 +2076,8 @@ impl<'a> Env<'a> {
             &expr.type_fields,
             |type_field| &type_field.id.t,
             |type_field, span| {
-                TypecheckErr::new_err(
-                    TypecheckErrType::DuplicateParam(type_field.id.t.clone()),
+                TypecheckError::new_err(
+                    TypecheckErrorType::DuplicateParam(type_field.id.t.clone()),
                     type_field.span,
                 )
                 .with_secondary_messages(vec![Spanned::new(
@@ -2215,7 +2221,7 @@ mod tests {
                 .unwrap_err()[0]
                 .t
                 .ty,
-            TypecheckErrType::UndefinedType("e".to_owned()),
+            TypecheckErrorType::UndefinedType("e".to_owned()),
         );
     }
 
@@ -2285,8 +2291,8 @@ mod tests {
         let env = Env::new(TmpGenerator::default(), EMPTY_SOURCEMAP.1, level_label);
         assert_eq!(
             env.typecheck_expr(&expr),
-            Err(vec![TypecheckErr::new_err(
-                TypecheckErrType::TypeMismatch(TypeInfo::bool(), TypeInfo::int()),
+            Err(vec![TypecheckError::new_err(
+                TypecheckErrorType::TypeMismatch(TypeInfo::bool(), TypeInfo::int()),
                 zspan!(),
             )])
         );
@@ -2301,7 +2307,7 @@ mod tests {
 
         assert_eq!(
             env.typecheck_lval(&lval).unwrap_err()[0].t.ty,
-            TypecheckErrType::UndefinedVar("a".to_owned())
+            TypecheckErrorType::UndefinedVar("a".to_owned())
         );
     }
 
@@ -2390,8 +2396,8 @@ mod tests {
         ));
         assert_eq!(
             env.typecheck_lval(&lval).map(TranslateOutput::unwrap),
-            Err(vec![TypecheckErr::new_err(
-                TypecheckErrType::UndefinedField("g".to_owned()),
+            Err(vec![TypecheckError::new_err(
+                TypecheckErrorType::UndefinedField("g".to_owned()),
                 zspan!(),
             )])
         );
@@ -2432,8 +2438,8 @@ mod tests {
         ));
         assert_eq!(
             env.typecheck_lval(&lval).map(TranslateOutput::unwrap),
-            Err(vec![TypecheckErr::new_err(
-                TypecheckErrType::UndefinedField("g".to_owned()),
+            Err(vec![TypecheckError::new_err(
+                TypecheckErrorType::UndefinedField("g".to_owned()),
                 zspan!()
             )])
         );
@@ -2521,7 +2527,7 @@ mod tests {
         });
         assert_eq!(
             env.typecheck_let(&let_expr).unwrap_err()[0].t.ty,
-            TypecheckErrType::TypeMismatch(TypeInfo::string(), TypeInfo::int())
+            TypecheckErrorType::TypeMismatch(TypeInfo::string(), TypeInfo::int())
         );
     }
 
@@ -2537,7 +2543,7 @@ mod tests {
         });
         assert_eq!(
             env.typecheck_fn_call(&fn_call_expr).unwrap_err()[0].t.ty,
-            TypecheckErrType::UndefinedFn("f".to_owned())
+            TypecheckErrorType::UndefinedFn("f".to_owned())
         );
     }
 
@@ -2563,7 +2569,7 @@ mod tests {
         });
         assert_eq!(
             env.typecheck_fn_call(&fn_call_expr).unwrap_err()[0].t.ty,
-            TypecheckErrType::NotAFn("f".to_owned())
+            TypecheckErrorType::NotAFn("f".to_owned())
         );
     }
 
@@ -2591,7 +2597,7 @@ mod tests {
         });
         assert_eq!(
             env.typecheck_fn_call(&fn_call_expr).unwrap_err()[0].t.ty,
-            TypecheckErrType::ArityMismatch(0, 1)
+            TypecheckErrorType::ArityMismatch(0, 1)
         );
     }
 
@@ -2624,7 +2630,7 @@ mod tests {
 
         assert_eq!(
             env.typecheck_fn_call(&fn_call).unwrap_err()[0].t.ty,
-            TypecheckErrType::TypeMismatch(TypeInfo::int(), TypeInfo::string())
+            TypecheckErrorType::TypeMismatch(TypeInfo::int(), TypeInfo::string())
         )
     }
 
@@ -2703,7 +2709,7 @@ mod tests {
 
         assert_eq!(
             env.typecheck_let(&let_expr).unwrap_err()[0].t.ty,
-            TypecheckErrType::TypeMismatch(
+            TypecheckErrorType::TypeMismatch(
                 TypeInfo::new(Rc::new(Type::Alias("a".to_owned())), TypeInfo::int().size()),
                 TypeInfo::string()
             )
@@ -2766,7 +2772,7 @@ mod tests {
 
         assert_eq!(
             env.check_for_type_decl_cycles("a", vec![]).unwrap_err()[0].t.ty,
-            TypecheckErrType::TypeDeclCycle("a".to_owned(), Rc::new(_Type::Alias("a".to_owned())))
+            TypecheckErrorType::TypeDeclCycle("a".to_owned(), Rc::new(_Type::Alias("a".to_owned())))
         );
     }
 
@@ -2779,7 +2785,7 @@ mod tests {
 
         assert_eq!(
             env.check_for_type_decl_cycles("a", vec![]).unwrap_err()[0].t.ty,
-            TypecheckErrType::TypeDeclCycle("c".to_owned(), Rc::new(_Type::Alias("a".to_owned())))
+            TypecheckErrorType::TypeDeclCycle("c".to_owned(), Rc::new(_Type::Alias("a".to_owned())))
         );
     }
 
@@ -2810,7 +2816,7 @@ mod tests {
             .unwrap_err()[0]
                 .t
                 .ty,
-            TypecheckErrType::DuplicateType("a".to_owned())
+            TypecheckErrorType::DuplicateType("a".to_owned())
         );
     }
 
@@ -2828,7 +2834,7 @@ mod tests {
 
         assert_eq!(
             env.validate_fn_decl_pre_types(&fn_decl).unwrap_err()[0].t.ty,
-            TypecheckErrType::UndefinedType("a".to_owned())
+            TypecheckErrorType::UndefinedType("a".to_owned())
         );
     }
 
@@ -2857,8 +2863,8 @@ mod tests {
         ]);
         assert_eq!(
             result,
-            Err(vec![TypecheckErr::new_err(
-                TypecheckErrType::TypeDeclCycle("a".to_owned(), Rc::new(_Type::Alias("a".to_owned()))),
+            Err(vec![TypecheckError::new_err(
+                TypecheckErrorType::TypeDeclCycle("a".to_owned(), Rc::new(_Type::Alias("a".to_owned()))),
                 zspan!()
             )])
         );
@@ -2887,7 +2893,7 @@ mod tests {
 
         assert_eq!(
             env.typecheck_fn_decl_sig(&fn_decl2).unwrap_err()[0].t.ty,
-            TypecheckErrType::DuplicateFn("f".to_owned())
+            TypecheckErrorType::DuplicateFn("f".to_owned())
         );
     }
 
@@ -2915,7 +2921,7 @@ mod tests {
 
         assert_eq!(
             env.typecheck_fn_decl_sig(&fn_decl).unwrap_err()[0].t.ty,
-            TypecheckErrType::DuplicateParam("a".to_owned())
+            TypecheckErrorType::DuplicateParam("a".to_owned())
         );
     }
 
@@ -2983,7 +2989,7 @@ mod tests {
         let errs = env.check_for_invalid_pre_types().unwrap_err();
         assert_eq!(errs.len(), 1);
         // Recursive type def in records is allowed
-        assert_eq!(errs[0].t.ty, TypecheckErrType::UndefinedType("b".to_owned()));
+        assert_eq!(errs[0].t.ty, TypecheckErrorType::UndefinedType("b".to_owned()));
     }
 
     #[test]
@@ -3007,7 +3013,7 @@ mod tests {
         });
         assert_eq!(
             env.typecheck_record(&record).unwrap_err()[0].t.ty,
-            TypecheckErrType::MissingFields(vec!["a".to_owned()])
+            TypecheckErrorType::MissingFields(vec!["a".to_owned()])
         );
     }
 
@@ -3030,7 +3036,7 @@ mod tests {
         });
         assert_eq!(
             env.typecheck_record(&record).unwrap_err()[0].t.ty,
-            TypecheckErrType::InvalidFields(vec!["b".to_owned()])
+            TypecheckErrorType::InvalidFields(vec!["b".to_owned()])
         );
     }
 
@@ -3073,7 +3079,7 @@ mod tests {
 
         assert_eq!(
             env.typecheck_record(&record).unwrap_err()[0].t.ty,
-            TypecheckErrType::DuplicateField("a".to_owned())
+            TypecheckErrorType::DuplicateField("a".to_owned())
         );
     }
 
@@ -3146,7 +3152,7 @@ mod tests {
 
         assert_eq!(
             env.typecheck_record(&record).unwrap_err()[0].t.ty,
-            TypecheckErrType::TypeMismatch(TypeInfo::int(), TypeInfo::string())
+            TypecheckErrorType::TypeMismatch(TypeInfo::int(), TypeInfo::string())
         );
     }
 
@@ -3181,7 +3187,7 @@ mod tests {
 
         assert_eq!(
             env.typecheck_decls(EMPTY_SOURCEMAP.1, &[fn1, fn2]).unwrap_err()[0].t.ty,
-            TypecheckErrType::UndefinedVar("a".to_owned())
+            TypecheckErrorType::UndefinedVar("a".to_owned())
         );
     }
 
@@ -3239,7 +3245,7 @@ mod tests {
         env.typecheck_expr(&seq_expr1).expect("typecheck expr");
         assert_eq!(
             env.typecheck_expr(&seq_expr2).unwrap_err()[0].t.ty,
-            TypecheckErrType::UndefinedVar("a".to_owned())
+            TypecheckErrorType::UndefinedVar("a".to_owned())
         );
     }
 
@@ -3306,7 +3312,7 @@ mod tests {
 
         assert_eq!(
             env.typecheck_expr(&expr).unwrap_err()[0].t.ty,
-            TypecheckErrType::IllegalLetExpr
+            TypecheckErrorType::IllegalLetExpr
         );
     }
 
@@ -3346,7 +3352,7 @@ mod tests {
                 .unwrap_err()[0]
                 .t
                 .ty,
-            TypecheckErrType::MutatingImmutable("a".to_owned())
+            TypecheckErrorType::MutatingImmutable("a".to_owned())
         );
     }
 
@@ -3402,7 +3408,7 @@ mod tests {
                 .unwrap_err()[0]
                 .t
                 .ty,
-            TypecheckErrType::MutatingImmutable("r".to_owned())
+            TypecheckErrorType::MutatingImmutable("r".to_owned())
         );
     }
 
@@ -3459,7 +3465,7 @@ mod tests {
                 .unwrap_err()[0]
                 .t
                 .ty,
-            TypecheckErrType::TypeMismatch(TypeInfo::int(), TypeInfo::unit())
+            TypecheckErrorType::TypeMismatch(TypeInfo::int(), TypeInfo::unit())
         );
     }
 
@@ -3558,7 +3564,7 @@ mod tests {
                 .unwrap_err()[0]
                 .t
                 .ty,
-            TypecheckErrType::MutatingImmutable("a".to_owned())
+            TypecheckErrorType::MutatingImmutable("a".to_owned())
         );
     }
 
@@ -3603,7 +3609,7 @@ mod tests {
                 .unwrap_err()[0]
                 .t
                 .ty,
-            TypecheckErrType::TypeMismatch(TypeInfo::int(), TypeInfo::string())
+            TypecheckErrorType::TypeMismatch(TypeInfo::int(), TypeInfo::string())
         );
     }
 
@@ -3730,7 +3736,7 @@ mod tests {
 
         assert_eq!(
             env.typecheck_array(&array_expr).unwrap_err()[0].t.ty,
-            TypecheckErrType::NegativeArrayLen(-3)
+            TypecheckErrorType::NegativeArrayLen(-3)
         );
     }
 
@@ -3751,7 +3757,7 @@ mod tests {
 
         assert_eq!(
             env.typecheck_array(&array_expr).unwrap_err()[0].t.ty,
-            TypecheckErrType::NonConstantArithExpr(fn_call)
+            TypecheckErrorType::NonConstantArithExpr(fn_call)
         );
     }
 
@@ -3787,7 +3793,7 @@ mod tests {
 
         assert_eq!(
             env.typecheck_if(&if_expr).unwrap_err()[0].t.ty,
-            TypecheckErrType::TypeMismatch(TypeInfo::unit(), TypeInfo::int())
+            TypecheckErrorType::TypeMismatch(TypeInfo::unit(), TypeInfo::int())
         );
     }
 
@@ -3823,7 +3829,7 @@ mod tests {
 
         assert_eq!(
             env.typecheck_if(&if_expr).unwrap_err()[0].t.ty,
-            TypecheckErrType::TypeMismatch(TypeInfo::int(), TypeInfo::string())
+            TypecheckErrorType::TypeMismatch(TypeInfo::int(), TypeInfo::string())
         );
     }
 
@@ -3860,7 +3866,7 @@ mod tests {
 
         assert_eq!(
             env.typecheck_range(&range).unwrap_err()[0].t.ty,
-            TypecheckErrType::TypeMismatch(TypeInfo::int(), TypeInfo::string())
+            TypecheckErrorType::TypeMismatch(TypeInfo::int(), TypeInfo::string())
         );
     }
 
@@ -3911,7 +3917,7 @@ mod tests {
 
         assert_eq!(
             env.typecheck_for(&for_expr).unwrap_err()[0].t.ty,
-            TypecheckErrType::TypeMismatch(
+            TypecheckErrorType::TypeMismatch(
                 TypeInfo::new(Rc::new(Type::Iterator(TypeInfo::int())), TypeInfo::int().size() * 2),
                 TypeInfo::int()
             )
@@ -3944,7 +3950,7 @@ mod tests {
 
         assert_eq!(
             env.typecheck_for(&for_expr).unwrap_err()[0].t.ty,
-            TypecheckErrType::TypeMismatch(TypeInfo::unit(), TypeInfo::int())
+            TypecheckErrorType::TypeMismatch(TypeInfo::unit(), TypeInfo::int())
         );
     }
 
@@ -3977,7 +3983,7 @@ mod tests {
         });
         assert_eq!(
             env.typecheck_while(&while_expr).unwrap_err()[0].t.ty,
-            TypecheckErrType::TypeMismatch(TypeInfo::bool(), TypeInfo::int())
+            TypecheckErrorType::TypeMismatch(TypeInfo::bool(), TypeInfo::int())
         );
     }
 
@@ -3994,7 +4000,7 @@ mod tests {
 
         assert_eq!(
             env.typecheck_while(&while_expr).unwrap_err()[0].t.ty,
-            TypecheckErrType::TypeMismatch(TypeInfo::unit(), TypeInfo::int())
+            TypecheckErrorType::TypeMismatch(TypeInfo::unit(), TypeInfo::int())
         );
     }
 
@@ -4030,7 +4036,7 @@ mod tests {
 
         assert_eq!(
             env.typecheck_compare(&compare).unwrap_err()[0].t.ty,
-            TypecheckErrType::TypeMismatch(TypeInfo::int(), TypeInfo::bool())
+            TypecheckErrorType::TypeMismatch(TypeInfo::int(), TypeInfo::bool())
         );
     }
 
@@ -4063,7 +4069,7 @@ mod tests {
 
         assert_eq!(
             env.typecheck_enum(&enum_expr).unwrap_err()[0].t.ty,
-            TypecheckErrType::ArityMismatch(1, 0)
+            TypecheckErrorType::ArityMismatch(1, 0)
         );
     }
 
@@ -4096,7 +4102,7 @@ mod tests {
 
         assert_eq!(
             env.typecheck_enum(&enum_expr).unwrap_err()[0].t.ty,
-            TypecheckErrType::TypeMismatch(TypeInfo::int(), TypeInfo::string())
+            TypecheckErrorType::TypeMismatch(TypeInfo::int(), TypeInfo::string())
         );
     }
 
@@ -4190,7 +4196,7 @@ mod tests {
 
         assert_eq!(
             env.typecheck_closure(&closure).unwrap_err()[0].t.ty,
-            TypecheckErrType::DuplicateParam("a".to_owned())
+            TypecheckErrorType::DuplicateParam("a".to_owned())
         );
     }
 
@@ -4276,7 +4282,7 @@ mod tests {
                 .unwrap_err()[0]
                 .t
                 .ty,
-            TypecheckErrType::UndefinedVar("h".to_owned())
+            TypecheckErrorType::UndefinedVar("h".to_owned())
         );
     }
 
@@ -4381,7 +4387,7 @@ mod tests {
         }))));
         assert_eq!(
             env.typecheck_expr_mut(&assign_expr).unwrap_err()[0].t.ty,
-            TypecheckErrType::IllegalBreakOrContinue
+            TypecheckErrorType::IllegalBreakOrContinue
         );
     }
 }

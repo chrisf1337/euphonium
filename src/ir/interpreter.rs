@@ -397,26 +397,26 @@ mod tests {
         ast, ir, parser,
         tmp::{Label, TmpGenerator},
         translate::{self, Expr},
-        typecheck::{Env, TypecheckErr},
+        typecheck::{Env, TypecheckError},
         utils::{dump_vec, EMPTY_SOURCEMAP},
     };
     use maplit::hashmap;
 
     #[derive(Debug, Clone, PartialEq, Eq)]
-    enum InterpreterTestErr {
+    enum InterpreterTestError {
         ParseErr(Vec<parser::ParseError>),
-        TypecheckErr(Vec<TypecheckErr>),
+        TypecheckError(Vec<TypecheckError>),
     }
 
-    impl From<Vec<parser::ParseError>> for InterpreterTestErr {
+    impl From<Vec<parser::ParseError>> for InterpreterTestError {
         fn from(errs: Vec<parser::ParseError>) -> Self {
             Self::ParseErr(errs)
         }
     }
 
-    impl From<Vec<TypecheckErr>> for InterpreterTestErr {
-        fn from(errs: Vec<TypecheckErr>) -> Self {
-            Self::TypecheckErr(errs)
+    impl From<Vec<TypecheckError>> for InterpreterTestError {
+        fn from(errs: Vec<TypecheckError>) -> Self {
+            Self::TypecheckError(errs)
         }
     }
 
@@ -827,7 +827,7 @@ mod tests {
     }
 
     #[test]
-    fn record_expr() -> Result<(), Vec<TypecheckErr>> {
+    fn record_expr() -> Result<(), Vec<TypecheckError>> {
         let tmp_generator = TmpGenerator::default();
         let level = Level::new(&tmp_generator, Some(Label::top()), "f", &[]);
         let level_label = level.frame.label.clone();
@@ -908,7 +908,7 @@ mod tests {
     }
 
     #[test]
-    fn simple_while() -> Result<(), InterpreterTestErr> {
+    fn simple_while() -> Result<(), InterpreterTestError> {
         let expr = parser::parse_expr(
             r#"
             {
@@ -943,7 +943,7 @@ mod tests {
     }
 
     #[test]
-    fn while_break() -> Result<(), InterpreterTestErr> {
+    fn while_break() -> Result<(), InterpreterTestError> {
         let expr = parser::parse_expr(
             r#"
             {
@@ -978,7 +978,7 @@ mod tests {
     }
 
     #[test]
-    fn while_continue() -> Result<(), InterpreterTestErr> {
+    fn while_continue() -> Result<(), InterpreterTestError> {
         let expr = parser::parse_expr(
             r#"
             {
@@ -1017,7 +1017,7 @@ mod tests {
     }
 
     #[test]
-    fn simple_for() -> Result<(), InterpreterTestErr> {
+    fn simple_for() -> Result<(), InterpreterTestError> {
         let expr = parser::parse_expr(
             r#"
             {
@@ -1049,7 +1049,7 @@ mod tests {
     }
 
     #[test]
-    fn for_continue() -> Result<(), InterpreterTestErr> {
+    fn for_continue() -> Result<(), InterpreterTestError> {
         let expr = parser::parse_expr(
             r#"
             {
@@ -1084,7 +1084,7 @@ mod tests {
     }
 
     #[test]
-    fn for_break() -> Result<(), InterpreterTestErr> {
+    fn for_break() -> Result<(), InterpreterTestError> {
         let expr = parser::parse_expr(
             r#"
             {

@@ -16,19 +16,19 @@ use euphonium::{
 };
 
 #[derive(Debug)]
-enum EuphcErr {
+enum EuphcError {
     Io(std::io::Error),
-    ParseErr,
-    TypecheckErr,
+    ParseError,
+    TypecheckError,
 }
 
-impl From<std::io::Error> for EuphcErr {
+impl From<std::io::Error> for EuphcError {
     fn from(err: std::io::Error) -> Self {
-        EuphcErr::Io(err)
+        EuphcError::Io(err)
     }
 }
 
-fn main() -> Result<(), EuphcErr> {
+fn main() -> Result<(), EuphcError> {
     let matches = App::new("euphc")
         .about("Euphonium compiler")
         .arg(Arg::with_name("FILES").required(true).multiple(true).help(""))
@@ -59,7 +59,7 @@ fn main() -> Result<(), EuphcErr> {
                 )?;
             }
         }
-        return Err(EuphcErr::ParseErr);
+        return Err(EuphcError::ParseError);
     }
 
     let tmp_generator = TmpGenerator::default();
@@ -71,7 +71,7 @@ fn main() -> Result<(), EuphcErr> {
                 for err in typecheck_errors {
                     codespan_reporting::term::emit(&mut writer, &config, &sourcemap.files, &err.diagnostic(&env))?;
                 }
-                return Err(EuphcErr::TypecheckErr);
+                return Err(EuphcError::TypecheckError);
             }
         }
     }
