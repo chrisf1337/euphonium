@@ -37,6 +37,7 @@ impl fmt::Debug for Expr {
 
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub enum Stmt {
+    /// (dst, src)
     Move(Expr, Expr),
     Expr(Expr),
     Jump(Expr, Vec<Label>),
@@ -131,6 +132,14 @@ impl Stmt {
 }
 
 impl Expr {
+    pub fn reference(&self) -> Expr {
+        if let Expr::Mem(expr, _) = self {
+            *expr.clone()
+        } else {
+            panic!("cannot take reference of non-Mem");
+        }
+    }
+
     pub fn flatten(&self) -> (Vec<Stmt>, Expr) {
         match self {
             Expr::Const(c) => (vec![], Expr::Const(*c)),
@@ -169,6 +178,22 @@ impl Expr {
                 (stmts, expr)
             }
         }
+    }
+
+    pub fn pointer_offset(&self, offset: i64) -> Expr {
+        Expr::BinOp(Box::new(self.clone()), BinOp::Add, Box::new(Expr::Const(offset)))
+    }
+
+    pub fn array_offset(&self, index: Expr, element_size: usize) -> Expr {
+        Expr::BinOp(
+            Box::new(self.clone()),
+            BinOp::Add,
+            Box::new(Expr::BinOp(
+                Box::new(index),
+                BinOp::Mul,
+                Box::new(Expr::Const(-(element_size as i64))),
+            )),
+        )
     }
 }
 

@@ -104,4 +104,12 @@ impl Expr {
             Expr::Cond(gen_stmt) => gen_stmt,
         }
     }
+
+    pub fn reference(&self) -> ir::Expr {
+        if let Expr::Expr(expr) = self {
+            expr.reference()
+        } else {
+            panic!("cannot take reference of non-Expr");
+        }
+    }
 }

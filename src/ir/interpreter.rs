@@ -153,7 +153,8 @@ impl Interpreter {
                     _ => unimplemented!("{:?}", op),
                 }
             }
-            ir::Expr::Mem(expr, size) => {
+            ir::Expr::Mem(expr, ..) => {
+                // FIXME: Use size?
                 let addr = self.interpret_expr_as_value(expr);
                 self.read_i64(addr as usize)
             }
@@ -187,7 +188,7 @@ impl Interpreter {
                         *tmp = value;
                     }
                     ir::Expr::Mem(addr_expr, size) => {
-                        // assert_eq!(*size, std::mem::size_of::<u64>());
+                        assert!(*size <= frame::WORD_SIZE as usize);
                         let addr = self.interpret_expr_as_value(addr_expr);
                         self.write_i64(value, addr as usize);
                     }
@@ -396,7 +397,7 @@ mod tests {
     use crate::{
         ast, ir, parser,
         tmp::{Label, TmpGenerator},
-        translate::{self, Expr},
+        translate::Expr,
         typecheck::{Env, TypecheckError},
         utils::{dump_vec, EMPTY_SOURCEMAP},
     };
@@ -471,67 +472,14 @@ mod tests {
             Label::top() => Level::top(),
             label.clone() => level.clone(),
         };
-        let expr = Env::translate_simple_var(&levels, &local, label).clone();
+        let expr = ir::Expr::Mem(
+            Box::new(Env::translate_simple_var(&levels, &local, label)),
+            frame::WORD_SIZE as usize,
+        )
+        .clone();
         interpreter.write_u64(0x1234, addr.unwrap() as usize);
 
-        assert_eq!(
-            interpreter.interpret_expr_as_value(&expr.unwrap_expr(&mut tmp_generator)),
-            0x1234
-        );
-    }
-
-    #[test]
-    fn translate_pointer_offset() {
-        let mut tmp_generator = TmpGenerator::default();
-        let mut interpreter = Interpreter::default();
-        let mut level = Level::new(&mut tmp_generator, Some(Label::top()), "f", &[]);
-        let (local, addr) = interpreter.alloc_local(&mut tmp_generator, &mut level, std::mem::size_of::<u64>(), true);
-        let label = level.label();
-        let levels = hashmap! {
-            Label::top() => Level::top(),
-            label.clone() => level.clone(),
-        };
-
-        // Array located at 0x100. Write address into local.
-        interpreter.write_u64(0x100, addr.unwrap() as usize);
-        interpreter.write_u64s(&[1, 2, 3], 0x100);
-
-        let (expr1, expr2, expr3) = {
-            let array_expr = Env::translate_simple_var(&levels, &local, label);
-            (
-                Env::translate_pointer_offset(
-                    &mut tmp_generator,
-                    &array_expr,
-                    &translate::Expr::Expr(ir::Expr::Const(0)),
-                    std::mem::size_of::<u64>(),
-                ),
-                Env::translate_pointer_offset(
-                    &mut tmp_generator,
-                    &array_expr,
-                    &translate::Expr::Expr(ir::Expr::Const(1)),
-                    std::mem::size_of::<u64>(),
-                ),
-                Env::translate_pointer_offset(
-                    &mut tmp_generator,
-                    &array_expr,
-                    &translate::Expr::Expr(ir::Expr::Const(2)),
-                    std::mem::size_of::<u64>(),
-                ),
-            )
-        };
-
-        assert_eq!(
-            interpreter.interpret_expr_as_value(&expr1.unwrap_expr(&mut tmp_generator)),
-            1
-        );
-        assert_eq!(
-            interpreter.interpret_expr_as_value(&expr2.unwrap_expr(&mut tmp_generator)),
-            2
-        );
-        assert_eq!(
-            interpreter.interpret_expr_as_value(&expr3.unwrap_expr(&mut tmp_generator)),
-            3
-        );
+        assert_eq!(interpreter.interpret_expr_as_value(&expr), 0x1234);
     }
 
     #[test]
@@ -739,7 +687,9 @@ mod tests {
         );
 
         let mut interpreter = Interpreter::default();
+        dump_vec(&stmt.flatten());
         interpreter.run_expr(&tmp_generator, Expr::Stmt(stmt));
+        interpreter.dump_to_file("array_subscript");
 
         {
             let expr = zspan!(ast::ExprType::LVal(Box::new(zspan!(ast::LVal::Subscript(
@@ -873,6 +823,7 @@ mod tests {
             }))))
         }))));
         let stmt = env.typecheck_expr_mut(&assign_expr)?.expr.unwrap_stmt(&tmp_generator);
+        dump_vec(&stmt.flatten());
 
         let mut interpreter = Interpreter::default();
         {
@@ -891,6 +842,7 @@ mod tests {
                 zspan!("a".to_owned())
             )))));
             let trexpr = env.typecheck_expr(&subscript_expr)?.expr;
+            dump_vec(&trexpr.clone().unwrap_stmt(&tmp_generator).flatten());
             assert_eq!(interpreter.run_expr(&tmp_generator, trexpr).expect("run_expr"), 123);
         }
 
@@ -1009,6 +961,7 @@ mod tests {
         }
 
         let expr = env.typecheck_expr(&expr)?.expr;
+        dump_vec(&expr.clone().unwrap_stmt(&tmp_generator).flatten());
 
         let mut interpreter = Interpreter::default();
         let result = interpreter.run_expr(&tmp_generator, expr);
@@ -1041,6 +994,7 @@ mod tests {
         }
 
         let expr = env.typecheck_expr(&expr)?.expr;
+        dump_vec(&expr.clone().unwrap_stmt(&tmp_generator).flatten());
 
         let mut interpreter = Interpreter::default();
         let result = interpreter.run_expr(&tmp_generator, expr);

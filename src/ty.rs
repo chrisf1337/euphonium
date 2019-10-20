@@ -25,13 +25,12 @@ pub struct EnumCase {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct _RecordField {
     pub ty: Rc<_Type>,
-    pub index: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecordField {
     pub ty: TypeInfo,
-    pub index: usize,
+    pub offset: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -84,6 +83,14 @@ impl TypeInfo {
             size: 0,
         }
     }
+
+    pub fn is_frame_allocated(&self) -> bool {
+        match self.ty.as_ref() {
+            Type::Alias(..) => panic!("called is_frame_allocated on Alias"),
+            Type::Record(..) | Type::Enum(..) | Type::Array(..) => true,
+            _ => false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -91,7 +98,7 @@ pub enum _Type {
     Int,
     String,
     Bool,
-    Record(String, HashMap<String, _RecordField>),
+    Record(String, Vec<(String, _RecordField)>),
     Array(Rc<_Type>, usize),
     Unit,
     Alias(String),
@@ -146,11 +153,11 @@ impl _Type {
                 cases.into_iter().map(|c| (c.t.id.t.clone(), c.t.into())).collect(),
             ),
             TypeDeclType::Record(type_fields) => {
-                let mut type_fields_hm = HashMap::new();
-                for (i, _TypeField { id, ty }) in type_fields.into_iter().map(|tf| tf.t.into()).enumerate() {
-                    type_fields_hm.insert(id, _RecordField { ty, index: i });
+                let mut type_fields_vec = vec![];
+                for _TypeField { id, ty } in type_fields.into_iter().map(|tf| tf.t.into()) {
+                    type_fields_vec.push((id.clone(), _RecordField { ty }));
                 }
-                _Type::Record(type_decl.id.t.clone(), type_fields_hm)
+                _Type::Record(type_decl.id.t.clone(), type_fields_vec)
             }
             TypeDeclType::Array(ty, len) => _Type::Array(Rc::new(ty.t.into()), len.t),
             TypeDeclType::Fn(param_types, return_type) => _Type::Fn(

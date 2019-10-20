@@ -1,6 +1,6 @@
 use crate::{
     fragment::{Fragment, StringFragment},
-    ir,
+    frame, ir,
     tmp::{Label, Tmp, TmpGenerator},
 };
 
@@ -57,13 +57,22 @@ impl Frame {
 
     pub fn alloc_local(&mut self, tmp_generator: &TmpGenerator, size: usize, escapes: bool) -> Access {
         if escapes {
+            let aligned_size = if size % frame::WORD_SIZE as usize == 0 {
+                size
+            } else {
+                size + size % frame::WORD_SIZE as usize
+            };
             let access = Access {
                 ty: AccessType::InFrame(self.locals_offset),
                 size,
             };
-            self.locals_offset -= size as i64;
+            self.locals_offset -= aligned_size as i64;
             access
         } else {
+            assert!(
+                size <= frame::WORD_SIZE as usize,
+                "local is too large to fit in a register"
+            );
             Access {
                 ty: AccessType::InReg(tmp_generator.new_tmp()),
                 size,
@@ -72,18 +81,14 @@ impl Frame {
     }
 
     /// For in-register temporaries, simply returns the temporary. For in-memory access, returns the
-    /// dereferenced address, suitable for assignment to or from.
+    /// pointer to that memory.
     pub fn expr(access: Access, fp_expr: &ir::Expr) -> ir::Expr {
         match access.ty {
             AccessType::InReg(tmp) => ir::Expr::Tmp(tmp),
-            AccessType::InFrame(offset) => ir::Expr::Mem(
-                Box::new(ir::Expr::BinOp(
-                    Box::new(fp_expr.clone()),
-                    ir::BinOp::Add,
-                    Box::new(ir::Expr::Const(offset)),
-                )),
-                access.size,
-            ),
+            AccessType::InFrame(offset) => {
+                assert!(offset <= 0);
+                fp_expr.pointer_offset(offset)
+            }
         }
     }
 
